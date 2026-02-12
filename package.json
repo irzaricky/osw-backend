@@ -1,0 +1,35 @@
+{
+  "name": "osw-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "nodemon": "nodemon --expose-gc ./bin/www",
+    "dev-win": "set DEBUG=express:* & nodemon  --expose-gc./bin/www",
+    "dev": "DEBUG=express:* nodemon --expose-gc ./bin/www",
+    "start": "node --expose-gc ./bin/www"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dayjs": "^1.11.19",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "express-fileupload": "^1.5.2",
+    "express-session": "^1.19.0",
+    "express-ws": "^5.0.2",
+    "hashids": "^2.3.0",
+    "http-errors": "^2.0.1",
+    "joi": "^18.0.2",
+    "jsonwebtoken": "^9.0.3",
+    "lodash": "^4.17.23",
+    "morgan": "^1.10.1",
+    "node-cron": "^4.2.1",
+    "pdfmake": "^0.3.3",
+    "pg": "^8.18.0",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
+    "xlsx": "^0.18.5",
+    "xlsx-populate": "^1.21.0"
+  }
+}

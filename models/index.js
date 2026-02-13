@@ -2,7 +2,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import Sequelize from 'sequelize';
 import process from 'process';
 const __filename = fileURLToPath(import.meta.url);
@@ -20,19 +20,30 @@ if (envConfig.use_env_variable) {
   sequelize = new Sequelize(envConfig.database, envConfig.username, envConfig.password, envConfig);
 }
 
-const files = fs
-  .readdirSync(__dirname)
-  .filter(file => {
-    return (
-      file.indexOf('.') !== 0 &&
-      file !== basename &&
-      file.slice(-3) === '.js' &&
-      file.indexOf('.test.js') === -1
-    );
+const getAllFiles = (dir, fileList = []) => {
+  const files = fs.readdirSync(dir);
+  files.forEach(file => {
+    const filePath = path.join(dir, file);
+    if (fs.statSync(filePath).isDirectory()) {
+      getAllFiles(filePath, fileList);
+    } else {
+      if (
+        file.indexOf('.') !== 0 &&
+        file !== basename &&
+        file.slice(-3) === '.js' &&
+        file.indexOf('.test.js') === -1
+      ) {
+        fileList.push(filePath);
+      }
+    }
   });
+  return fileList;
+};
+
+const files = getAllFiles(__dirname).filter(file => path.basename(file) !== basename);
 
 for (const file of files) {
-  const model = (await import(path.join(__dirname, file))).default(sequelize, Sequelize.DataTypes);
+  const model = (await import(pathToFileURL(file).href)).default(sequelize, Sequelize.DataTypes);
   db[model.name] = model;
 }
 

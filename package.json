@@ -6,7 +6,12 @@
     "nodemon": "nodemon --expose-gc ./bin/www",
     "dev-win": "set DEBUG=express:* & nodemon  --expose-gc./bin/www",
     "dev": "DEBUG=express:* nodemon --expose-gc ./bin/www",
-    "start": "node --expose-gc ./bin/www"
+    "start": "node --expose-gc ./bin/www",
+    "db:migrate": "sequelize-cli db:migrate",
+    "db:migrate:undo": "sequelize-cli db:migrate:undo",
+    "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all",
+    "db:seed": "sequelize-cli db:seed:all",
+    "db:seed:undo": "sequelize-cli db:seed:undo:all"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -27,8 +32,11 @@
     "node-cron": "^4.2.1",
     "pdfmake": "^0.3.3",
     "pg": "^8.18.0",
+    "pg-hstore": "^2.3.4",
     "pino": "^10.3.1",
     "qrcode": "^1.5.4",
+    "sequelize": "^6.37.7",
+    "sequelize-cli": "^6.6.5",
     "xlsx": "^0.18.5",
     "xlsx-populate": "^1.21.0"
   }

@@ -1,13 +1,18 @@
-import { Model } from 'sequelize';
+import { Model, DataTypes } from 'sequelize';
 
-export default (sequelize, DataTypes) => {
+export default (sequelize) => {
   class RefVehicleType extends Model {
     static associate(models) {
       RefVehicleType.hasMany(models.SVehicles, { foreignKey: 'vehicle_type_id' });
     }
   }
+
   RefVehicleType.init({
-    name: DataTypes.STRING
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true
+    }
   }, {
     sequelize,
     modelName: 'RefVehicleType',
@@ -15,5 +20,6 @@ export default (sequelize, DataTypes) => {
     underscored: true,
     timestamps: true
   });
+
   return RefVehicleType;
 };

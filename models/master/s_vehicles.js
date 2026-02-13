@@ -1,19 +1,34 @@
-import { Model } from 'sequelize';
+import { Model, DataTypes } from 'sequelize';
 
-export default (sequelize, DataTypes) => {
+export default (sequelize) => {
   class SVehicles extends Model {
     static associate(models) {
       SVehicles.belongsTo(models.RefVehicleType, { foreignKey: 'vehicle_type_id', as: 'vehicle_type' });
     }
   }
-  
+
   SVehicles.init({
-    vehicle_code: DataTypes.STRING,
-    plate_number: DataTypes.STRING,
-    vehicle_type_id: DataTypes.INTEGER,
-    load_capacity: DataTypes.INTEGER,
+    vehicle_code: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true
+    },
+    plate_number: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true
+    },
+    vehicle_type_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
+    load_capacity: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
     status: {
       type: DataTypes.BOOLEAN,
+      allowNull: false,
       defaultValue: true
     }
   }, {
@@ -25,6 +40,6 @@ export default (sequelize, DataTypes) => {
     paranoid: true,
     deletedAt: 'deleted_at'
   });
-  
+
   return SVehicles;
 };

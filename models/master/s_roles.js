@@ -10,7 +10,8 @@ export default (sequelize) => {
   SRoles.init({
     name: {
       type: DataTypes.STRING,
-      allowNull: false
+      allowNull: false,
+      unique: true
     },
     division_id: {
       type: DataTypes.INTEGER,
@@ -18,6 +19,7 @@ export default (sequelize) => {
     },
     status: {
       type: DataTypes.BOOLEAN,
+      allowNull: false,
       defaultValue: true
     }
   }, {

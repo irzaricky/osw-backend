@@ -39,21 +39,39 @@ export default {
 
     // 4. Seed Stations
     const stations = [
-      { station_code: 'ST-FRM-INSP', name: 'Frame Inspection Incoming', line_id: 1, station_type_id: 1, sequence: 10, status: true },
+      // Line Assembly Frame
+      { station_code: 'ST-FRM-INSP', name: 'Incoming Frame Inspection', line_id: 1, station_type_id: 1, sequence: 10, status: true },
       { station_code: 'ST-FRM-WELD', name: 'Frame Welding Check', line_id: 1, station_type_id: 1, sequence: 20, status: true },
       { station_code: 'ST-FRM-ALIGN', name: 'Frame Alignment', line_id: 1, station_type_id: 2, sequence: 30, status: true },
       { station_code: 'ST-FRM-BRKT', name: 'Bracket & Mounting Install', line_id: 1, station_type_id: 2, sequence: 40, status: true },
       { station_code: 'ST-FRM-FQC', name: 'Frame Final Inspection', line_id: 1, station_type_id: 1, sequence: 50, status: true },
+      
+      // Line Assembly Electrical
       { station_code: 'ST-EL-WIRE', name: 'Wiring Harness Install', line_id: 3, station_type_id: 2, sequence: 10, status: true },
       { station_code: 'ST-EL-CTRL', name: 'Controller Install', line_id: 3, station_type_id: 2, sequence: 20, status: true },
       { station_code: 'ST-EL-MOTOR', name: 'Motor Install', line_id: 3, station_type_id: 2, sequence: 30, status: true },
       { station_code: 'ST-EL-BATT', name: 'Battery Mounting', line_id: 3, station_type_id: 2, sequence: 40, status: true },
       { station_code: 'ST-EL-TEST', name: 'Electrical Function Test', line_id: 3, station_type_id: 3, sequence: 50, status: true },
-      { station_code: 'ST-FNL-WHEEL', name: 'Wheel Install', line_id: 4, station_type_id: 2, sequence: 10, status: true },
-      { station_code: 'ST-FNL-BRAKE', name: 'Brake System Install', line_id: 4, station_type_id: 2, sequence: 20, status: true },
-      { station_code: 'ST-FNL-HMI', name: 'Handlebar & Display Install', line_id: 4, station_type_id: 2, sequence: 30, status: true },
-      { station_code: 'ST-FNL-TORQ', name: 'Torque Check', line_id: 4, station_type_id: 1, sequence: 40, status: true },
+      
+      // Line Assembly Final
+      { station_code: 'ST-FNL-WHEEL', name: 'Wheel Assembly', line_id: 4, station_type_id: 2, sequence: 10, status: true },
+      { station_code: 'ST-FNL-BRAKE', name: 'Brake Assembly', line_id: 4, station_type_id: 2, sequence: 20, status: true },
+      { station_code: 'ST-FNL-HMI', name: 'Handlebar Assembly', line_id: 4, station_type_id: 2, sequence: 30, status: true },
+      { station_code: 'ST-FNL-ACC', name: 'Lighting & Accessories', line_id: 4, station_type_id: 2, sequence: 40, status: true },
       { station_code: 'ST-FNL-FQC', name: 'Final Assembly Inspection', line_id: 4, station_type_id: 1, sequence: 50, status: true },
+      
+      // Line QC Final
+      { station_code: 'ST-QC-ROAD', name: 'Road Test', line_id: 6, station_type_id: 3, sequence: 10, status: true },
+      { station_code: 'ST-QC-AUDIT', name: 'Final Quality Audit', line_id: 6, station_type_id: 1, sequence: 20, status: true },
+      
+      // Line Packing
+      { station_code: 'ST-PACK-PREP', name: 'Packing Preparation', line_id: 13, station_type_id: 6, sequence: 10, status: true },
+      { station_code: 'ST-PACK-PROC', name: 'Packing Process', line_id: 13, station_type_id: 6, sequence: 20, status: true },
+
+      // Line Finished Goods Storage
+      { station_code: 'ST-WH-FG-TRF', name: 'Finished Goods Transfer', line_id: 14, station_type_id: 6, sequence: 10, status: true },
+
+
       { station_code: 'ST-PRM-CLEAN', name: 'Surface Cleaning', line_id: 8, station_type_id: 4, sequence: 10, status: true },
       { station_code: 'ST-PRM-SPRAY', name: 'Primer Spray', line_id: 8, station_type_id: 4, sequence: 20, status: true },
       { station_code: 'ST-PRM-OVEN', name: 'Oven Drying Primer', line_id: 8, station_type_id: 5, sequence: 30, status: true },
@@ -66,14 +84,6 @@ export default {
       { station_code: 'ST-COAT-OVEN', name: 'Oven Drying Color Coat', line_id: 10, station_type_id: 5, sequence: 30, status: true },
       { station_code: 'ST-COAT-THK', name: 'Color Coat Thickness Check', line_id: 10, station_type_id: 1, sequence: 40, status: true },
       { station_code: 'ST-COAT-VIS', name: 'Color Coat Visual Inspection', line_id: 10, station_type_id: 1, sequence: 50, status: true },
-      { station_code: 'ST-PACK-ACC', name: 'Accessories Packing', line_id: 13, station_type_id: 6, sequence: 10, status: true },
-      { station_code: 'ST-PACK-WRAP', name: 'Bike Wrapping', line_id: 13, station_type_id: 6, sequence: 20, status: true },
-      { station_code: 'ST-PACK-CART', name: 'Carton Packing', line_id: 13, station_type_id: 6, sequence: 30, status: true },
-      { station_code: 'ST-PACK-LBL', name: 'Labeling & Barcode', line_id: 13, station_type_id: 6, sequence: 40, status: true },
-      { station_code: 'ST-QC-VIS', name: 'Visual Inspection', line_id: 6, station_type_id: 1, sequence: 10, status: true },
-      { station_code: 'ST-QC-ROAD', name: 'Road Test / Dyno Test', line_id: 6, station_type_id: 3, sequence: 20, status: true },
-      { station_code: 'ST-QC-ELEC', name: 'Electrical Safety Test', line_id: 6, station_type_id: 3, sequence: 30, status: true },
-      { station_code: 'ST-QC-REL', name: 'Release to Warehouse', line_id: 6, station_type_id: 1, sequence: 40, status: true }
     ].map(s => ({ ...s, ...timestamp }));
 
     await queryInterface.bulkInsert('s_stations', stations);

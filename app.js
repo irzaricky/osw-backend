@@ -1,17 +1,27 @@
-const createError = require('http-errors');
-const express = require('express');
-const cookieParser = require('cookie-parser');
-const session = require('express-session');
-const path = require('path');
-const fs = require('fs');
-const loggerMorgan = require('morgan');
-const cors = require('cors');
+import createError from 'http-errors';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import session from 'express-session';
+import path from 'path';
+import fs from 'fs';
+import loggerMorgan from 'morgan';
+import cors from 'cors';
+import { Server } from 'http';
+import expressWs from 'express-ws';
+import { config } from './config/app.config.js';
+import hash from './class/hash.class.js';
+import { EventEmitter } from 'events';
+import helper from './class/helper.class.js';
+import pino from 'pino';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-const server = require('http').Server(app);
-require('express-ws')(app, server);
+const server = new Server(app);
+expressWs(app, server);
 
-const config = require('./config/app.config.js');
 const urlWebsite = 'site';
 
 global.__basedir = __dirname;
@@ -22,71 +32,16 @@ global.__routes_dir = __basedir + '/routes';
 global.__site_title = config.site.title;
 global.__siteurl = config.site.url;
 global.__publicurl = __siteurl + '/' + urlWebsite;
-global.__random = require(__class_dir + '/hash.class.js').randomString(40, 'base64');
-global.gEvents = new (require("events"))();
+global.__random = hash.randomString(40, 'base64');
+global.gEvents = new EventEmitter();
 
-const helper = require(`${__class_dir}/helper.class.js`)
-
-
-global.logger = require('pino')({
+global.logger = pino({
 	timestamp: () => {
-		//let _now = new Date();
-		//let offset = _now.getTimezoneOffset() * 60 * 1000;
-		//return `, "time": ${_now - offset}`;
-		// 2017-07-31T18:31:14.140Z
-
-		//return ', "time":' + format('%F %T %z', convert(now(), tz('Asia/Taipei')));
-		// "time":2017-07-31 18:31:14 +0800
-
 		return `, "time":"${helper.formatDate(new Date())}"`
-		// 2017-07-31T10:31:14.000Z
 	},
 })
 
-function getRoutersSync(__path, __extension) {
-	const files = {};
-
-	//using sync, because it's only run when server is starting up and I dont want to get unnecessary headache
-	fs.readdirSync(__path)
-		.forEach(file => {
-			const stats = fs.statSync(__path + '/' + file);
-
-			if (stats.isFile() && path.extname(file) === __extension) {
-				files[path.basename(file, path.extname(file))] = path.resolve(__path, file);
-			} else if (stats.isDirectory()) {
-				//if file is a directory, recursively get all files inside it and add them into object
-				const tmp = getRoutersSync(path.resolve(__path, file), __extension);
-				for (let key in tmp) {
-					files[path.basename(file, path.extname(file)) + '/' + key] = tmp[key];
-				}
-			}
-		});
-
-	return files;
-};
-
-function getFilesInFolderSync(__path, __extension = null) {
-	const files = [];
-
-	fs.readdirSync(__path)
-		.forEach(file => {
-			const stats = fs.statSync(__path + '/' + file);
-
-			if (stats.isFile() && path.extname(file) === __extension) {
-				files.push(file);
-			} else if (stats.isFile() && __extension === null) {
-				files.push(file);
-			}
-		});
-
-	return files;
-};
-
-function getAllRouters(__path) {
-	return {
-		'/': getRoutersSync(__path, '.js'),
-	};
-};
+// Helper functions moved to helper.class.js
 
 if (config.debug) {
 	app.use(loggerMorgan('dev'));
@@ -193,10 +148,13 @@ app.use((req, res, next) => {
 
 
 // ROUTERS SETTING
-const routers = getAllRouters(__routes_dir);
+const routers = helper.getAllRouters(__routes_dir);
 for (const mainRoute in routers) {
 	for (const subRoute in routers[mainRoute]) {
-		app.use(`${mainRoute === '/' ? '' : mainRoute}/${subRoute}`, require(routers[mainRoute][subRoute]));
+		const routePath = routers[mainRoute][subRoute];
+        // Dynamic import for ESM
+        const routeModule = await import(fileURLToPath(new URL(`file://${routePath}`)));
+		app.use(`${mainRoute === '/' ? '' : mainRoute}/${subRoute}`, routeModule.default || routeModule);
 	}
 }
 
@@ -231,7 +189,7 @@ app.use(function (err, req, res, next) {
 	});
 });
 
-module.exports = {
+export {
 	app,
 	server,
 	config,

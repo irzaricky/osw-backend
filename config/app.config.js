@@ -1,6 +1,7 @@
-require('dotenv').config();
+import dotenv from 'dotenv';
+dotenv.config();
 
-const config = {
+export const config = {
   site: {
     title: process.env.SITE_TITLE || 'Order System Warehouse',
     url: process.env.SITE_URL || 'http://localhost:3000'
@@ -43,4 +44,4 @@ const sequelizeConfig = {
   }
 };
 
-module.exports = sequelizeConfig;
+export default sequelizeConfig;

@@ -1,4 +1,4 @@
-const { Pool } = require('pg');
+import { Pool } from 'pg';
 
 'use strict';
 
@@ -192,4 +192,4 @@ class Database {
     };
 }
 
-module.exports = Database;
+export default Database;

@@ -24,7 +24,8 @@ class Auth {
                 req.session.user = {
                     id: decoded.id,
                     username: decoded.username,
-                    role: decoded.role, 
+                    role: decoded.role,
+                    role_id: decoded.role_id
                 };
                 req.decoded = decoded; 
                 

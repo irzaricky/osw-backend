@@ -366,6 +366,25 @@ class helper extends commonHelper {
 		};
 	};
 
+	checkMandatory(data, fields) {
+		const missing = [];
+		for (const field of fields) {
+			if (!data[field]) {
+				missing.push(field);
+			}
+		}
+
+		if (missing.length > 0) {
+			return {
+				status: false,
+				error: `${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} required`,
+				code: 400
+			};
+		}
+
+		return { status: true };
+	};
+
 }
 
 export default new helper();

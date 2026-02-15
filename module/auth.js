@@ -78,7 +78,12 @@ class AuthModule {
             // Generate Token
             const secretKey = config.debug ? "jwt_secret_cihuy" : global.__random;
             const token = jwt.sign(
-                { id: user.id, username: user.username, role: user.role.name },
+                { 
+                    id: user.id, 
+                    username: user.username, 
+                    role: user.role.name,
+                    role_id: user.role.id
+                },
                 secretKey,
                 { expiresIn: '12h' }
             );

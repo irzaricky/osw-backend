@@ -4,7 +4,7 @@ export default (sequelize) => {
   class SUsers extends Model {
     static associate(models) {
       SUsers.belongsTo(models.SRoles, { foreignKey: 'role_id', as: 'role' });
-      SUsers.hasOne(models.SEmployees, { foreignKey: 'user_id', as: 'employee' });
+      SUsers.hasOne(models.SUserDetail, { foreignKey: 'user_id', as: 'user_detail' });
     }
   }
 

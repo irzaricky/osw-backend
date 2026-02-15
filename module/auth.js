@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config } from '../config/app.config.js';
 
-const { SUsers, SRoles, SEmployees } = db;
+const { SUsers, SRoles, SUserDetail } = db;
 
 class AuthModule {
     async login(req) {
@@ -42,8 +42,8 @@ class AuthModule {
                         attributes: ['id', 'name']
                     },
                     {
-                        model: SEmployees,
-                        as: 'employee',
+                        model: SUserDetail,
+                        as: 'user_detail',
                         attributes: ['id', 'full_name', 'employee_number']
                     }
                 ]
@@ -90,10 +90,10 @@ class AuthModule {
                 role_id: user.role_id,
                 role: user.role.name,
                 token: token,
-                employee: user.employee ? {
-                    id: user.employee.id,
-                    full_name: user.employee.full_name,
-                    employee_number: user.employee.employee_number,
+                user_detail: user.user_detail ? {
+                    id: user.user_detail.id,
+                    full_name: user.user_detail.full_name,
+                    employee_number: user.user_detail.employee_number,
                 } : null
             };
 

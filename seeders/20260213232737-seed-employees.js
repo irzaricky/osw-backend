@@ -111,12 +111,12 @@ export default {
     }
 
     if (employees.length > 0) {
-      await queryInterface.bulkInsert('s_employees', employees, { ignoreDuplicates: true });
+      await queryInterface.bulkInsert('s_users_details', employees, { ignoreDuplicates: true });
     }
   },
 
   async down(queryInterface, Sequelize) {
-    await queryInterface.bulkDelete('s_employees', null, {});
+    await queryInterface.bulkDelete('s_users_details', null, {});
     await queryInterface.bulkDelete('s_users', null, {});
   }
 };

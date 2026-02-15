@@ -1,15 +1,15 @@
 import { Model, DataTypes } from 'sequelize';
 
 export default (sequelize) => {
-  class SEmployees extends Model {
+  class SUserDetail extends Model {
     static associate(models) {
-      SEmployees.belongsTo(models.SUsers, { foreignKey: 'user_id', as: 'user' });
-      SEmployees.belongsTo(models.SFactories, { foreignKey: 'factory_id', as: 'factory' });
-      SEmployees.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
+      SUserDetail.belongsTo(models.SUsers, { foreignKey: 'user_id', as: 'user' });
+      SUserDetail.belongsTo(models.SFactories, { foreignKey: 'factory_id', as: 'factory' });
+      SUserDetail.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
     }
   }
 
-  SEmployees.init({
+  SUserDetail.init({
     user_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -38,13 +38,13 @@ export default (sequelize) => {
     }
   }, {
     sequelize,
-    modelName: 'SEmployees',
-    tableName: 's_employees',
+    modelName: 'SUserDetail',
+    tableName: 's_users_details',
     underscored: true,
     timestamps: true,
     paranoid: true,
     deletedAt: 'deleted_at'
   });
 
-  return SEmployees;
+  return SUserDetail;
 };

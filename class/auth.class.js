@@ -1,6 +1,7 @@
 
 import helper from './helper.class.js';
 import jwt from 'jsonwebtoken';
+import { config } from '../config/app.config.js';
 
 class Auth {
     constructor() {
@@ -12,7 +13,8 @@ class Auth {
         if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
             const token = req.headers.authorization.split(' ')[1];
             try {
-                const decoded = jwt.verify(token, global.__random);
+                const secretKey = config.debug ? "jwt_secret_cihuy" : global.__random;
+                const decoded = jwt.verify(token, secretKey);
                 
                 // Initialize session if it doesn't exist (e.g. stateless request)
                 if (!req.session) {

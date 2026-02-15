@@ -42,8 +42,8 @@ export default {
       { 
         full_name: 'Andi Pratama', 
         emp_no: 'EMP-001', 
-        factory: 'Factory Assy', 
-        line: 'Line Assembly Frame', 
+        factory: null, 
+        line: null, 
         phone: '8123456001', 
         email: 'andi.pratama@company.com', 
         username: 'andi.pratama', 
@@ -52,8 +52,8 @@ export default {
       { 
         full_name: 'Budi Santoso', 
         emp_no: 'EMP-002', 
-        factory: 'Factory Assy', 
-        line: 'Line Assembly Electrical', 
+        factory: null, 
+        line: null, 
         phone: '8123456002', 
         email: 'budi.santoso@company.com', 
         username: 'budi.santoso', 
@@ -62,8 +62,8 @@ export default {
       { 
         full_name: 'Citra Lestari', 
         emp_no: 'EMP-003', 
-        factory: 'Factory Painting', 
-        line: 'Line Painting Primer', 
+        factory: null, 
+        line: null, 
         phone: '8123456003', 
         email: 'citra.lestari@company.com', 
         username: 'citra.lestari', 
@@ -72,8 +72,8 @@ export default {
       { 
         full_name: 'Dewi Anggraini', 
         emp_no: 'EMP-004', 
-        factory: 'Factory Painting', 
-        line: 'Line Painting Color Coat', 
+        factory: null, 
+        line: null, 
         phone: '8123456004', 
         email: 'dewi.anggraini@company.com', 
         username: 'dewi.anggraini', 
@@ -82,8 +82,8 @@ export default {
       { 
         full_name: 'Eko Nugroho', 
         emp_no: 'EMP-005', 
-        factory: 'Factory Warehouse', 
-        line: 'Line Packing', 
+        factory: null, 
+        line: null, 
         phone: '8123456005', 
         email: 'eko.nugroho@company.com', 
         username: 'eko.nugroho', 
@@ -92,8 +92,8 @@ export default {
       { 
         full_name: 'Fajar Hidayat', 
         emp_no: 'EMP-006', 
-        factory: 'Factory Warehouse', 
-        line: 'Line QC Final', 
+        factory: null, 
+        line: null, 
         phone: '8123456006', 
         email: 'fajar.hidayat@company.com', 
         username: 'fajar.hidayat', 
@@ -102,8 +102,8 @@ export default {
       { 
         full_name: 'Rina Wulandari', 
         emp_no: 'EMP-007', 
-        factory: 'Factory Assy', 
-        line: 'Line Assembly Final', 
+        factory: null, 
+        line: null, 
         phone: '8123456007', 
         email: 'rina.wulandari@company.com', 
         username: 'rina.wulandari', 
@@ -209,7 +209,6 @@ export default {
         username: 'bahuwirya.simbolon', 
         role: 'Driver' 
       },
-      
     ];
 
     const users = [];

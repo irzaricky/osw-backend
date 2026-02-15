@@ -193,7 +193,7 @@ class helper extends commonHelper {
 		 */
 
 		try {
-			res.status(status || (body && body.status ? 200 : 400));
+			res.status(status || (body && body.code) || (body && body.status ? 200 : 400));
 			res.setHeader('Content-Type', 'application/json')
 			res.send(body);
 

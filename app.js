@@ -72,7 +72,7 @@ app.use(session({
 		tableName : 'session'
 	}),
 	key: 'user_sid',
-	secret: __random,
+	secret: config.debug ? 'session_secret_cihuy' : __random,
 	resave: false,
 	saveUninitialized: false,
 	cookie: {

@@ -6,7 +6,7 @@ export const config = {
     title: process.env.SITE_TITLE || 'Order System Warehouse',
     url: process.env.SITE_URL || 'http://localhost:3000'
   },
-  debug: process.env.DEBUG === 'true',
+  debug: (process.env.APP_DEBUG || '').trim() === 'true',
   port: parseInt(process.env.PORT, 10) || 3000,
   database: {
     host: process.env.DB_HOST,

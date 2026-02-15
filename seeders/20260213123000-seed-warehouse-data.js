@@ -10,7 +10,21 @@ export default {
     ];
     await queryInterface.bulkInsert('ref_warehouse_categories', categories, { ignoreDuplicates: true });
 
-    // 2. Seed Defects (Consolidated)
+    // 2. Seed Defect Categories & Defects
+    const defectCategories = [
+      { name: 'Kerusakan Fisik', ...timestamp },
+      { name: 'Cacat Dimensi', ...timestamp },
+      { name: 'Kerusakan Kemasan', ...timestamp }
+    ];
+    await queryInterface.bulkInsert('ref_defect_categories', defectCategories, { ignoreDuplicates: true });
+
+    const categoriesDB = await queryInterface.sequelize.query(
+      `SELECT id, name FROM ref_defect_categories`,
+      { type: queryInterface.sequelize.QueryTypes.SELECT }
+    );
+    const catMap = {};
+    categoriesDB.forEach(c => catMap[c.name] = c.id);
+
     const defects = [
       { category: 'Kerusakan Fisik', name: 'Retak', ...timestamp },
       { category: 'Kerusakan Fisik', name: 'Pecah', ...timestamp },
@@ -22,8 +36,15 @@ export default {
       { category: 'Kerusakan Kemasan', name: 'Kemasan sobek', ...timestamp },
       { category: 'Kerusakan Kemasan', name: 'Kemasan basah', ...timestamp },
       { category: 'Kerusakan Kemasan', name: 'Segel rusak', ...timestamp }
-    ];
-    await queryInterface.bulkInsert('ref_defects', defects, { ignoreDuplicates: true });
+    ].map(d => ({
+      defect_category_id: catMap[d.category],
+      name: d.name,
+      active: true,
+      created_at: new Date(),
+      updated_at: new Date()
+    })).filter(d => d.defect_category_id); // Ensure valid category
+
+    await queryInterface.bulkInsert('s_defects', defects, { ignoreDuplicates: true });
 
     // 3. Seed Warehouses
     // Assuming Factory ID 2 is 'Factory Warehouse' from previous seed.
@@ -102,7 +123,9 @@ export default {
     await queryInterface.bulkDelete('s_warehouse_bins', null, {});
     await queryInterface.bulkDelete('s_warehouse_areas', null, {});
     await queryInterface.bulkDelete('s_warehouses', null, {});
-    await queryInterface.bulkDelete('ref_defects', null, {});
+    await queryInterface.bulkDelete('s_defects', null, {});
+    await queryInterface.bulkDelete('ref_defect_categories', null, {});
+    // await queryInterface.bulkDelete('ref_defects', null, {}); // Deprecated
     await queryInterface.bulkDelete('ref_warehouse_categories', null, {});
   }
 };

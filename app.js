@@ -13,7 +13,7 @@ import hash from './class/hash.class.js';
 import { EventEmitter } from 'events';
 import helper from './class/helper.class.js';
 import pino from 'pino';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -153,7 +153,7 @@ for (const mainRoute in routers) {
 	for (const subRoute in routers[mainRoute]) {
 		const routePath = routers[mainRoute][subRoute];
         // Dynamic import for ESM
-        const routeModule = await import(fileURLToPath(new URL(`file://${routePath}`)));
+        const routeModule = await import(pathToFileURL(routePath).href);
 		app.use(`${mainRoute === '/' ? '' : mainRoute}/${subRoute}`, routeModule.default || routeModule);
 	}
 }

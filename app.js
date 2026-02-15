@@ -53,6 +53,12 @@ app.use(cookieParser());
 app.use('/', express.static(path.join(__dirname, 'public')));
 app.disable('x-powered-by');
 
+// ensure req.body is always an object
+app.use((req, res, next) => {
+    req.body = req.body || {};
+    next();
+});
+
 // initialize express-session to allow us track the logged-in user across sessions.
 app.use(session({
 	key: 'user_sid',

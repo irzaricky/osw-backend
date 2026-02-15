@@ -348,6 +348,24 @@ class helper extends commonHelper {
 		};
 	};
 
+	getPagination(params) {
+		const limit = parseInt(params.limit) || 10;
+		const page = parseInt(params.page) || 1;
+		const offset = (page - 1) * limit;
+
+		return { limit, page, offset };
+	};
+
+	getPaginationData(rows, count, page, limit) {
+		return {
+			rows,
+			count,
+			page,
+			limit,
+			totalPages: Math.ceil(count / limit)
+		};
+	};
+
 }
 
 export default new helper();

@@ -423,7 +423,7 @@ class UserModule extends BaseModule {
             const oldData = { active: user.active };
 
             // RBAC Check
-            const permission = await this.checkPermission(currentUser, user.role_id);
+            const permission = await this.checkRolePermission(currentUser, user.role_id);
             if (!permission.status) {
                 return permission;
             }
@@ -481,7 +481,7 @@ class UserModule extends BaseModule {
             const oldData = JSON.parse(JSON.stringify(user));
 
             // RBAC Check
-            const permission = await this.checkPermission(currentUser, user.role_id);
+            const permission = await this.checkRolePermission(currentUser, user.role_id);
             if (!permission.status) {
                 await t.rollback();
                 return permission;

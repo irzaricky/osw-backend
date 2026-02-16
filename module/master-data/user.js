@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { Op } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
+import Joi from 'joi';
 
 const { SUsers, SRoles, SUserDetail, SFactories, SLines } = db;
 
@@ -123,10 +124,18 @@ class UserModule extends BaseModule {
             // Build user_detail include with optional factory_id and line_id filters
             const userDetailWhere = {};
             if (factory_id) {
-                userDetailWhere.factory_id = factory_id;
+                if (factory_id == '0') {
+                    userDetailWhere.factory_id = null;
+                } else {
+                    userDetailWhere.factory_id = factory_id;
+                }
             }
             if (line_id) {
-                userDetailWhere.line_id = line_id;
+                if (line_id == '0') {
+                    userDetailWhere.line_id = null;
+                } else {
+                    userDetailWhere.line_id = line_id;
+                }
             }
 
             const include = [
@@ -201,12 +210,37 @@ class UserModule extends BaseModule {
         try {
             const data = req.body;
             const currentUser = req.session.user;
-            const { email, password, role_id, full_name, phone_number, factory_id, line_id } = data;
 
-            const check = helper.checkMandatory(data, ['email', 'password', 'role_id']);
-            if (!check.status) {
+            const schema = Joi.object({
+                email: Joi.string().email().required().messages({
+                    'string.email': 'Email must be a valid email address',
+                    'any.required': 'Email is required'
+                }),
+                password: Joi.string().min(6).required().messages({
+                    'string.min': 'Password must be at least 6 characters long',
+                    'any.required': 'Password is required'
+                }),
+                role_id: Joi.number().integer().required().messages({
+                    'number.base': 'Role ID must be a number',
+                    'any.required': 'Role ID is required'
+                }),
+                full_name: Joi.string().allow(null, '').optional(),
+                phone_number: Joi.string().allow(null, '').optional(),
+                factory_id: Joi.number().integer().allow(null).optional(),
+                line_id: Joi.number().integer().allow(null).optional()
+            });
+
+            const validation = helper.validate(data, schema);
+            if (!validation.status) {
                 await t.rollback();
-                return check;
+                return validation;
+            }
+
+            let { email, password, role_id, full_name, phone_number, factory_id, line_id } = validation.value;
+
+            // If factory_id is null, line_id must be null
+            if (!factory_id) {
+                line_id = null;
             }
 
             // RBAC Check
@@ -301,7 +335,29 @@ class UserModule extends BaseModule {
             const id = req.params.id;
             const data = req.body;
             const currentUser = req.session.user;
-            const { role_id, email, password, full_name, phone_number, factory_id, line_id } = data;
+            
+            const schema = Joi.object({
+                email: Joi.string().email().optional(),
+                password: Joi.string().min(6).optional().allow(null, ''),
+                role_id: Joi.number().integer().optional(),
+                full_name: Joi.string().allow(null, '').optional(),
+                phone_number: Joi.string().allow(null, '').optional(),
+                factory_id: Joi.number().integer().allow(null).optional(),
+                line_id: Joi.number().integer().allow(null).optional()
+            });
+
+            const validation = helper.validate(data, schema);
+            if (!validation.status) {
+                await t.rollback();
+                return validation;
+            }
+
+            let { role_id, email, password, full_name, phone_number, factory_id, line_id } = validation.value;
+
+            // If factory_id is explicitly set to null, line_id must be null
+            if (factory_id === null) {
+                line_id = null;
+            }
 
             const user = await SUsers.findByPk(id, { 
                 include: [{ model: SUserDetail, as: 'user_detail' }],
@@ -346,10 +402,11 @@ class UserModule extends BaseModule {
             // Update details
             const userDetail = await SUserDetail.findOne({ where: { user_id: id }, transaction: t });
             if (userDetail) {
-                if (full_name) userDetail.full_name = full_name;
+                if (full_name !== undefined) userDetail.full_name = full_name;
                 if (phone_number !== undefined) userDetail.phone_number = phone_number;
                 if (factory_id !== undefined) userDetail.factory_id = factory_id;
                 if (line_id !== undefined) userDetail.line_id = line_id;
+                
                 await userDetail.save({ transaction: t });
             }
 

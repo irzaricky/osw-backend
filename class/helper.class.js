@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import dayjs from 'dayjs';
 import { fileURLToPath } from 'url';
+import Joi from 'joi';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -384,6 +385,18 @@ class helper extends commonHelper {
 
 		return { status: true };
 	};
+
+    validate(data, schema) {
+        const { error, value } = schema.validate(data, { abortEarly: false });
+        if (error) {
+            return {
+                status: false,
+                error: error.details.map(x => x.message).join(', '),
+                code: 400
+            };
+        }
+        return { status: true, value };
+    }
 
 }
 

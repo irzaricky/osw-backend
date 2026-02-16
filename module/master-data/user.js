@@ -5,7 +5,7 @@ import { Op } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 
-const { SUsers, SRoles, SUserDetail } = db;
+const { SUsers, SRoles, SUserDetail, SFactories, SLines } = db;
 
 class UserModule extends BaseModule {
     
@@ -93,6 +93,10 @@ class UserModule extends BaseModule {
             const { limit, page, offset } = helper.getPagination(params);
             const search = params.search || '';
             const role_id = params.role_id;
+            const division_id = params.division_id;
+            const factory_id = params.factory_id;
+            const line_id = params.line_id;
+            const active = params.active;
 
             const where = {};
 
@@ -107,15 +111,52 @@ class UserModule extends BaseModule {
                 where.role_id = role_id;
             }
 
+            if (active !== undefined && active !== '') {
+                where.active = active === 'true' || active === true;
+            }
+
+            // Build role include with optional division_id filter
+            const roleIncludeWhere = {};
+            if (division_id) {
+                roleIncludeWhere.division_id = division_id;
+            }
+
+            // Build user_detail include with optional factory_id and line_id filters
+            const userDetailWhere = {};
+            if (factory_id) {
+                userDetailWhere.factory_id = factory_id;
+            }
+            if (line_id) {
+                userDetailWhere.line_id = line_id;
+            }
+
             const include = [
                 {
                     model: SRoles,
                     as: 'role',
                     attributes: ['id', 'name'],
+                    ...(Object.keys(roleIncludeWhere).length > 0 && { where: roleIncludeWhere }),
                     include: [
                         {
                             model: db.RefDivisions,
                             as: 'division',
+                            attributes: ['id', 'name']
+                        }
+                    ]
+                },
+                {
+                    model: SUserDetail,
+                    as: 'user_detail',
+                    ...(Object.keys(userDetailWhere).length > 0 && { where: userDetailWhere }),
+                    include: [
+                        {
+                            model: SFactories,
+                            as: 'factory',
+                            attributes: ['id', 'name']
+                        },
+                        {
+                            model: SLines,
+                            as: 'line',
                             attributes: ['id', 'name']
                         }
                     ]
@@ -126,7 +167,7 @@ class UserModule extends BaseModule {
                 where,
                 limit,
                 offset,
-                attributes: { exclude: ['role_id','createdAt','updatedAt','deleted_at','password'] },
+                attributes: { exclude: ['password'] },
                 include,
                 order: [['created_at', 'DESC']]
             };
@@ -577,6 +618,68 @@ class UserModule extends BaseModule {
             };
         } catch (error) {
              if (config.debug) {
+                return {
+                    status: false,
+                    error: error.message,
+                    code: 500
+                };
+            }
+            return {
+                status: false,
+                message: 'Internal server error',
+                code: 500
+            };
+        }
+    }
+
+    async getDropdownFactories(req) {
+        try {
+            const factories = await SFactories.findAll({
+                attributes: ['id', 'name'],
+                order: [['name', 'ASC']]
+            });
+
+            return {
+                status: true,
+                data: factories
+            };
+        } catch (error) {
+            if (config.debug) {
+                return {
+                    status: false,
+                    error: error.message,
+                    code: 500
+                };
+            }
+            return {
+                status: false,
+                message: 'Internal server error',
+                code: 500
+            };
+        }
+    }
+
+    async getDropdownLines(req) {
+        try {
+            const { factory_id } = req.query;
+            let where = {};
+
+            if (factory_id) {
+                where.factory_id = factory_id;
+            }
+
+            const lines = await SLines.findAll({
+                attributes: ['id', 'name', 'factory_id'],
+                where,
+                order: [['name', 'ASC']]
+            });
+
+            return {
+                status: true,
+                data: lines
+            };
+        } catch (error) {
+            if (config.debug) {
                 return {
                     status: false,
                     error: error.message,

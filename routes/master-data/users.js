@@ -23,6 +23,19 @@ router.get('/dd-status', auth.sessionChecker, async (req, res) => {
     helper.sendResponse(res, result);
 });
 
+// get dropdown factories
+router.get('/dd-factory', auth.sessionChecker, async (req, res) => {
+    const result = await userModule.getDropdownFactories(req);
+    helper.sendResponse(res, result);
+});
+
+// get dropdown lines
+router.get('/dd-lines', auth.sessionChecker, async (req, res) => {
+    const result = await userModule.getDropdownLines(req);
+    helper.sendResponse(res, result);
+});
+
+
 // get list user
 router.get('/', auth.sessionChecker, async (req, res) => {
     const result = await userModule.list(req);

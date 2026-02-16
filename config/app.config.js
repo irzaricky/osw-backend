@@ -4,7 +4,8 @@ dotenv.config();
 export const config = {
   site: {
     title: process.env.SITE_TITLE || 'Order System Warehouse',
-    url: process.env.SITE_URL || 'http://localhost:3000'
+    url: process.env.SITE_URL || 'http://localhost:3000',
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173'
   },
   debug: (process.env.APP_DEBUG || '').trim() === 'true',
   port: parseInt(process.env.PORT, 10) || 3000,

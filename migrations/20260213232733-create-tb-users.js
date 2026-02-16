@@ -8,11 +8,6 @@ export default {
         primaryKey: true,
         type: Sequelize.INTEGER
       },
-      username: {
-        allowNull: false,
-        unique: true,
-        type: Sequelize.STRING(50)
-      },
       email: {
         allowNull: false,
         unique: true,

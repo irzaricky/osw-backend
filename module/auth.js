@@ -14,7 +14,7 @@ class AuthModule {
         if (!username) {
             return {
                 status: false,
-                error: 'Username atau Email diperlukan',
+                error: 'Email diperlukan',
                 code: 400
             };
         }
@@ -29,12 +29,7 @@ class AuthModule {
 
         try {
             const user = await SUsers.findOne({
-                where: {
-                    [Op.or]: [
-                        { username: username },
-                        { email: username }
-                    ]
-                },
+                where: { email: username },
                 include: [
                     {
                         model: SRoles,
@@ -80,7 +75,7 @@ class AuthModule {
             const token = jwt.sign(
                 { 
                     id: user.id, 
-                    username: user.username, 
+                    email: user.email,
                     role: user.role.name,
                     role_id: user.role.id
                 },
@@ -91,7 +86,6 @@ class AuthModule {
             // Set session
             req.session.user = {
                 id: user.id,
-                username: user.username,
                 email: user.email,
                 role_id: user.role_id,
                 role: user.role.name,

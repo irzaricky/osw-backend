@@ -46,7 +46,6 @@ export default {
         line: null, 
         phone: '8123456001', 
         email: 'andi.pratama@company.com', 
-        username: 'andi.pratama', 
         role: 'Superadmin' 
       },
       { 
@@ -56,7 +55,6 @@ export default {
         line: null, 
         phone: '8123456002', 
         email: 'budi.santoso@company.com', 
-        username: 'budi.santoso', 
         role: 'Staff Sales Forecast' 
       },
       { 
@@ -66,7 +64,6 @@ export default {
         line: null, 
         phone: '8123456003', 
         email: 'citra.lestari@company.com', 
-        username: 'citra.lestari', 
         role: 'Supervisor Sales Forecast' 
       },
       { 
@@ -76,7 +73,6 @@ export default {
         line: null, 
         phone: '8123456004', 
         email: 'dewi.anggraini@company.com', 
-        username: 'dewi.anggraini', 
         role: 'Staff Sales Order' 
       },
       { 
@@ -86,7 +82,6 @@ export default {
         line: null, 
         phone: '8123456005', 
         email: 'eko.nugroho@company.com', 
-        username: 'eko.nugroho', 
         role: 'Supervisor Sales Order' 
       },
       { 
@@ -96,7 +91,6 @@ export default {
         line: null, 
         phone: '8123456006', 
         email: 'fajar.hidayat@company.com', 
-        username: 'fajar.hidayat', 
         role: 'Staff Sales Delivery' 
       },
       { 
@@ -106,7 +100,6 @@ export default {
         line: null, 
         phone: '8123456007', 
         email: 'rina.wulandari@company.com', 
-        username: 'rina.wulandari', 
         role: 'Supervisor Sales Delivery' 
       },
       { 
@@ -116,7 +109,6 @@ export default {
         line: null, 
         phone: '8123456008', 
         email: 'umar.winarno@company.com', 
-        username: 'umar.winarno', 
         role: 'Admin sales' 
       },
       { 
@@ -126,7 +118,6 @@ export default {
         line: null, 
         phone: '8123456009', 
         email: 'harsanto@company.com', 
-        username: 'harsanto.ang', 
         role: 'Warehouse Staff' 
       },
       { 
@@ -136,7 +127,6 @@ export default {
         line: null, 
         phone: '8123456010', 
         email: 'yuliana@company.com', 
-        username: 'yuliana.laila', 
         role: 'Supervisor Warehouse' 
       },
       { 
@@ -146,7 +136,6 @@ export default {
         line: 'Line Packing', 
         phone: '8123456011', 
         email: 'cakrajiya.najmudin@company.com', 
-        username: 'cakrajiya.najmudin', 
         role: 'Admin Warehouse' 
       },
       { 
@@ -156,7 +145,6 @@ export default {
         line: 'Line Assembly Frame', 
         phone: '8123456012', 
         email: 'taufik.hidayat@company.com', 
-        username: 'taufik.hidayat', 
         role: 'Admin PPIC' 
       },
       { 
@@ -166,7 +154,6 @@ export default {
         line: 'Line Assembly Electrical', 
         phone: '8123456013', 
         email: 'ridwan.utama@company.com', 
-        username: 'ridwan.utama', 
         role: 'Staff PPIC' 
       },
       { 
@@ -176,7 +163,6 @@ export default {
         line: 'Line Assembly Final', 
         phone: '8123456014', 
         email: 'rahmi.wastuti@company.com', 
-        username: 'rahmi.wastuti', 
         role: 'Supervisor PPIC' 
       },
       { 
@@ -186,7 +172,6 @@ export default {
         line: 'Line Painting Primer', 
         phone: '8123456015', 
         email: 'lukman.mandala@company.com', 
-        username: 'lukman.mandala', 
         role: 'Admin Production' 
       },
       { 
@@ -196,7 +181,6 @@ export default {
         line: null, 
         phone: '8123456016', 
         email: 'aswani.wahyudin@company.com', 
-        username: 'aswani.wahyudin', 
         role: 'Purchasing Manager' 
       },
       { 
@@ -206,7 +190,6 @@ export default {
         line: null, 
         phone: '8123456017', 
         email: 'bahuwirya.simbolon@company.com', 
-        username: 'bahuwirya.simbolon', 
         role: 'Driver' 
       },
     ];
@@ -221,7 +204,6 @@ export default {
       // Ensure we have a valid role ID (fallback to null or skip if critical)
       if (roleId) {
         users.push({
-          username: d.username,
           email: d.email,
           password: defaultPassword,
           role_id: roleId,
@@ -229,7 +211,7 @@ export default {
           ...timestamp
         });
       } else {
-        console.warn(`Skipping user ${d.username} due to missing role: ${d.role}`);
+        console.warn(`Skipping user ${d.email} due to missing role: ${d.role}`);
       }
     }
     
@@ -244,16 +226,16 @@ export default {
     }
 
     const createdUsers = await queryInterface.sequelize.query(
-      `SELECT id, username FROM s_users WHERE username IN (${users.map(u => `'${u.username}'`).join(',')})`,
+      `SELECT id, email FROM s_users WHERE email IN (${users.map(u => `'${u.email}'`).join(',')})`,
       { type: queryInterface.sequelize.QueryTypes.SELECT }
     );
     
     const userMap = {};
-    createdUsers.forEach(u => userMap[u.username] = u.id);
+    createdUsers.forEach(u => userMap[u.email] = u.id);
 
     // 3. Prepare Employees
     for (const d of rawData) {
-      const userId = userMap[d.username];
+      const userId = userMap[d.email];
       const factoryId = await getFactoryId(d.factory);
       const lineId = await getLineId(d.line);
       

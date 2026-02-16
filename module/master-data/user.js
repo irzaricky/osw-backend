@@ -102,7 +102,6 @@ class UserModule extends BaseModule {
 
             if (search) {
                 where[Op.or] = [
-                    { username: { [Op.iLike]: `%${search}%` } },
                     { email: { [Op.iLike]: `%${search}%` } }
                 ];
             }
@@ -202,9 +201,9 @@ class UserModule extends BaseModule {
         try {
             const data = req.body;
             const currentUser = req.session.user;
-            const { username, email, password, role_id, full_name, phone_number, factory_id, line_id } = data;
+            const { email, password, role_id, full_name, phone_number, factory_id, line_id } = data;
 
-            const check = helper.checkMandatory(data, ['username', 'email', 'password', 'role_id']);
+            const check = helper.checkMandatory(data, ['email', 'password', 'role_id']);
             if (!check.status) {
                 await t.rollback();
                 return check;
@@ -217,11 +216,8 @@ class UserModule extends BaseModule {
                 return permission;
             }
 
-            // Check if user exists
             const existingUser = await SUsers.findOne({
-                where: {
-                    [Op.or]: [{ username }, { email }]
-                },
+                where: { email },
                 transaction: t
             });
 
@@ -229,7 +225,7 @@ class UserModule extends BaseModule {
                 await t.rollback();
                 return {
                     status: false,
-                    error: 'Username or email already exists',
+                    error: 'Email already exists',
                     code: 409
                 };
             }
@@ -237,7 +233,6 @@ class UserModule extends BaseModule {
             const hashedPassword = await bcrypt.hash(password, 10);
 
             const newUser = await SUsers.create({
-                username,
                 email,
                 password: hashedPassword,
                 role_id,
@@ -260,7 +255,7 @@ class UserModule extends BaseModule {
             await SUserDetail.create({
                 user_id: newUser.id,
                 employee_number: nextEmpNo,
-                full_name: full_name || username,
+                full_name: full_name || email.split('@')[0],
                 phone_number: phone_number || null,
                 factory_id: factory_id || null,
                 line_id: line_id || null
@@ -272,7 +267,7 @@ class UserModule extends BaseModule {
                 activityCode: 'CREATE',
                 resourceId: newUser.id,
                 newData: newUser,
-                description: `Created new user ${newUser.username}`
+                description: `Created new user ${newUser.email}`
             });
 
             await t.commit();
@@ -370,7 +365,7 @@ class UserModule extends BaseModule {
                 resourceId: id,
                 oldData,
                 newData: updatedUser,
-                description: `Updated user ${user.username}`
+                description: `Updated user ${user.email}`
             });
 
             await t.commit();
@@ -438,7 +433,7 @@ class UserModule extends BaseModule {
                 resourceId: id,
                 oldData,
                 newData: { active },
-                description: `Updated status for user ${user.username} to ${active ? 'Active' : 'Inactive'}`
+                description: `Updated status for user ${user.email} to ${active ? 'Active' : 'Inactive'}`
             });
 
              return {
@@ -501,7 +496,7 @@ class UserModule extends BaseModule {
                 activityCode: 'DELETE',
                 resourceId: id,
                 oldData,
-                description: `Deleted user ${user.username}`
+                description: `Deleted user ${user.email}`
             });
 
             await t.commit();

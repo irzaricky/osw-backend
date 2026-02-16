@@ -66,4 +66,9 @@ router.delete('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin',
     helper.sendResponse(res, result);
 });
 
+// get download user
+router.get('/download', auth.sessionChecker, async (req, res) => {
+    await userModule.download(req, res);
+});
+
 export default router;

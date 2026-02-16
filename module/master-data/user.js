@@ -5,6 +5,7 @@ import { Op } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
+import xlsx from 'xlsx';
 
 const { SUsers, SRoles, SUserDetail, SFactories, SLines } = db;
 
@@ -743,6 +744,153 @@ class UserModule extends BaseModule {
                 message: 'Internal server error',
                 code: 500
             };
+        }
+    }
+
+    async download(req, res) {
+        try {
+            const currentUser = req.session.user;
+            const params = req.query;
+            const search = params.search || '';
+            const role_id = params.role_id;
+            const division_id = params.division_id;
+            const factory_id = params.factory_id;
+            const line_id = params.line_id;
+            const active = params.active;
+
+            const where = {};
+
+            if (search) {
+                where[Op.or] = [
+                    { email: { [Op.iLike]: `%${search}%` } }
+                ];
+            }
+
+            if (role_id) {
+                where.role_id = role_id;
+            }
+
+            if (active !== undefined && active !== '') {
+                where.active = active === 'true' || active === true;
+            }
+
+            // Build role include with optional division_id filter
+            const roleIncludeWhere = {};
+            if (division_id) {
+                roleIncludeWhere.division_id = division_id;
+            }
+
+            // Build user_detail include with optional factory_id and line_id filters
+            const userDetailWhere = {};
+            if (factory_id) {
+                if (factory_id == '0') {
+                    userDetailWhere.factory_id = null;
+                } else {
+                    userDetailWhere.factory_id = factory_id;
+                }
+            }
+            if (line_id) {
+                if (line_id == '0') {
+                    userDetailWhere.line_id = null;
+                } else {
+                    userDetailWhere.line_id = line_id;
+                }
+            }
+
+            const include = [
+                {
+                    model: SRoles,
+                    as: 'role',
+                    attributes: ['name'],
+                    ...(Object.keys(roleIncludeWhere).length > 0 && { where: roleIncludeWhere }),
+                    include: [
+                        {
+                            model: db.RefDivisions,
+                            as: 'division',
+                            attributes: ['name']
+                        }
+                    ]
+                },
+                {
+                    model: SUserDetail,
+                    as: 'user_detail',
+                    ...(Object.keys(userDetailWhere).length > 0 && { where: userDetailWhere }),
+                    include: [
+                        {
+                            model: SFactories,
+                            as: 'factory',
+                            attributes: ['name']
+                        },
+                        {
+                            model: SLines,
+                            as: 'line',
+                            attributes: ['name']
+                        }
+                    ]
+                }
+            ];
+
+            let options = {
+                where,
+                attributes: { exclude: ['password'] },
+                include,
+                order: [['created_at', 'DESC']]
+            };
+
+            // Apply standardized division filtering
+            options = await this.applyDivisionFilter(options, currentUser);
+
+            const users = await SUsers.findAll(options);
+
+            const data = users.map(user => {
+                const role = user.role ? user.role.name : '';
+                const division = user.role && user.role.division ? user.role.division.name : '';
+                const detail = user.user_detail || {};
+                const factory = detail.factory ? detail.factory.name : '';
+                const line = detail.line ? detail.line.name : '';
+
+                return {
+                    'Email': user.email,
+                    'Role': role,
+                    'Division': division,
+                    'Full Name': detail.full_name || '',
+                    'Employee Number': detail.employee_number || '',
+                    'Phone Number': detail.phone_number || '',
+                    'Factory': factory,
+                    'Line': line,
+                    'Status': user.active ? 'Active' : 'Inactive'
+                };
+            });
+
+            const wb = xlsx.utils.book_new();
+            const ws = xlsx.utils.json_to_sheet(data);
+
+            // Auto-width columns
+            const colWidths = Object.keys(data[0] || {}).map(key => ({ wch: Math.max(key.length, ...data.map(row => (row[key] ? row[key].toString().length : 0))) + 2 }));
+            ws['!cols'] = colWidths;
+
+            xlsx.utils.book_append_sheet(wb, ws, 'Users');
+
+            const wbBuffer = xlsx.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+            res.setHeader('Content-Disposition', 'attachment; filename="Users.xlsx"');
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.send(wbBuffer);
+
+        } catch (error) {
+            if (config.debug) {
+                res.status(500).send({
+                    status: false,
+                    error: error.message,
+                    code: 500
+                });
+            } else {
+                res.status(500).send({
+                    status: false,
+                    message: 'Internal server error',
+                    code: 500
+                });
+            }
         }
     }
 }

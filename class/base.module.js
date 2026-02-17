@@ -11,7 +11,7 @@ class BaseModule {
     async logActivity(req, options) {
         try {
             const { moduleCode, activityCode, resourceId, oldData, newData, description } = options;
-            const currentUser = req.session?.user;
+            const currentUser = req.user;
 
             const [module, activity] = await Promise.all([
                 moduleCode ? SModules.findOne({ where: { code: moduleCode } }) : null,

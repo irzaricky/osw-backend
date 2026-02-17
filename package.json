@@ -15,14 +15,14 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
-    "connect-pg-simple": "^10.0.0",
+
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dayjs": "^1.11.19",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "express-fileupload": "^1.5.2",
-    "express-session": "^1.19.0",
+
     "express-ws": "^5.0.2",
     "hashids": "^2.3.0",
     "http-errors": "^2.0.1",

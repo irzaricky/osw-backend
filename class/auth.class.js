@@ -16,12 +16,8 @@ class Auth {
                 const secretKey = config.debug ? "jwt_secret_cihuy" : global.__random;
                 const decoded = jwt.verify(token, secretKey);
                 
-                // Initialize session if it doesn't exist (e.g. stateless request)
-                if (!req.session) {
-                    req.session = {};
-                }
-                
-                req.session.user = {
+                // Store user data in req.user for use in routes
+                req.user = {
                     id: decoded.id,
                     email: decoded.email,
                     role: decoded.role,
@@ -38,10 +34,6 @@ class Auth {
                 });
             }
         }
-
-        if (req.session && req.session.user && req.cookies.user_sid) {
-            return next();
-        }
         
         return helper.sendResponse(res, {
             status: false,
@@ -52,7 +44,7 @@ class Auth {
 
     permissionChecker(roles) {
         return (req, res, next) => {
-            if (!req.session || !req.session.user) {
+            if (!req.user) {
                  return helper.sendResponse(res, {
                     status: false,
                     error: 'Unauthorized access',
@@ -60,7 +52,7 @@ class Auth {
                 });
             }
 
-            const userRole = req.session.user.role; 
+            const userRole = req.user.role; 
             
             if (Array.isArray(roles)) {
                  if (roles.includes(userRole)) {

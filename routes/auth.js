@@ -12,7 +12,6 @@ router.post('/login', async (req, res) => {
 
 router.post('/logout', async (req, res) => {
     const result = await m$auth.logout(req);
-    res.clearCookie('user_sid');
     helper.sendResponse(res, result);
 });
 

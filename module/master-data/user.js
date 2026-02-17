@@ -90,7 +90,7 @@ class UserModule extends BaseModule {
 
     async list(req) {
         try {
-            const currentUser = req.session.user;
+            const currentUser = req.user;
             const params = req.query;
             const { limit, page, offset } = helper.getPagination(params);
             const search = params.search || '';
@@ -210,7 +210,7 @@ class UserModule extends BaseModule {
         const t = await db.sequelize.transaction();
         try {
             const data = req.body;
-            const currentUser = req.session.user;
+            const currentUser = req.user;
 
             const schema = Joi.object({
                 email: Joi.string().email().required().messages({
@@ -335,7 +335,7 @@ class UserModule extends BaseModule {
         try {
             const id = req.params.id;
             const data = req.body;
-            const currentUser = req.session.user;
+            const currentUser = req.user;
             
             const schema = Joi.object({
                 email: Joi.string().email().optional(),
@@ -454,7 +454,7 @@ class UserModule extends BaseModule {
         try {
             const id = req.params.id;
             const { active } = req.body;
-            const currentUser = req.session.user;
+            const currentUser = req.user;
 
             if (active === undefined) {
                  return {
@@ -519,7 +519,7 @@ class UserModule extends BaseModule {
         const t = await db.sequelize.transaction();
         try {
             const id = req.params.id;
-            const currentUser = req.session.user;
+            const currentUser = req.user;
             const user = await SUsers.findByPk(id, { transaction: t });
 
             if (!user) {
@@ -583,7 +583,7 @@ class UserModule extends BaseModule {
 
     async getDropdownRoles(req) {
         try {
-            const currentUser = req.session.user;
+            const currentUser = req.user;
             
             let roleOptions = {
                 attributes: ['id', 'name'],
@@ -622,7 +622,7 @@ class UserModule extends BaseModule {
 
     async getDropdownDivisions(req) {
          try {
-            const currentUser = req.session.user;
+            const currentUser = req.user;
             
             let divisionOptions = {
                 attributes: ['id', 'name'],
@@ -749,7 +749,7 @@ class UserModule extends BaseModule {
 
     async download(req, res) {
         try {
-            const currentUser = req.session.user;
+            const currentUser = req.user;
             const params = req.query;
             const search = params.search || '';
             const role_id = params.role_id;

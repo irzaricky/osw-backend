@@ -1,9 +1,6 @@
 import createError from 'http-errors';
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import session from 'express-session';
-import pgSession from 'connect-pg-simple';
-import pg from 'pg';
 import path from 'path';
 import fs from 'fs';
 import loggerMorgan from 'morgan';
@@ -11,8 +8,6 @@ import cors from 'cors';
 import { Server } from 'http';
 import expressWs from 'express-ws';
 import { config } from './config/app.config.js';
-
-const PGStore = pgSession(session);
 import hash from './class/hash.class.js';
 import { EventEmitter } from 'events';
 import helper from './class/helper.class.js';
@@ -63,40 +58,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// initialize express-session to allow us track the logged-in user across sessions.
-const pgPool = new pg.Pool(config.database);
-
-app.use(session({
-	store: new PGStore({
-		pool : pgPool,
-		tableName : 'session'
-	}),
-	key: 'user_sid',
-	secret: config.debug ? 'session_secret_cihuy' : __random,
-	resave: false,
-	saveUninitialized: false,
-	cookie: {
-		maxAge: 24 * 60 * 60 * 1000, // 30 days
-        secure: config.debug ? false : true, // secure true on production
-        httpOnly: true,
-	}
-}));
-
-// This middleware will check if user's cookie is still saved in browser and user is not set, then automatically log the user out.
-// This usually happens when you stop your express server after login, your cookie still remains saved in the browser.
-app.use((req, res, next) => {
-	if (req.session && req.session._menus) {
-		res.locals._menus = req.session._menus;
-	}
-
-	if (req.cookies.user_sid && !req.session.token) {
-		console.error("cookie exists but session doesn't");
-		res.clearCookie('user_sid');
-		res.clearCookie('token');
-	}
-
-	next();
-});
 
 app.use(cors());
 

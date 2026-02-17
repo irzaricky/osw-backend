@@ -83,24 +83,21 @@ class AuthModule {
                 { expiresIn: '12h' }
             );
 
-            // Set session
-            req.session.user = {
-                id: user.id,
-                email: user.email,
-                role_id: user.role_id,
-                role: user.role.name,
-                token: token,
-                user_detail: user.user_detail ? {
-                    id: user.user_detail.id,
-                    full_name: user.user_detail.full_name,
-                    employee_number: user.user_detail.employee_number,
-                } : null
-            };
-
             return {
                 status: true,
                 message: 'Login successful',
-                data: req.session.user
+                data: {
+                    id: user.id,
+                    email: user.email,
+                    role_id: user.role_id,
+                    role: user.role.name,
+                    token: token,
+                    user_detail: user.user_detail ? {
+                        id: user.user_detail.id,
+                        full_name: user.user_detail.full_name,
+                        employee_number: user.user_detail.employee_number,
+                    } : null
+                }
             };
 
         } catch (error) {
@@ -120,30 +117,16 @@ class AuthModule {
     }
 
     async logout(req, res) { 
-        const user = req.session.user;
-        return new Promise((resolve) => {
-            req.session.destroy((err) => {
-                if(err){
-                     resolve({
-                        status: false,
-                        error: 'Error logging out',
-                        code: 500
-                    });
-                } else {
-                    resolve({
-                        status: true,
-                        message: 'Logout successful',
-                        data: user
-                    });
-                }
-            });
-        });
+        return {
+            status: true,
+            message: 'Logout successful'
+        };
     }
 
     async me(req) {
         return {
             status: true,
-            data: req.session.user
+            data: req.user
         };
     }
 }

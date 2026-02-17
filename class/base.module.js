@@ -6,15 +6,18 @@ class BaseModule {
     /**
      * Log a user activity to SAuditLogs.
      * @param {Object} req - The Express request object.
-     * @param {Object} options - Log options { moduleCode, activityCode, resourceId, oldData, newData, description }
+     * @param {Object} options - Log options { moduleCode, activityCode, resourceId, oldData, newData, description, transaction }
      */
     async logActivity(req, options) {
         try {
-            const { moduleCode, activityCode, resourceId, oldData, newData, description } = options;
+            const { moduleCode, activityCode, resourceId, oldData, newData, description, transaction } = options;
             const currentUser = req.user;
 
             const [module, activity] = await Promise.all([
-                moduleCode ? SModules.findOne({ where: { code: moduleCode } }) : null,
+                moduleCode ? SModules.findOne({ 
+                    where: { code: moduleCode },
+                    ...(transaction && { transaction })
+                }) : null,
                 activityCode ? RefActivities.findOrCreate({ 
                     where: { code: activityCode },
                     defaults: { 
@@ -22,7 +25,8 @@ class BaseModule {
                             .split('_')
                             .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
                             .join(' ')
-                    }
+                    },
+                    ...(transaction && { transaction })
                 }).then(([activity]) => activity) : null
             ]);
 
@@ -36,7 +40,7 @@ class BaseModule {
                 ip_address: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
                 user_agent: req.headers['user-agent'],
                 description: description || null
-            });
+            }, transaction ? { transaction } : {});
         } catch (error) {
             console.error('Audit Log Error:', error);
             // We don't throw here to avoid breaking the main flow if logging fails

@@ -302,7 +302,8 @@ class UserModule extends BaseModule {
                 activityCode: 'CREATE',
                 resourceId: newUser.id,
                 newData: newUser,
-                description: `Created new user ${newUser.email}`
+                description: `Created new user ${newUser.email}`,
+                transaction: t
             });
 
             await t.commit();
@@ -423,7 +424,8 @@ class UserModule extends BaseModule {
                 resourceId: id,
                 oldData,
                 newData: updatedUser,
-                description: `Updated user ${user.email}`
+                description: `Updated user ${user.email}`,
+                transaction: t
             });
 
             await t.commit();
@@ -554,7 +556,8 @@ class UserModule extends BaseModule {
                 activityCode: 'DELETE',
                 resourceId: id,
                 oldData,
-                description: `Deleted user ${user.email}`
+                description: `Deleted user ${user.email}`,
+                transaction: t
             });
 
             await t.commit();

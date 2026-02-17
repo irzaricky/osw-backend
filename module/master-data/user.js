@@ -176,7 +176,7 @@ class UserModule extends BaseModule {
                 where,
                 limit,
                 offset,
-                attributes: { exclude: ['password'] },
+                attributes: { exclude: ['password', 'deleted_at'] },
                 include,
                 order: [['created_at', 'DESC']]
             };
@@ -453,21 +453,24 @@ class UserModule extends BaseModule {
     }
 
     async updateStatus(req) {
+        const t = await db.sequelize.transaction();
         try {
             const id = req.params.id;
             const { active } = req.body;
             const currentUser = req.user;
 
             if (active === undefined) {
-                 return {
+                await t.rollback();
+                return {
                     status: false,
                     error: 'Active status is required',
                     code: 400
                 };
             }
 
-            const user = await SUsers.findByPk(id);
+            const user = await SUsers.findByPk(id, { transaction: t });
             if (!user) {
+                await t.rollback();
                 return {
                     status: false,
                     error: 'User not found',
@@ -480,11 +483,12 @@ class UserModule extends BaseModule {
             // RBAC Check
             const permission = await this.checkRolePermission(currentUser, user.role_id);
             if (!permission.status) {
+                await t.rollback();
                 return permission;
             }
 
             user.active = active;
-            await user.save();
+            await user.save({ transaction: t });
 
             // Log activity
             await this.logActivity(req, {
@@ -493,15 +497,19 @@ class UserModule extends BaseModule {
                 resourceId: id,
                 oldData,
                 newData: { active },
-                description: `Updated status for user ${user.email} to ${active ? 'Active' : 'Inactive'}`
+                description: `Updated status for user ${user.email} to ${active ? 'Active' : 'Inactive'}`,
+                transaction: t
             });
 
-             return {
+            await t.commit();
+
+            return {
                 status: true,
                 message: `User ${active ? 'activated' : 'deactivated'} successfully`
             };
 
         } catch (error) {
+            await t.rollback();
             if (config.debug) {
                 return {
                     status: false,

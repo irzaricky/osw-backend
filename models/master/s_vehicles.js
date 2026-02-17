@@ -22,9 +22,9 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
-    load_capacity: {
-      type: DataTypes.INTEGER,
-      allowNull: false
+    image: {
+      type: DataTypes.STRING,
+      allowNull: true
     },
     status: {
       type: DataTypes.BOOLEAN,

@@ -28,9 +28,9 @@ export default {
         onUpdate: 'CASCADE',
         onDelete: 'RESTRICT'
       },
-      load_capacity: {
-        allowNull: false,
-        type: Sequelize.INTEGER
+      image: {
+        allowNull: true,
+        type: Sequelize.STRING(255)
       },
       status: {
         allowNull: false,

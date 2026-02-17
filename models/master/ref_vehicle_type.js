@@ -12,6 +12,10 @@ export default (sequelize) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
+    },
+    load_capacity: {
+      type: DataTypes.INTEGER,
+      allowNull: false
     }
   }, {
     sequelize,

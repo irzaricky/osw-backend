@@ -13,6 +13,10 @@ export default {
         unique: true,
         type: Sequelize.STRING(50)
       },
+      load_capacity: {
+        allowNull: false,
+        type: Sequelize.INTEGER
+      },
       created_at: {
         allowNull: false,
         type: Sequelize.DATE,

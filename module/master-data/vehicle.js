@@ -4,6 +4,7 @@ import { Op } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
+import uploadHelper from '../../class/upload.class.js';
 
 const { SVehicles, RefVehicleType } = db;
 
@@ -89,26 +90,11 @@ class VehicleModule extends BaseModule {
                 return validation;
             }
 
-            const { vehicle_code, plate_number, vehicle_type_id, image } = validation.value;
+            const { vehicle_code, plate_number, vehicle_type_id } = validation.value;
 
-            // Check if vehicle code or plate number already exists
+            // Check if vehicle code already exists
             const checkCode = await SVehicles.findOne({
-                where: {
-                    [Op.or]: [
-                        { vehicle_code },
-                        { plate_number }
-                    ]
-                },
-                transaction: t
-            });
-
-            const checkPlate = await SVehicles.findOne({
-                where: {
-                    [Op.or]: [
-                        { vehicle_code },
-                        { plate_number }
-                    ]
-                },
+                where: { vehicle_code },
                 transaction: t
             });
 
@@ -120,6 +106,12 @@ class VehicleModule extends BaseModule {
                     code: 409
                 };
             }
+
+            // Check if plate number already exists
+            const checkPlate = await SVehicles.findOne({
+                where: { plate_number },
+                transaction: t
+            });
 
             if (checkPlate) {
                 await t.rollback();
@@ -141,11 +133,31 @@ class VehicleModule extends BaseModule {
                 };
             }
 
+            // Handle image upload
+            let imagePath = null;
+            if (req.files && req.files.image) {
+                const uploadResult = await uploadHelper.uploadImage(req.files.image, {
+                    subDir: 'vehicles',
+                    fileName: vehicle_code
+                });
+
+                if (!uploadResult.status) {
+                    await t.rollback();
+                    return {
+                        status: false,
+                        error: uploadResult.error,
+                        code: 400
+                    };
+                }
+
+                imagePath = uploadResult.data.path;
+            }
+
             const newVehicle = await SVehicles.create({
                 vehicle_code,
                 plate_number,
                 vehicle_type_id,
-                image
+                image: imagePath
             }, { transaction: t });
 
             // Log activity
@@ -253,10 +265,32 @@ class VehicleModule extends BaseModule {
                 }
             }
 
+            // Handle image upload
+            if (req.files && req.files.image) {
+                const uploadResult = await uploadHelper.replaceImage(
+                    req.files.image,
+                    vehicle.image, // old image path
+                    {
+                        subDir: 'vehicles',
+                        fileName: vehicle_code || vehicle.vehicle_code
+                    }
+                );
+
+                if (!uploadResult.status) {
+                    await t.rollback();
+                    return {
+                        status: false,
+                        error: uploadResult.error,
+                        code: 400
+                    };
+                }
+
+                vehicle.image = uploadResult.data.path;
+            }
+
             if (vehicle_code) vehicle.vehicle_code = vehicle_code;
             if (plate_number) vehicle.plate_number = plate_number;
             if (vehicle_type_id) vehicle.vehicle_type_id = vehicle_type_id;
-            if (image !== undefined) vehicle.image = image;
             if (status !== undefined) vehicle.status = status;
 
             await vehicle.save({ transaction: t });
@@ -313,6 +347,11 @@ class VehicleModule extends BaseModule {
             }
 
             const oldData = JSON.parse(JSON.stringify(vehicle));
+
+            // Delete associated image if exists
+            if (vehicle.image) {
+                uploadHelper.deleteImage(vehicle.image);
+            }
 
             await vehicle.destroy({ transaction: t });
 

@@ -13,6 +13,7 @@ import { EventEmitter } from 'events';
 import helper from './class/helper.class.js';
 import pino from 'pino';
 import { fileURLToPath, pathToFileURL } from 'url';
+import fileUpload from 'express-fileupload';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,11 @@ if (config.debug) {
 
 app.use(express.json({ limit : '100mb'}));
 app.use(express.urlencoded({ extended: false }));
+app.use(fileUpload({
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    abortOnLimit: true,
+    createParentPath: true
+}));
 app.use(cookieParser());
 app.use('/', express.static(path.join(__dirname, 'public')));
 app.disable('x-powered-by');

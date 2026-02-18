@@ -265,36 +265,76 @@ class UserModule extends BaseModule {
                 };
             }
 
-            const hashedPassword = await bcrypt.hash(password, 10);
-
-            const newUser = await SUsers.create({
-                email,
-                password: hashedPassword,
-                role_id,
-                active: true
-            }, { transaction: t });
-
-            // Generate employee number
-            const lastEmployee = await SUserDetail.findOne({
-                order: [['employee_number', 'DESC']],
+            // Check soft-deleted users with same email
+            const deletedUser = await SUsers.findOne({
+                where: { email },
+                paranoid: false,
                 transaction: t
             });
 
-            let nextEmpNo = 'EMP-001';
-            if (lastEmployee && lastEmployee.employee_number) {
-                const lastNoString = lastEmployee.employee_number.split('-')[1];
-                const lastNo = parseInt(lastNoString) || 0;
-                nextEmpNo = `EMP-${String(lastNo + 1).padStart(3, '0')}`;
+            const hashedPassword = await bcrypt.hash(password, 10);
+
+            let newUser;
+
+            if (deletedUser) {
+                // Restore soft-deleted user first
+                await deletedUser.restore({ transaction: t });
+                // Then update with new data
+                deletedUser.password = hashedPassword;
+                deletedUser.role_id = role_id;
+                deletedUser.active = true;
+                await deletedUser.save({ transaction: t });
+                newUser = deletedUser;
+            } else {
+                // Create brand new user
+                newUser = await SUsers.create({
+                    email,
+                    password: hashedPassword,
+                    role_id,
+                    active: true
+                }, { transaction: t });
             }
 
-            await SUserDetail.create({
-                user_id: newUser.id,
-                employee_number: nextEmpNo,
-                full_name: full_name || email.split('@')[0],
-                phone_number: phone_number || null,
-                factory_id: factory_id || null,
-                line_id: line_id || null
-            }, { transaction: t });
+            // Handle user detail
+            const existingDetail = await SUserDetail.findOne({
+                where: { user_id: newUser.id },
+                paranoid: false,
+                transaction: t
+            });
+
+            if (existingDetail) {
+                // Restore soft-deleted detail first
+                await existingDetail.restore({ transaction: t });
+                // Then update with new data
+                existingDetail.full_name = full_name || email.split('@')[0];
+                existingDetail.phone_number = phone_number || null;
+                existingDetail.factory_id = factory_id || null;
+                existingDetail.line_id = line_id || null;
+                await existingDetail.save({ transaction: t });
+            } else {
+                // Generate employee number
+                const lastEmployee = await SUserDetail.findOne({
+                    order: [['employee_number', 'DESC']],
+                    paranoid: false,
+                    transaction: t
+                });
+
+                let nextEmpNo = 'EMP-001';
+                if (lastEmployee && lastEmployee.employee_number) {
+                    const lastNoString = lastEmployee.employee_number.split('-')[1];
+                    const lastNo = parseInt(lastNoString) || 0;
+                    nextEmpNo = `EMP-${String(lastNo + 1).padStart(3, '0')}`;
+                }
+
+                await SUserDetail.create({
+                    user_id: newUser.id,
+                    employee_number: nextEmpNo,
+                    full_name: full_name || email.split('@')[0],
+                    phone_number: phone_number || null,
+                    factory_id: factory_id || null,
+                    line_id: line_id || null
+                }, { transaction: t });
+            }
 
             // Log activity
             await this.logActivity(req, {

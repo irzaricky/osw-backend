@@ -90,37 +90,8 @@ class VehicleModule extends BaseModule {
                 return validation;
             }
 
+
             const { vehicle_code, plate_number, vehicle_type_id } = validation.value;
-
-            // Check if vehicle code already exists
-            const checkCode = await SVehicles.findOne({
-                where: { vehicle_code },
-                transaction: t
-            });
-
-            if (checkCode) {
-                await t.rollback();
-                return {
-                    status: false,
-                    error: 'Vehicle code already exists',
-                    code: 409
-                };
-            }
-
-            // Check if plate number already exists
-            const checkPlate = await SVehicles.findOne({
-                where: { plate_number },
-                transaction: t
-            });
-
-            if (checkPlate) {
-                await t.rollback();
-                return {
-                    status: false,
-                    error: 'Plate number already exists',
-                    code: 409
-                };
-            }
 
             // Check if vehicle type exists
             const vehicleType = await RefVehicleType.findByPk(vehicle_type_id, { transaction: t });
@@ -133,6 +104,109 @@ class VehicleModule extends BaseModule {
                 };
             }
 
+            // Check for existing vehicles (active or soft-deleted)
+            const existingVehicles = await SVehicles.findAll({
+                where: {
+                    [Op.or]: [
+                        { vehicle_code },
+                        { plate_number }
+                    ]
+                },
+                paranoid: false,
+                transaction: t
+            });
+
+            const activeConflicts = existingVehicles.filter(v => !v.deleted_at);
+            const deletedConflicts = existingVehicles.filter(v => v.deleted_at);
+
+            if (activeConflicts.length > 0) {
+                await t.rollback();
+                const conflictCode = activeConflicts.find(v => v.vehicle_code === vehicle_code);
+                const conflictPlate = activeConflicts.find(v => v.plate_number === plate_number);
+
+                if (conflictCode) {
+                    return { status: false, error: 'Vehicle code already exists', code: 409 };
+                }
+                if (conflictPlate) {
+                    return { status: false, error: 'Plate number already exists', code: 409 };
+                }
+            }
+
+            // If we found deleted records, we try to restore and update
+            if (deletedConflicts.length > 0) {
+                if (deletedConflicts.length > 1) {
+                    await t.rollback();
+                    return {
+                        status: false,
+                        error: 'Multiple deleted vehicles found with conflicting data. Cannot restore automatically.',
+                        code: 409
+                    };
+                }
+
+                const vehicleToRestore = deletedConflicts[0];
+
+                // RESTORE LOGIC
+                await vehicleToRestore.restore({ transaction: t });
+
+                // Handle Image
+                // user provides image -> Replace old one.
+                // user provides NO image -> Delete old one (result is no image).
+                let imagePath = null;
+                if (req.files && req.files.image) {
+                    // Upload new and delete old
+                    const uploadResult = await uploadHelper.replaceImage(
+                        req.files.image,
+                        vehicleToRestore.image,
+                        {
+                            subDir: 'vehicles',
+                            fileName: vehicle_code
+                        }
+                    );
+
+                    if (!uploadResult.status) {
+                        await t.rollback();
+                        return {
+                            status: false,
+                            error: uploadResult.error,
+                            code: 400
+                        };
+                    }
+                    imagePath = uploadResult.data.path;
+                } else {
+                    if (vehicleToRestore.image) {
+                        try { await uploadHelper.deleteImage(vehicleToRestore.image); } catch(e) {}
+                    }
+                    imagePath = null;
+                }
+
+                // Update fields
+                vehicleToRestore.vehicle_code = vehicle_code;
+                vehicleToRestore.plate_number = plate_number;
+                vehicleToRestore.vehicle_type_id = vehicle_type_id;
+                vehicleToRestore.image = imagePath;
+                vehicleToRestore.status = true;
+
+                await vehicleToRestore.save({ transaction: t });
+
+                // Log activity
+                await this.logActivity(req, {
+                    moduleCode: 'master-data',
+                    activityCode: 'CREATE',
+                    resourceId: vehicleToRestore.id,
+                    newData: vehicleToRestore,
+                    description: `Restored and updated vehicle ${vehicleToRestore.vehicle_code} (${vehicleToRestore.plate_number})`,
+                    transaction: t
+                });
+
+                await t.commit();
+
+                return {
+                    status: true,
+                    data: vehicleToRestore,
+                    message: 'Vehicle created successfully (Restored from history)'
+                };
+            }
+            
             // Handle image upload
             let imagePath = null;
             if (req.files && req.files.image) {
@@ -157,7 +231,8 @@ class VehicleModule extends BaseModule {
                 vehicle_code,
                 plate_number,
                 vehicle_type_id,
-                image: imagePath
+                image: imagePath,
+                status: true
             }, { transaction: t });
 
             // Log activity

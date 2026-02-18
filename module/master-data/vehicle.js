@@ -331,6 +331,76 @@ class VehicleModule extends BaseModule {
         }
     }
 
+
+    async updateStatus(req) {
+        const t = await db.sequelize.transaction();
+        try {
+            const id = req.params.id;
+            const data = req.body;
+
+            const schema = Joi.object({
+                status: Joi.boolean().required()
+            });
+
+            const validation = helper.validate(data, schema);
+            if (!validation.status) {
+                await t.rollback();
+                return validation;
+            }
+
+            const { status } = validation.value;
+
+            const vehicle = await SVehicles.findByPk(id, { transaction: t });
+
+            if (!vehicle) {
+                await t.rollback();
+                return {
+                    status: false,
+                    error: 'Vehicle not found',
+                    code: 404
+                };
+            }
+
+            const oldData = JSON.parse(JSON.stringify(vehicle));
+            vehicle.status = status;
+            await vehicle.save({ transaction: t });
+
+            // Log activity
+            await this.logActivity(req, {
+                moduleCode: 'master-data',
+                activityCode: 'UPDATE_STATUS',
+                resourceId: id,
+                oldData,
+                newData: vehicle,
+                description: `Updated vehicle status ${vehicle.vehicle_code} (${vehicle.plate_number}) to ${status}`,
+                transaction: t
+            });
+
+            await t.commit();
+
+            return {
+                status: true,
+                message: 'Vehicle status updated successfully',
+                data: vehicle
+            };
+
+        } catch (error) {
+            await t.rollback();
+            if (config.debug) {
+                return {
+                    status: false,
+                    error: error.message,
+                    code: 500
+                };
+            }
+            return {
+                status: false,
+                message: 'Internal server error',
+                code: 500
+            };
+        }
+    }
+
     async delete(req) {
         const t = await db.sequelize.transaction();
         try {

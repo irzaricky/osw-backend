@@ -47,6 +47,13 @@ router.put('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'A
     helper.sendResponse(res, result);
 });
 
+
+// patch update vehicle status
+router.patch('/:id/status', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+    const result = await vehicleModule.updateStatus(req);
+    helper.sendResponse(res, result);
+});
+
 // delete vehicle
 router.delete('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
     const result = await vehicleModule.delete(req);

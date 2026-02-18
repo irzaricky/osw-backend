@@ -21,7 +21,7 @@ class LogModule extends BaseModule {
                 limit,
                 offset,
                 include: [
-                    { model: SUsers, as: 'user', attributes: ['id', 'username'] },
+                    { model: SUsers, as: 'user', attributes: ['id', 'email'] },
                     { model: SModules, as: 'module', attributes: ['id', 'name', 'code'] },
                     { model: RefActivities, as: 'activity', attributes: ['id', 'name', 'code'] }
                 ],

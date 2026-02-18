@@ -15,14 +15,12 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
-
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dayjs": "^1.11.19",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "express-fileupload": "^1.5.2",
-
     "express-ws": "^5.0.2",
     "hashids": "^2.3.0",
     "http-errors": "^2.0.1",
@@ -38,6 +36,7 @@
     "qrcode": "^1.5.4",
     "sequelize": "^6.37.7",
     "sequelize-cli": "^6.6.5",
+    "sharp": "^0.34.5",
     "xlsx": "^0.18.5",
     "xlsx-populate": "^1.21.0"
   }

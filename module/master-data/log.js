@@ -60,7 +60,7 @@ class LogModule extends BaseModule {
             });
 
             const data = logs.map(log => ({
-                'Created At': helper.formatDate(log.created_at),
+                'Created At': helper.formatDate(log.createdAt),
                 'User': log.user ? log.user.email : 'System/Unknown',
                 'Module': log.module ? log.module.name : 'Unknown',
                 'Activity': log.activity ? log.activity.name : 'Unknown',

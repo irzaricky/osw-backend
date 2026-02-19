@@ -87,6 +87,13 @@ export default {
     ].map(s => ({ ...s, ...timestamp }));
 
     await queryInterface.bulkInsert('s_stations', stations);
+
+    // Reset sequences for Postgres
+    if (queryInterface.sequelize.options.dialect === 'postgres') {
+        await queryInterface.sequelize.query("SELECT setval('s_factories_id_seq', (SELECT MAX(id) FROM s_factories));");
+        await queryInterface.sequelize.query("SELECT setval('s_lines_id_seq', (SELECT MAX(id) FROM s_lines));");
+        await queryInterface.sequelize.query("SELECT setval('ref_station_types_id_seq', (SELECT MAX(id) FROM ref_station_types));");
+    }
   },
 
   async down(queryInterface, Sequelize) {

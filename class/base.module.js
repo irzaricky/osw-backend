@@ -27,7 +27,7 @@ class BaseModule {
 
         for (const key of allKeys) {
             // Skip timestamps
-            if (['created_at', 'updated_at', 'deleted_at'].includes(key)) continue;
+            if (['created_at', 'updated_at', 'deleted_at', 'createdAt', 'updatedAt', 'deletedAt'].includes(key)) continue;
 
             const oldVal = oData[key];
             const newVal = nData[key];

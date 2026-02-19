@@ -36,12 +36,12 @@ class commonHelper {
 	};
 
 	isValidDate(_date){
-		return _date && Object.prototype.toString.call(_date) === "[object Date]" && !isNaN(_date);
+		return dayjs(_date).isValid();
 	};
 
 	formatDate(_date, _format = 'YYYY-MM-DD HH:mm:ss'){
-		if(!this.isValidDate(_date)){
-			return null;
+		if(!this.isValidDate(_date) || _date == null){
+			return '';
 		}
 
 		return dayjs(_date).format(_format);

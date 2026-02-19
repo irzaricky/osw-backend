@@ -251,12 +251,10 @@ class UserModule extends BaseModule {
                 return permission;
             }
 
-            const existingUser = await SUsers.findOne({
-                where: { email },
-                transaction: t
-            });
+            // Check unique email using helper
+            const checkUnique = await helper.checkUnique(SUsers, { email }, t);
 
-            if (existingUser) {
+            if (checkUnique.status === false) {
                 await t.rollback();
                 return {
                     status: false,
@@ -265,24 +263,18 @@ class UserModule extends BaseModule {
                 };
             }
 
-            // Check soft-deleted users with same email
-            const deletedUser = await SUsers.findOne({
-                where: { email },
-                paranoid: false,
-                transaction: t
-            });
-
             const hashedPassword = await bcrypt.hash(password, 10);
-
             let newUser;
 
-            if (deletedUser) {
+            if (checkUnique.restored) {
+                const deletedUser = checkUnique.data;
                 // Restore soft-deleted user first
                 await deletedUser.restore({ transaction: t });
                 // Then update with new data
                 deletedUser.password = hashedPassword;
                 deletedUser.role_id = role_id;
                 deletedUser.active = true;
+                deletedUser.deleted_at = null;
                 await deletedUser.save({ transaction: t });
                 newUser = deletedUser;
             } else {

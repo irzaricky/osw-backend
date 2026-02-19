@@ -22,7 +22,9 @@ export default (sequelize) => {
     modelName: 'RefVehicleType',
     tableName: 'ref_vehicle_types',
     underscored: true,
-    timestamps: true
+    timestamps: true,
+    paranoid: true,
+    deletedAt: 'deleted_at'
   });
 
   return RefVehicleType;

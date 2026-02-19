@@ -552,18 +552,38 @@ class VehicleModule extends BaseModule {
 
             const { name, load_capacity } = validation.value;
 
-            // Check if name already exists
-            const existingType = await RefVehicleType.findOne({
-                where: { name },
-                transaction: t
-            });
-
-            if (existingType) {
+            // Check if name already exists (including soft-deleted) using helper
+            const checkUnique = await helper.checkUnique(RefVehicleType, { name }, t);
+            
+            if (checkUnique.status === false) {
                 await t.rollback();
+                return checkUnique;
+            }
+
+            if (checkUnique.restored) {
+                const existingType = checkUnique.data;
+                // If soft-deleted, restore and update
+                existingType.restore({ transaction: t });
+                existingType.load_capacity = load_capacity;
+                existingType.deleted_at = null; 
+                await existingType.save({ transaction: t });
+
+                // Log activity
+                await this.logActivity(req, {
+                    moduleCode: 'master-data',
+                    activityCode: 'CREATE', 
+                    resourceId: existingType.id,
+                    newData: existingType,
+                    description: `Restored and updated vehicle type ${existingType.name}`,
+                    transaction: t
+                });
+
+                await t.commit();
+
                 return {
-                    status: false,
-                    error: 'Vehicle type name already exists',
-                    code: 409
+                    status: true,
+                    data: existingType,
+                    message: 'Vehicle type created successfully (Restored from history)'
                 };
             }
 
@@ -716,6 +736,22 @@ class VehicleModule extends BaseModule {
             }
 
             const oldData = JSON.parse(JSON.stringify(vehicleType));
+
+            // Check if there are any active vehicles using this type
+            const activeVehiclesCount = await SVehicles.count({
+                where: { vehicle_type_id: id },
+                transaction: t
+            });
+
+            if (activeVehiclesCount > 0) {
+                await t.rollback();
+                return {
+                    status: false,
+                    error: `Cannot delete vehicle type. It is currently used by ${activeVehiclesCount} active vehicles.`,
+                    code: 409
+                };
+            }
+
             await vehicleType.destroy({ transaction: t });
             
             // Log activity

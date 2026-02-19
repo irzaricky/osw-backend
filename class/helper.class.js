@@ -398,6 +398,41 @@ class helper extends commonHelper {
         return { status: true, value };
     }
 
+	async checkUnique(model, where, transaction = null) {
+		const options = {
+			where,
+			paranoid: false
+		};
+
+		if (transaction) {
+			options.transaction = transaction;
+		}
+
+		const existing = await model.findOne(options);
+
+		if (existing) {
+			if (!existing.deleted_at) {
+				return {
+					status: false,
+					code: 409,
+					error: 'Data already exists'
+				};
+			}
+
+			return {
+				status: true,
+				data: existing,
+				restored: true
+			};
+		}
+
+		return {
+			status: true,
+			data: null,
+			restored: false
+		};
+	}
+
 }
 
 export default new helper();

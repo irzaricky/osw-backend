@@ -156,7 +156,7 @@ class UploadHelper {
             }
 
             // Delete old image
-            if (oldPath) {
+            if (oldPath && uploadResult.data.path !== oldPath) {
                 this.deleteImage(oldPath);
             }
 

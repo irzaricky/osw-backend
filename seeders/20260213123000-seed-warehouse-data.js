@@ -116,6 +116,13 @@ export default {
       { dock_code: 'DCK-09', name: 'Dock Gerbang Atas', area_id: 9, ...timestamp } // AREA-VOLT
     ];
     await queryInterface.bulkInsert('s_docks', docks, { ignoreDuplicates: true });
+
+    // Reset sequences for Postgres
+    if (queryInterface.sequelize.options.dialect === 'postgres') {
+        await queryInterface.sequelize.query("SELECT setval('ref_warehouse_categories_id_seq', (SELECT MAX(id) FROM ref_warehouse_categories));");
+        await queryInterface.sequelize.query("SELECT setval('s_warehouses_id_seq', (SELECT MAX(id) FROM s_warehouses));");
+        await queryInterface.sequelize.query("SELECT setval('s_warehouse_areas_id_seq', (SELECT MAX(id) FROM s_warehouse_areas));");
+    }
   },
 
   async down(queryInterface, Sequelize) {

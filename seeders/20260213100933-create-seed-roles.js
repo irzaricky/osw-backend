@@ -35,6 +35,11 @@ export default {
     }));
 
     await queryInterface.bulkInsert('s_roles', rolesData, {});
+
+    // Reset sequence for Postgres
+    if (queryInterface.sequelize.options.dialect === 'postgres') {
+        await queryInterface.sequelize.query("SELECT setval('ref_divisions_id_seq', (SELECT MAX(id) FROM ref_divisions));");
+    }
   },
 
   async down(queryInterface, Sequelize) {

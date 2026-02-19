@@ -59,6 +59,11 @@ export default{
         updated_at: new Date()
       }
     ]);
+
+    // Reset sequence for Postgres
+    if (queryInterface.sequelize.options.dialect === 'postgres') {
+      await queryInterface.sequelize.query("SELECT setval('ref_vehicle_types_id_seq', (SELECT MAX(id) FROM ref_vehicle_types));");
+    }
   },
 
   async down(queryInterface, Sequelize) {

@@ -52,7 +52,7 @@ class LogModule extends BaseModule {
             const logs = await SAuditLogs.findAll({
                 where,
                 include: [
-                    { model: SUsers, as: 'user', attributes: ['id', 'email'] },
+                    { model: SUsers, as: 'user', attributes: ['id', 'email'], paranoid: false },
                     { model: SModules, as: 'module', attributes: ['id', 'name', 'code'] },
                     { model: RefActivities, as: 'activity', attributes: ['id', 'name', 'code'] }
                 ],
@@ -115,7 +115,7 @@ class LogModule extends BaseModule {
                 limit,
                 offset,
                 include: [
-                    { model: SUsers, as: 'user', attributes: ['id', 'email'] },
+                    { model: SUsers, as: 'user', attributes: ['id', 'email'], paranoid: false },
                     { model: SModules, as: 'module', attributes: ['id', 'name', 'code'] },
                     { model: RefActivities, as: 'activity', attributes: ['id', 'name', 'code'] }
                 ],
@@ -139,7 +139,7 @@ class LogModule extends BaseModule {
             const { id } = req.params;
             const log = await SAuditLogs.findByPk(id, {
                 include: [
-                    { model: SUsers, as: 'user', attributes: ['id', 'email'] },
+                    { model: SUsers, as: 'user', attributes: ['id', 'email'], paranoid: false },
                     { model: SModules, as: 'module', attributes: ['id', 'name', 'code'] },
                     { model: RefActivities, as: 'activity', attributes: ['id', 'name', 'code'] }
                 ]
@@ -245,6 +245,7 @@ class LogModule extends BaseModule {
                 where: {
                     id: userIds
                 },
+                paranoid: false,
                 order: [['email', 'ASC']]
             });
 

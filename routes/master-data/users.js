@@ -43,25 +43,25 @@ router.get('/', auth.sessionChecker, async (req, res) => {
 });
 
 // post add user
-router.post('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.post('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await userModule.add(req);
     helper.sendResponse(res, result);
 });
 
 // put update user
-router.put('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.put('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await userModule.update(req);
     helper.sendResponse(res, result);
 });
 
 // patch update status user
-router.patch('/status/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.patch('/status/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await userModule.updateStatus(req);
     helper.sendResponse(res, result);
 });
 
 // delete user
-router.delete('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.delete('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await userModule.delete(req);
     helper.sendResponse(res, result);
 });

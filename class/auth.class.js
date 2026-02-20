@@ -55,11 +55,24 @@ class Auth {
             const userRole = req.user.role; 
             
             if (Array.isArray(roles)) {
-                 if (roles.includes(userRole)) {
-                     return next();
-                 }
+                const hasPermission = roles.some(role => {
+                    if (role.endsWith('*')) {
+                        const prefix = role.slice(0, -1);
+                        return userRole.startsWith(prefix);
+                    }
+                    return userRole === role;
+                });
+
+                if (hasPermission) {
+                    return next();
+                }
             } else if (typeof roles === 'string') {
-                if (userRole === roles) {
+                if (roles.endsWith('*')) {
+                    const prefix = roles.slice(0, -1);
+                    if (userRole.startsWith(prefix)) {
+                        return next();
+                    }
+                } else if (userRole === roles) {
                     return next();
                 }
             }

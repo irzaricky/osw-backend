@@ -3,7 +3,7 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class SWarehouses extends Model {
     static associate(models) {
-      SWarehouses.belongsTo(models.SLines, { foreignKey: 'line_id' });
+      SWarehouses.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
       SWarehouses.belongsTo(models.RefWarehouseCategories, { foreignKey: 'category_id', as: 'category' });
       SWarehouses.hasMany(models.SWarehouseAreas, { foreignKey: 'warehouse_id', as: 'areas' });
     }

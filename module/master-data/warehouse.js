@@ -394,6 +394,60 @@ class WarehouseModule extends BaseModule {
       };
     }
   }
+
+  async getDropdownWarehouseCategories(req) {
+    try {
+      const categories = await RefWarehouseCategories.findAll({
+        attributes: ['id', 'name'],
+        order: [['name', 'ASC']]
+      });
+
+      return {
+        status: true,
+        data: categories
+      };
+    } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async getDropdownLines(req) {
+    try {
+      const lines = await SLines.findAll({
+        attributes: ['id', 'line_code', 'name'],
+        order: [['name', 'ASC']]
+      });
+      
+      return {
+        status: true,
+        data: lines
+      };
+    } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
 }
 
 export default new WarehouseModule();

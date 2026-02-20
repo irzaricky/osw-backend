@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "nodemon": "nodemon --expose-gc ./bin/www",
-    "dev-win": "set DEBUG=express:* & nodemon  --expose-gc./bin/www",
+    "dev-win": "set DEBUG=express:* & nodemon  --expose-gc ./bin/www",
     "dev": "DEBUG=express:* nodemon --expose-gc ./bin/www",
     "start": "node --expose-gc ./bin/www",
     "db:migrate": "sequelize-cli db:migrate",

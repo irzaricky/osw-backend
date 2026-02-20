@@ -6,7 +6,7 @@ import helper from '../../class/helper.class.js';
 const router = express.Router();
 
 // GET download logs
-router.get('/download', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.get('/download', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await logModule.download(req);
     
     if (result.status) {
@@ -19,31 +19,31 @@ router.get('/download', auth.sessionChecker, auth.permissionChecker(['Superadmin
 });
 
 // GET dropdown modules
-router.get('/dd-modules', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.get('/dd-modules', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await logModule.getDropdownModules();
     helper.sendResponse(res, result);
 });
 
 // GET dropdown activities
-router.get('/dd-activity', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.get('/dd-activity', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await logModule.getDropdownActivity();
     helper.sendResponse(res, result);
 });
 
 // GET dropdown users
-router.get('/dd-users', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.get('/dd-users', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await logModule.getDropdownUsers();
     helper.sendResponse(res, result);
 });
 
 // GET list logs
-router.get('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.get('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await logModule.list(req);
     helper.sendResponse(res, result);
 });
 
 // GET log detail
-router.get('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+router.get('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
     const result = await logModule.detail(req);
     helper.sendResponse(res, result);
 });

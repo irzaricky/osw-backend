@@ -174,8 +174,8 @@ class WarehouseModule extends BaseModule {
         await t.commit();
         return {
           status: true,
-          data: warehouseToRestore,
-          message: 'Warehouse created successfully (Restored from deleted record)'
+          message: 'Warehouse created successfully (Restored from deleted record)',
+          data: warehouseToRestore
         };
       }
 
@@ -201,8 +201,8 @@ class WarehouseModule extends BaseModule {
 
       return {
         status: true,
-        data: newWarehouse,
-        message: 'Warehouse created successfully'
+        message: 'Warehouse created successfully',
+        data: newWarehouse
       };
     } catch (error) {
       await t.rollback();
@@ -322,10 +322,9 @@ class WarehouseModule extends BaseModule {
 
       return {
         status: true,
-        data: warehouse,
-        message: 'Warehouse updated successfully'
+        message: 'Warehouse updated successfully',
+        data: warehouse
       };
-
     } catch (error) {
       await t.rollback();
       if (config.debug) {
@@ -347,8 +346,8 @@ class WarehouseModule extends BaseModule {
     const t = await db.sequelize.transaction();
     try {
       const id = req.params.id;
-      const warehouse = await SWarehouses.findByPk(id, { transaction: t });
 
+      const warehouse = await SWarehouses.findByPk(id, { transaction: t });
       if (!warehouse) {
         await t.rollback();
         return {
@@ -395,7 +394,7 @@ class WarehouseModule extends BaseModule {
     }
   }
 
-  async getDropdownWarehouseCategories(req) {
+  async getDropdownWarehouseCategories() {
     try {
       const categories = await RefWarehouseCategories.findAll({
         attributes: ['id', 'name'],
@@ -422,7 +421,7 @@ class WarehouseModule extends BaseModule {
     }
   }
 
-  async getDropdownLines(req) {
+  async getDropdownLines() {
     try {
       const lines = await SLines.findAll({
         attributes: ['id', 'line_code', 'name'],

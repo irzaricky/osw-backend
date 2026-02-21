@@ -80,20 +80,14 @@ class CustomerModule extends BaseModule {
       });
 
       if (existingCode) {
-        if (existingCode.deleted_at) {
+        if (!existingCode.deleted_at) {
           await t.rollback();
           return {
             status: false,
-            message: 'Customer code exists but is deleted',
+            message: 'Customer code already exists',
             code: 400
           };
         }
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Customer code already exists',
-          code: 400
-        };
       }
 
       const existingEmail = await SCustomers.findOne({
@@ -103,19 +97,73 @@ class CustomerModule extends BaseModule {
       });
 
       if (existingEmail) {
-        if (existingEmail.deleted_at) {
+        if (!existingEmail.deleted_at) {
           await t.rollback();
           return {
             status: false,
-            message: 'Email exists but is deleted',
+            message: 'Email already exists',
             code: 400
           };
         }
-        await t.rollback();
+      }
+
+      if (existingCode && existingCode.deleted_at) {
+        // Automatically restore existing deleted record
+        await existingCode.restore({ transaction: t });
+        
+        existingCode.name = name;
+        existingCode.email = email;
+        existingCode.address = address;
+        if (address === null || address === '') {
+           existingCode.address = null;
+        }
+
+        await existingCode.save({ transaction: t });
+
+        await this.logActivity(req, {
+          moduleCode: 'master-data',
+          activityCode: 'CREATE',
+          resourceId: existingCode.id,
+          newData: existingCode,
+          description: `Restored and updated customer with code ${customer_code}`,
+          transaction: t
+        });
+
+        await t.commit();
+
         return {
-          status: false,
-          message: 'Email already exists',
-          code: 400
+          status: true,
+          message: 'Customer created successfully (Restored from deleted record)',
+          data: existingCode
+        };
+      } else if (existingEmail && existingEmail.deleted_at) {
+        // Automatically restore existing deleted record based on email if code is new
+        await existingEmail.restore({ transaction: t });
+        
+        existingEmail.customer_code = customer_code;
+        existingEmail.name = name;
+        existingEmail.address = address;
+        if (address === null || address === '') {
+            existingEmail.address = null;
+        }
+
+        await existingEmail.save({ transaction: t });
+
+        await this.logActivity(req, {
+          moduleCode: 'master-data',
+          activityCode: 'CREATE',
+          resourceId: existingEmail.id,
+          newData: existingEmail,
+          description: `Restored and updated customer with email ${email}`,
+          transaction: t
+        });
+
+        await t.commit();
+
+        return {
+          status: true,
+          message: 'Customer created successfully (Restored from deleted record)',
+          data: existingEmail
         };
       }
 
@@ -198,10 +246,11 @@ class CustomerModule extends BaseModule {
             customer_code: customer_code,
             id: { [Op.ne]: id }
           },
+          paranoid: false,
           transaction: t
         });
 
-        if (existingCode) {
+        if (existingCode && !existingCode.deleted_at) {
           await t.rollback();
           return {
             status: false,
@@ -217,10 +266,11 @@ class CustomerModule extends BaseModule {
             email: email,
             id: { [Op.ne]: id }
           },
+          paranoid: false,
           transaction: t
         });
 
-        if (existingEmail) {
+        if (existingEmail && !existingEmail.deleted_at) {
           await t.rollback();
           return {
             status: false,

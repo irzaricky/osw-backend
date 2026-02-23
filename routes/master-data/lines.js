@@ -1,5 +1,5 @@
 import express from 'express';
-import factoryModule from '../../module/master-data/factory.js';
+import lineModule from '../../module/master-data/line.js';
 import auth from '../../class/auth.class.js';
 import helper from '../../class/helper.class.js';
 
@@ -10,7 +10,7 @@ router.get(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.getDropdown(req, res);
+    await lineModule.getDropdown(req, res);
   }
 );
 
@@ -19,7 +19,7 @@ router.get(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.download(req, res);
+    await lineModule.download(req, res);
   }
 );
 
@@ -28,7 +28,7 @@ router.post(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.upload(req, res);
+    await lineModule.upload(req, res);
   }
 );
 
@@ -37,7 +37,7 @@ router.get(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.list(req, res);
+    await lineModule.list(req, res);
   }
 );
 
@@ -46,7 +46,7 @@ router.post(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.add(req, res);
+    await lineModule.add(req, res);
   }
 );
 
@@ -55,7 +55,7 @@ router.put(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.update(req, res);
+    await lineModule.update(req, res);
   }
 );
 
@@ -64,7 +64,7 @@ router.delete(
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
-    await factoryModule.delete(req, res);
+    await lineModule.delete(req, res);
   }
 );
 

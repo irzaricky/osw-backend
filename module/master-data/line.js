@@ -6,13 +6,13 @@ import BaseModule from "../../class/base.module.js";
 import ExcelJS from "exceljs";
 import Joi from "joi";
 
-const { SFactories, sequelize } = db;
+const { SFactories, SLines, sequelize } = db;
 
-class FactoryModule extends BaseModule {
+class LineModule extends BaseModule {
   async getDropdown(req, res) {
     let tmp = {};
     try {
-      const factories = await SFactories.findAll({
+      const lines = await SLines.findAll({
         where: { deleted_at: null },
         attributes: ["id", "name"],
         order: [["name", "ASC"]],
@@ -21,11 +21,11 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: true,
         code: 200,
-        data: factories,
+        data: lines,
       };
       return helper.sendResponse(res, tmp);
     } catch (error) {
-      console.log(`[FactoryModule][getDropdown]:`, error);
+      console.log(`[LineModule][getDropdown]:`, error);
       tmp = {
         status: false,
         code: error.code || 500,
@@ -34,28 +34,42 @@ class FactoryModule extends BaseModule {
       return helper.sendResponse(res, tmp);
     }
   }
-
+  
   async list(req, res) {
     let tmp = {};
     try {
       const params = req.query;
       const { limit, page, offset } = helper.getPagination(params);
       const search = params.search || "";
+      const factory_id = params.factory_id || null;
 
       const where = { deleted_at: null };
 
       if (search) {
         where[Op.or] = [
           { name: { [Op.iLike]: `%${search}%` } },
-          { address: { [Op.iLike]: `%${search}%` } },
+          { line_code: { [Op.iLike]: `%${search}%` } },
         ];
       }
 
-      const { count, rows } = await SFactories.findAndCountAll({
+      if (factory_id) {
+        where.factory_id = factory_id;
+      }
+
+      const include = [
+        {
+          model: SFactories,
+          as: 'factory',
+          attributes: ['id', 'name'],
+        },
+      ];
+
+      const { count, rows } = await SLines.findAndCountAll({
         where,
         limit,
         offset,
         attributes: { exclude: ["deleted_at"] },
+        include,
         order: [["created_at", "DESC"]],
       });
 
@@ -66,7 +80,7 @@ class FactoryModule extends BaseModule {
       };
       return helper.sendResponse(res, tmp);
     } catch (error) {
-      console.log(`[FactoryModule][list]:`, error);
+      console.log(`[LineModule][list]:`, error);
       tmp = {
         status: false,
         code: error.code || 500,
@@ -81,10 +95,10 @@ class FactoryModule extends BaseModule {
     const t = await sequelize.transaction();
     try {
       const schema = Joi.object({
+        line_code: Joi.string().max(50).required(),
         name: Joi.string().max(100).required(),
-        address: Joi.string().allow(null, ""),
-        phone: Joi.string().max(20).allow(null, ""),
-        maps_url: Joi.string().uri().allow(null, ""),
+        factory_id: Joi.number().integer().required(),
+        sequence: Joi.number().integer().required(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -93,10 +107,10 @@ class FactoryModule extends BaseModule {
         return helper.sendResponse(res, validation);
       }
 
-      const { name, address, phone, maps_url } = validation.value;
+      const { line_code, name, factory_id, sequence } = validation.value;
 
-      const existing = await SFactories.findOne({
-        where: { name },
+      const existing = await SLines.findOne({
+        where: { line_code },
         paranoid: false,
         transaction: t,
       });
@@ -106,44 +120,55 @@ class FactoryModule extends BaseModule {
         tmp = {
           status: false,
           code: 400,
-          message: "Factory name already exists",
+          message: "Line code already exists",
         };
         return helper.sendResponse(res, tmp);
       }
 
-      let factory;
+      const existingFactory = await SFactories.findByPk(factory_id, { transaction: t });
+      if (!existingFactory) {
+        await t.rollback();
+        tmp = {
+          status: false,
+          code: 404,
+          message: "Factory not found",
+        };
+        return helper.sendResponse(res, tmp);
+      }
+
+      let line;
 
       if (existing && existing.deleted_at) {
         const oldData = existing.toJSON();
         await existing.restore({ transaction: t });
 
-        existing.address = address ?? null;
-        existing.phone = phone ?? null;
-        existing.maps_url = maps_url ?? null;
+        existing.name = name ?? null;
+        existing.factory_id = factory_id ?? null;
+        existing.sequence = sequence ?? null;
         await existing.save({ transaction: t });
 
-        factory = existing;
+        line = existing;
         await this.logActivity(req, {
           moduleCode: "master-data",
           activityCode: "RESTORE",
-          resourceId: factory.id,
+          resourceId: existing.id,
           oldData,
-          newData: factory,
-          description: `Restored factory with name ${name}`,
+          newData: existing,
+          description: `Restored line with name ${name}`,
           transaction: t,
         });
       } else {
-        factory = await SFactories.create(
-          { name, address, phone, maps_url },
+        line = await SLines.create(
+          { line_code, name, factory_id, sequence },
           { transaction: t }
         );
 
         await this.logActivity(req, {
           moduleCode: "master-data",
           activityCode: "CREATE",
-          resourceId: factory.id,
-          newData: factory,
-          description: `Created new factory with name ${name}`,
+          resourceId: line.id,
+          newData: line,
+          description: `Created new line with name ${name}`,
           transaction: t,
         });
       }
@@ -153,13 +178,13 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: true,
         code: 201,
-        message: "Factory created successfully",
-        data: factory,
+        message: "Line created successfully",
+        data: line,
       };
       return helper.sendResponse(res, tmp);
     } catch (error) {
       await t.rollback();
-      console.log(`[FactoryModule][add]:`, error);
+      console.log(`[LineModule][add]:`, error);
       tmp = {
         status: false,
         code: error.code || 500,
@@ -176,10 +201,10 @@ class FactoryModule extends BaseModule {
       const { id } = req.params;
 
       const schema = Joi.object({
+        line_code: Joi.string().max(50).required(),
         name: Joi.string().max(100).required(),
-        address: Joi.string().allow(null, ""),
-        phone: Joi.string().max(20).allow(null, ""),
-        maps_url: Joi.string().uri().allow(null, ""),
+        factory_id: Joi.number().integer().required(),
+        sequence: Joi.number().integer().required(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -188,22 +213,22 @@ class FactoryModule extends BaseModule {
         return helper.sendResponse(res, validation);
       }
 
-      const { name, address, phone, maps_url } = validation.value;
+      const { line_code, name, factory_id, sequence } = validation.value;
 
-      const factory = await SFactories.findByPk(id, { transaction: t });
-      if (!factory) {
+      const line = await SLines.findByPk(id, { transaction: t });
+      if (!line) {
         await t.rollback();
         tmp = {
           status: false,
           code: 404,
-          message: "Factory not found",
+          message: "Line not found",
         };
         return helper.sendResponse(res, tmp);
       }
 
-      const existing = await SFactories.findOne({
+      const existing = await SLines.findOne({
         where: {
-          name,
+          line_code,
           id: { [Op.ne]: id },
         },
         paranoid: false,
@@ -215,7 +240,7 @@ class FactoryModule extends BaseModule {
         tmp = {
           status: false,
           code: 400,
-          message: "Factory name already exists",
+          message: "Line code already exists",
         };
         return helper.sendResponse(res, tmp);
       }
@@ -224,14 +249,25 @@ class FactoryModule extends BaseModule {
         await existing.destroy({ force: true, transaction: t });
       }
 
-      const oldData = factory.toJSON();
+      const existingFactory = await SFactories.findByPk(factory_id, { transaction: t });
+      if (!existingFactory) {
+        await t.rollback();
+        tmp = {
+          status: false,
+          code: 404,
+          message: "Factory not found",
+        };
+        return helper.sendResponse(res, tmp);
+      }
 
-      await factory.update(
+      const oldData = line.toJSON();
+
+      await line.update(
         {
+          line_code,
           name,
-          address,
-          phone,
-          maps_url,
+          factory_id,
+          sequence,
         },
         { transaction: t }
       );
@@ -239,10 +275,10 @@ class FactoryModule extends BaseModule {
       await this.logActivity(req, {
         moduleCode: "master-data",
         activityCode: "UPDATE",
-        resourceId: factory.id,
+        resourceId: line.id,
         oldData,
-        newData: factory,
-        description: `Updated factory with name ${name}`,
+        newData: line,
+        description: `Updated line with code ${line_code}`,
         transaction: t,
       });
 
@@ -251,13 +287,13 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: true,
         code: 200,
-        message: "Factory updated successfully",
-        data: factory,
+        message: "Line updated successfully",
+        data: line,
       };
       return helper.sendResponse(res, tmp);
     } catch (error) {
       await t.rollback();
-      console.log(`[FactoryModule][update]:`, error);
+      console.log(`[LineModule][update]:`, error);
       tmp = {
         status: false,
         code: error.code || 500,
@@ -273,27 +309,27 @@ class FactoryModule extends BaseModule {
     try {
       const { id } = req.params;
 
-      const factory = await SFactories.findByPk(id, { transaction: t });
-      if (!factory) {
+      const line = await SLines.findByPk(id, { transaction: t });
+      if (!line) {
         await t.rollback();
         tmp = {
           status: false,
           code: 404,
-          message: "Factory not found",
+          message: "Line not found",
         };
         return helper.sendResponse(res, tmp);
       }
 
-      const oldData = factory.toJSON();
+      const oldData = line.toJSON();
 
-      await factory.destroy({ transaction: t });
+      await line.destroy({ transaction: t });
 
       await this.logActivity(req, {
         moduleCode: "master-data",
         activityCode: "DELETE",
-        resourceId: factory.id,
+        resourceId: line.id,
         oldData,
-        description: `Deleted factory with name ${factory.name}`,
+        description: `Deleted line with name ${line.name}`,
         transaction: t,
       });
 
@@ -302,11 +338,11 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: true,
         code: 200,
-        message: "Factory deleted successfully",
+        message: "Line deleted successfully",
       };
       return helper.sendResponse(res, tmp);
     } catch (error) {
-      console.log(`[FactoryModule][delete]:`, error);
+      console.log(`[LineModule][delete]:`, error);
       tmp = {
         status: false,
         code: error.code || 500,
@@ -326,33 +362,40 @@ class FactoryModule extends BaseModule {
       if (search) {
         where[Op.or] = [
           { name: { [Op.iLike]: `%${search}%` } },
-          { address: { [Op.iLike]: `%${search}%` } },
+          { line_code: { [Op.iLike]: `%${search}%` } },
         ];
       }
 
-      const factories = await SFactories.findAll({
+      const lines = await SLines.findAll({
         where,
+        include: [
+          {
+            model: SFactories,
+            as: "factory",
+            attributes: ["name"],
+          },
+        ],
         order: [["created_at", "DESC"]],
       });
 
       const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet("Factories");
+      const worksheet = workbook.addWorksheet("Lines");
 
       worksheet.columns = [
-        { header: "Factory Name", key: "name", width: 30 },
-        { header: "Address", key: "address", width: 40 },
-        { header: "Phone", key: "phone", width: 20 },
-        { header: "Maps URL", key: "maps_url", width: 40 },
+        { header: "Line Code", key: "line_code", width: 20 },
+        { header: "Line Name", key: "name", width: 30 },
+        { header: "Factory Name", key: "factory", width: 30 },
+        { header: "Sequence", key: "sequence", width: 15 },
       ];
 
       worksheet.getRow(1).font = { bold: true };
 
-      factories.forEach((factory, index) => {
+      lines.forEach((line) => {
         worksheet.addRow({
-          name: factory.name,
-          address: factory.address || "",
-          phone: factory.phone || "",
-          maps_url: factory.maps_url || "",
+          line_code: line.line_code,
+          name: line.name,
+          factory: line.factory?.name || "",
+          sequence: line.sequence,
         });
       });
 
@@ -363,13 +406,13 @@ class FactoryModule extends BaseModule {
 
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename=factories_${new Date().toISOString()}.xlsx`
+        `attachment; filename=lines_${new Date().toISOString()}.xlsx`
       );
 
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
-      console.log(`[FactoryModule][downloadExcel]:`, error);
+      console.log(`[LineModule][download]:`, error);
       return helper.sendResponse(res, {
         status: false,
         code: 500,
@@ -405,8 +448,7 @@ class FactoryModule extends BaseModule {
         });
       }
 
-      // Validate header row
-      const EXPECTED_HEADERS = ["Factory Name", "Address", "Phone", "Maps URL"];
+      const EXPECTED_HEADERS = ["Line Code", "Line Name", "Factory Name", "Sequence"];
       const headerRow = worksheet.getRow(1);
       const actualHeaders = EXPECTED_HEADERS.map((_, i) =>
         headerRow.getCell(i + 1).value?.toString().trim() ?? ""
@@ -435,25 +477,39 @@ class FactoryModule extends BaseModule {
       for (let i = 2; i <= worksheet.rowCount; i++) {
         const row = worksheet.getRow(i);
 
-        const name = row.getCell(1).value?.toString().trim();
-        const address = row.getCell(2).value?.toString() || null;
-        const phone = row.getCell(3).value?.toString() || null;
-        
-        const mapsRaw = row.getCell(4).value;
-        const maps_url = mapsRaw
-          ? typeof mapsRaw === "object"
-            ? mapsRaw.hyperlink || mapsRaw.text || null
-            : mapsRaw.toString()
-          : null;
+        const line_code = row.getCell(1).value?.toString().trim();
+        const name = row.getCell(2).value?.toString().trim();
+        const factory_name = row.getCell(3).value?.toString().trim();
+        const sequence = parseInt(row.getCell(4).value) || 0;
 
-        if (!name) {
-          results.errors.push(`Row ${i}: Factory name is required`);
+        if (!line_code) {
+          results.errors.push(`Row ${i}: Line code is required`);
           results.skipped++;
           continue;
         }
 
-        const existing = await SFactories.findOne({
-          where: { name },
+        if (!name) {
+          results.errors.push(`Row ${i}: Line name is required`);
+          results.skipped++;
+          continue;
+        }
+
+        // Lookup factory by name
+        const factory = factory_name
+          ? await SFactories.findOne({
+              where: { name: factory_name, deleted_at: null },
+              transaction: t,
+            })
+          : null;
+
+        if (!factory) {
+          results.errors.push(`Row ${i}: Factory "${factory_name}" not found`);
+          results.skipped++;
+          continue;
+        }
+
+        const existing = await SLines.findOne({
+          where: { line_code },
           paranoid: false,
           transaction: t,
         });
@@ -467,9 +523,9 @@ class FactoryModule extends BaseModule {
           const oldData = existing.toJSON();
           await existing.restore({ transaction: t });
 
-          existing.address = address ?? null;
-          existing.phone = phone ?? null;
-          existing.maps_url = maps_url ?? null;
+          existing.name = name;
+          existing.factory_id = factory.id;
+          existing.sequence = sequence;
           await existing.save({ transaction: t });
 
           await this.logActivity(req, {
@@ -478,28 +534,23 @@ class FactoryModule extends BaseModule {
             resourceId: existing.id,
             oldData,
             newData: existing,
-            description: `Restored factory via upload (${name})`,
+            description: `Restored line via upload (${line_code})`,
             transaction: t,
           });
 
           results.restored++;
         } else {
-          const factory = await SFactories.create(
-            {
-              name,
-              address,
-              phone,
-              maps_url,
-            },
+          const line = await SLines.create(
+            { line_code, name, factory_id: factory.id, sequence },
             { transaction: t }
           );
 
           await this.logActivity(req, {
             moduleCode: "master-data",
             activityCode: "CREATE",
-            resourceId: factory.id,
-            newData: factory,
-            description: `Created factory via upload (${name})`,
+            resourceId: line.id,
+            newData: line,
+            description: `Created line via upload (${line_code})`,
             transaction: t,
           });
 
@@ -518,7 +569,7 @@ class FactoryModule extends BaseModule {
       return helper.sendResponse(res, tmp);
     } catch (error) {
       await t.rollback();
-      console.log(`[FactoryModule][upload]:`, error);
+      console.log(`[LineModule][upload]:`, error);
 
       tmp = {
         status: false,
@@ -530,4 +581,4 @@ class FactoryModule extends BaseModule {
   }
 }
 
-export default new FactoryModule();
+export default new LineModule();

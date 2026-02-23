@@ -19,6 +19,7 @@
     "cors": "^2.8.6",
     "dayjs": "^1.11.19",
     "dotenv": "^17.2.4",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-fileupload": "^1.5.2",
     "express-ws": "^5.0.2",

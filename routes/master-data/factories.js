@@ -6,6 +6,15 @@ import helper from '../../class/helper.class.js';
 const router = express.Router();
 
 router.get(
+  '/dropdown',
+  auth.sessionChecker,
+  auth.permissionChecker(['Superadmin', 'Admin*']),
+  async (req, res) => {
+    await factoryModule.getDropdown(req, res);
+  }
+);
+
+router.get(
   '/download',
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),

@@ -9,6 +9,32 @@ import Joi from "joi";
 const { SFactories, sequelize } = db;
 
 class FactoryModule extends BaseModule {
+  async getDropdown(req, res) {
+    let tmp = {};
+    try {
+      const factories = await SFactories.findAll({
+        where: { deleted_at: null },
+        attributes: ["id", "name"],
+        order: [["name", "ASC"]],
+      });
+
+      tmp = {
+        status: true,
+        code: 200,
+        data: factories,
+      };
+      return helper.sendResponse(res, tmp);
+    } catch (error) {
+      console.log(`[FactoryModule][getDropdown]:`, error);
+      tmp = {
+        status: false,
+        code: error.code || 500,
+        message: error.message || "Internal Server Error",
+      };
+      return helper.sendResponse(res, tmp);
+    }
+  }
+
   async list(req, res) {
     let tmp = {};
     try {
@@ -44,7 +70,7 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: false,
         code: error.code || 500,
-        error: error.message || "Internal Server Error",
+        message: error.message || "Internal Server Error",
       };
       return helper.sendResponse(res, tmp);
     }
@@ -80,7 +106,7 @@ class FactoryModule extends BaseModule {
         tmp = {
           status: false,
           code: 400,
-          error: "Factory name already exists",
+          message: "Factory name already exists",
         };
         return helper.sendResponse(res, tmp);
       }
@@ -137,7 +163,7 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: false,
         code: error.code || 500,
-        error: error.message || "Internal Server Error",
+        message: error.message || "Internal Server Error",
       };
       return helper.sendResponse(res, tmp);
     }
@@ -170,7 +196,7 @@ class FactoryModule extends BaseModule {
         tmp = {
           status: false,
           code: 404,
-          error: "Factory not found",
+          message: "Factory not found",
         };
         return helper.sendResponse(res, tmp);
       }
@@ -189,9 +215,13 @@ class FactoryModule extends BaseModule {
         tmp = {
           status: false,
           code: 400,
-          error: "Factory name already exists",
+          message: "Factory name already exists",
         };
         return helper.sendResponse(res, tmp);
+      }
+
+      if (existing && existing.deleted_at) {
+        await existing.destroy({ force: true, transaction: t });
       }
 
       const oldData = factory.toJSON();
@@ -231,7 +261,7 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: false,
         code: error.code || 500,
-        error: error.message || "Internal Server Error",
+        message: error.message || "Internal Server Error",
       };
       return helper.sendResponse(res, tmp);
     }
@@ -249,7 +279,7 @@ class FactoryModule extends BaseModule {
         tmp = {
           status: false,
           code: 404,
-          error: "Factory not found",
+          message: "Factory not found",
         };
         return helper.sendResponse(res, tmp);
       }
@@ -280,7 +310,7 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: false,
         code: error.code || 500,
-        error: error.message || "Internal Server Error",
+        message: error.message || "Internal Server Error",
       };
       return helper.sendResponse(res, tmp);
     }
@@ -343,7 +373,7 @@ class FactoryModule extends BaseModule {
       return helper.sendResponse(res, {
         status: false,
         code: 500,
-        error: error.message || "Internal Server Error",
+        message: error.message || "Internal Server Error",
       });
     }
   }
@@ -358,7 +388,7 @@ class FactoryModule extends BaseModule {
         return helper.sendResponse(res, {
           status: false,
           code: 400,
-          error: "File is required",
+          message: "File is required",
         });
       }
 
@@ -371,7 +401,27 @@ class FactoryModule extends BaseModule {
         return helper.sendResponse(res, {
           status: false,
           code: 400,
-          error: "Invalid Excel format",
+          message: "Invalid Excel format",
+        });
+      }
+
+      // Validate header row
+      const EXPECTED_HEADERS = ["Factory Name", "Address", "Phone", "Maps URL"];
+      const headerRow = worksheet.getRow(1);
+      const actualHeaders = EXPECTED_HEADERS.map((_, i) =>
+        headerRow.getCell(i + 1).value?.toString().trim() ?? ""
+      );
+
+      const isValidTemplate = EXPECTED_HEADERS.every(
+        (expected, i) => actualHeaders[i].toLowerCase() === expected.toLowerCase()
+      );
+
+      if (!isValidTemplate) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false,
+          code: 400,
+          message: `Invalid template. Expected headers: [${EXPECTED_HEADERS.join(", ")}], but got: [${actualHeaders.join(", ")}]`,
         });
       }
 
@@ -473,7 +523,7 @@ class FactoryModule extends BaseModule {
       tmp = {
         status: false,
         code: 500,
-        error: error.message || "Internal Server Error",
+        message: error.message || "Internal Server Error",
       };
       return helper.sendResponse(res, tmp);
     }

@@ -347,16 +347,16 @@ class DockModule extends BaseModule {
     }
   }
 
-  async getDropdownWarehouseAreas() {
+  async getDropdown() {
     try {
-      const areas = await SWarehouseAreas.findAll({
-        attributes: ['id', 'area_code', 'name'],
+      const docks = await SDocks.findAll({
+        attributes: ['id', 'dock_code', 'name'],
         order: [['name', 'ASC']]
       });
 
       return {
         status: true,
-        data: areas
+        data: docks
       };
     } catch (error) {
       if (config.debug) {

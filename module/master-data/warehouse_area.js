@@ -289,6 +289,23 @@ class WarehouseAreaModule extends BaseModule {
       return { status: false, message: 'Internal server error', code: 500 }
     }
   }
+
+  async getDropdown() {
+    try {
+      const areas = await SWarehouseAreas.findAll({
+        attributes: ['id', 'area_code', 'name'],
+        order: [['name', 'ASC']]
+      })
+
+      return {
+        status: true,
+        data: areas
+      }
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 }
+      return { status: false, message: 'Internal server error', code: 500 }
+    }
+  }
 }
 
 export default new WarehouseAreaModule()

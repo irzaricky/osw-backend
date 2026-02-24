@@ -394,16 +394,16 @@ class WarehouseModule extends BaseModule {
     }
   }
 
-  async getDropdownWarehouseCategories() {
+  async getDropdown() {
     try {
-      const categories = await RefWarehouseCategories.findAll({
-        attributes: ['id', 'name'],
+      const warehouses = await SWarehouses.findAll({
+        attributes: ['id', 'warehouse_code', 'name'],
         order: [['name', 'ASC']]
       });
 
       return {
         status: true,
-        data: categories
+        data: warehouses
       };
     } catch (error) {
       if (config.debug) {
@@ -421,16 +421,16 @@ class WarehouseModule extends BaseModule {
     }
   }
 
-  async getDropdownLines() {
+  async getDropdownWarehouseCategories() {
     try {
-      const lines = await SLines.findAll({
-        attributes: ['id', 'line_code', 'name'],
+      const categories = await RefWarehouseCategories.findAll({
+        attributes: ['id', 'name'],
         order: [['name', 'ASC']]
       });
-      
+
       return {
         status: true,
-        data: lines
+        data: categories
       };
     } catch (error) {
       if (config.debug) {

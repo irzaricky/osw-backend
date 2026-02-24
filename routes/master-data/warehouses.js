@@ -5,15 +5,15 @@ import helper from '../../class/helper.class.js';
 
 const router = express.Router();
 
-// get dropdown warehouse categories
-router.get('/dd-warehouse-categories', auth.sessionChecker, async (req, res) => {
-    const result = await warehouseModule.getDropdownWarehouseCategories(req);
+// get dropdown warehouse
+router.get('/dropdown', auth.sessionChecker, async (req, res) => {
+    const result = await warehouseModule.getDropdown(req);
     helper.sendResponse(res, result);
 });
 
-// get dropdown lines
-router.get('/dd-lines', auth.sessionChecker, async (req, res) => {
-    const result = await warehouseModule.getDropdownLines(req);
+// get dropdown warehouse categories
+router.get('/categories/dropdown', auth.sessionChecker, async (req, res) => {
+    const result = await warehouseModule.getDropdownWarehouseCategories(req);
     helper.sendResponse(res, result);
 });
 

@@ -14,6 +14,7 @@ import helper from './class/helper.class.js';
 import pino from 'pino';
 import { fileURLToPath, pathToFileURL } from 'url';
 import fileUpload from 'express-fileupload';
+import { initCronJobs } from './cron/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -149,6 +150,9 @@ for (const mainRoute in routers) {
 		app.use(`${mainRoute === '/' ? '' : mainRoute}/${subRoute}`, routeModule.default || routeModule);
 	}
 }
+
+// Initialize Background Cron Jobs
+initCronJobs();
 
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {

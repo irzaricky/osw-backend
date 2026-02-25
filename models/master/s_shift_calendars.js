@@ -5,6 +5,7 @@ export default (sequelize) => {
     static associate(models) {
       SShiftCalendars.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
       SShiftCalendars.belongsTo(models.SShifts, { foreignKey: 'shift_id', as: 'shift' });
+      SShiftCalendars.belongsTo(models.RefTypeCalendars, { foreignKey: 'ref_type_calendar_id', as: 'type_calendar' });
     }
   }
 
@@ -25,8 +26,8 @@ export default (sequelize) => {
       type: DataTypes.DATEONLY,
       allowNull: false
     },
-    date_category: {
-      type: DataTypes.STRING,
+    ref_type_calendar_id: {
+      type: DataTypes.INTEGER,
       allowNull: false
     },
     date_event: {

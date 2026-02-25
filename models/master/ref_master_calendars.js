@@ -3,37 +3,28 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class RefMasterCalendars extends Model {
     static associate(models) {
-      // Define associations here if needed
+      RefMasterCalendars.belongsTo(models.RefTypeCalendars, {
+        foreignKey: 'ref_type_calendar_id',
+        as: 'type_calendar'
+      });
     }
   }
 
   RefMasterCalendars.init({
+    id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      primaryKey: true,
+      autoIncrement: true
+    },
     date: {
       type: DataTypes.DATEONLY,
       allowNull: false,
-      primaryKey: true
+      unique: true
     },
-    year: {
+    ref_type_calendar_id: {
       type: DataTypes.INTEGER,
       allowNull: false
-    },
-    month: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
-    day: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
-    is_holiday: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
-    },
-    is_weekend: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
     },
     description: {
       type: DataTypes.STRING,

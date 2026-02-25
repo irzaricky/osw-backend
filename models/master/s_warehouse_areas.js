@@ -37,10 +37,7 @@ export default (sequelize) => {
       type: DataTypes.TEXT,
       allowNull: true
     },
-    allowed_part_type_code: {
-  type: DataTypes.STRING,
-  allowNull: true
-},
+    
   }, {
     sequelize,
     modelName: 'SWarehouseAreas',

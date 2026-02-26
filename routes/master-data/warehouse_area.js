@@ -6,7 +6,7 @@ import helper from '../../class/helper.class.js';
 const router = express.Router();
 
 // get dropdown warehouse areas
-router.get('/dropdown', auth.sessionChecker, async (req, res) => {
+router.get('warehouses/dropdown', auth.sessionChecker, async (req, res) => {
   const result = await warehouseAreaModule.getDropdown(req);
   helper.sendResponse(res, result);
 });

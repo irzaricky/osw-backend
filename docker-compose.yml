@@ -27,7 +27,7 @@ services:
       db-postgres:
         condition: service_healthy
     environment:
-      SITE_TITLE: Order System Warehouse
+      SITE_TITLE: Order System Warehouse CI/CD
       SITE_URL: https://be-osw.splatza.my.id/
       APP_DEBUG: true
       PORT: 3001

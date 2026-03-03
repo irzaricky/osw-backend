@@ -53,7 +53,7 @@ services:
     networks:
       - osw-network
     depends_on:
-      db:
+      db-postgres:
         condition: service_healthy
 
 networks:

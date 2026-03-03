@@ -1,0 +1,50 @@
+services:
+  db-postgres:
+    image: postgres:16-alpine
+    container_name: osw-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-password} 
+      POSTGRES_DB: ${DB_NAME:-osw_backend}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - osw-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: osw-backend-app
+    restart: always
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+    environment:
+      SITE_TITLE: Order System Warehouse
+      SITE_URL: https://be-osw.splatza.my.id/
+      APP_DEBUG: true
+      PORT: 3001
+      DB_HOST: db-postgres
+      DB_USER: postgres
+      DB_PASS: password
+      DB_NAME: osw_backend
+      DB_PORT: 5432
+      FRONTEND_URL: https://fe-osw.splatza.my.id/
+    networks:
+      - osw-network
+    ports:
+      - "3001:3001"
+
+networks:
+  osw-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

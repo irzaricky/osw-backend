@@ -35,4 +35,4 @@ EXPOSE 3001
 
 # Script untuk menjalankan migrasi database sebelum aplikasi start
 # menggunakan 'sh -c' agar bisa menjalankan banyak perintah sekaligus
-CMD ["sh", "-c", "npx sequelize-cli db:migrate && node --expose-gc ./bin/www"]
+CMD ["sh", "-c", "npx sequelize-cli db:migrate && npx sequelize-cli db:seed:all && node --expose-gc ./bin/www"]

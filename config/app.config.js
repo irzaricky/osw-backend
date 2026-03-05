@@ -25,6 +25,7 @@ const sequelizeConfig = {
     database: config.database.database,
     host: config.database.host,
     port: config.database.port,
+    seederStorage: "sequelize",
     dialect: 'postgres'
   },
   test: {
@@ -41,6 +42,7 @@ const sequelizeConfig = {
     database: config.database.database,
     host: config.database.host,
     port: config.database.port,
+    seederStorage: "sequelize",
     dialect: 'postgres'
   }
 };

@@ -22,6 +22,16 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
+    period_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: false
+    },
+    qty_status: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'Temporary',
+      comment: 'Fix, Temporary'
+    },
     forecast_qty: {
       type: DataTypes.INTEGER,
       allowNull: false,

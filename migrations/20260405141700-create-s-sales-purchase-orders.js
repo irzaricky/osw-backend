@@ -1,12 +1,17 @@
 /** @type {import('sequelize-cli').Migration} */
 export default {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('s_sales_forecasts', {
+    await queryInterface.createTable('s_sales_purchase_orders', {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
         type: Sequelize.INTEGER
+      },
+      spo_number: {
+        allowNull: false,
+        unique: true,
+        type: Sequelize.STRING(50)
       },
       customer_id: {
         allowNull: false,
@@ -16,43 +21,37 @@ export default {
           key: 'id'
         },
         onUpdate: 'CASCADE',
-        onDelete: 'SET NULL'
+        onDelete: 'RESTRICT'
       },
-      forecast_number: {
+      spr_id: {
+        allowNull: true,
+        type: Sequelize.INTEGER,
+        references: {
+          model: 's_sales_purchase_requests',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL',
+        comment: 'Referensi ke SPR jika di-generate dari SPR'
+      },
+      shipping_address: {
         allowNull: false,
-        unique: true,
-        type: Sequelize.STRING(50)
-      },
-      forecast_type: {
-        allowNull: false,
-        type: Sequelize.STRING(50),
-        comment: 'Yearly, Half-Year, 4-Month'
-      },
-      start_period: {
-        allowNull: false,
-        type: Sequelize.DATEONLY
-      },
-      end_period: {
-        allowNull: false,
-        type: Sequelize.DATEONLY
-      },
-      description: {
         type: Sequelize.TEXT
       },
-      version: {
+      spo_date: {
         allowNull: false,
-        defaultValue: 'V1',
-        type: Sequelize.STRING(20)
+        type: Sequelize.DATEONLY,
+        defaultValue: Sequelize.literal('CURRENT_DATE')
+      },
+      delivery_due_date: {
+        allowNull: false,
+        type: Sequelize.DATEONLY
       },
       status: {
         allowNull: false,
         defaultValue: 'Draft',
         type: Sequelize.STRING(50),
-        comment: 'Draft, Submitted, Approved, Rejected'
-      },
-      copied_from_id: {
-        type: Sequelize.INTEGER,
-        comment: 'Self-reference jika copy data dari forecast sebelumnya'
+        comment: 'Draft, Locked, Processing, Completed'
       },
       created_by: {
         allowNull: false,
@@ -63,19 +62,6 @@ export default {
         },
         onUpdate: 'CASCADE',
         onDelete: 'RESTRICT'
-      },
-      approved_by: {
-        allowNull: true,
-        type: Sequelize.INTEGER,
-        references: {
-          model: 's_users',
-          key: 'id'
-        },
-        onUpdate: 'CASCADE',
-        onDelete: 'SET NULL'
-      },
-      approved_at: {
-        type: Sequelize.DATE
       },
       created_at: {
         allowNull: false,
@@ -93,6 +79,6 @@ export default {
     });
   },
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('s_sales_forecasts');
+    await queryInterface.dropTable('s_sales_purchase_orders');
   }
 };

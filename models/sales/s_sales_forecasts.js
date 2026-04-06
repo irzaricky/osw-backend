@@ -5,6 +5,7 @@ export default (sequelize) => {
     static associate(models) {
       SSalesForecasts.hasMany(models.SSalesForecastDetails, { foreignKey: 'forecast_id', as: 'details' });
       SSalesForecasts.hasMany(models.SSalesForecastLogs, { foreignKey: 'forecast_id', as: 'logs' });
+      SSalesForecasts.hasMany(models.SSalesPurchaseRequests, { foreignKey: 'forecast_id', as: 'purchase_requests' });
       SSalesForecasts.belongsTo(models.SCustomers, { foreignKey: 'customer_id', as: 'customer' });
       SSalesForecasts.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
       SSalesForecasts.belongsTo(models.SUsers, { foreignKey: 'approved_by', as: 'approver' });
@@ -16,6 +17,11 @@ export default (sequelize) => {
       type: DataTypes.STRING(50),
       allowNull: false,
       unique: true
+    },
+    forecast_type: {
+      type: DataTypes.STRING(50),
+      allowNull: false,
+      comment: 'Yearly, Half-Year, 4-Month'
     },
     customer_id: {
       type: DataTypes.INTEGER,

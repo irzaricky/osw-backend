@@ -1,27 +1,22 @@
 /** @type {import('sequelize-cli').Migration} */
 export default {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('s_sales_forecast_details', {
+    await queryInterface.createTable('s_sales_purchase_order_details', {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
         type: Sequelize.INTEGER
       },
-      forecast_id: {
+      spo_id: {
         allowNull: false,
         type: Sequelize.INTEGER,
         references: {
-          model: 's_sales_forecasts',
+          model: 's_sales_purchase_orders',
           key: 'id'
         },
         onUpdate: 'CASCADE',
         onDelete: 'CASCADE'
-      },
-      forecast_detail_number: {
-        allowNull: false,
-        unique: true,
-        type: Sequelize.STRING(50)
       },
       part_id: {
         allowNull: false,
@@ -31,23 +26,29 @@ export default {
           key: 'id'
         },
         onUpdate: 'CASCADE',
-        onDelete: 'RESTRICT',
-        comment: 'Mengacu ke s_parts untuk data produk'
+        onDelete: 'RESTRICT'
       },
-      period_date: {
-        allowNull: true,
-        type: Sequelize.DATEONLY
-      },
-      qty_status: {
-        allowNull: false,
-        type: Sequelize.STRING(20),
-        defaultValue: 'Temporary',
-        comment: 'Fix, Temporary'
-      },
-      forecast_qty: {
+      ordered_qty: {
         allowNull: false,
         defaultValue: 0,
         type: Sequelize.INTEGER
+      },
+      sent_qty: {
+        allowNull: false,
+        defaultValue: 0,
+        type: Sequelize.INTEGER,
+        comment: 'Jumlah yang sudah terkirim'
+      },
+      last_shipment_date: {
+        allowNull: true,
+        type: Sequelize.DATEONLY,
+        comment: 'Tanggal pengiriman terakhir'
+      },
+      status: {
+        allowNull: false,
+        defaultValue: 'Open',
+        type: Sequelize.STRING(20),
+        comment: 'Open, Partial, Closed'
       },
       created_at: {
         allowNull: false,
@@ -65,6 +66,6 @@ export default {
     });
   },
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('s_sales_forecast_details');
+    await queryInterface.dropTable('s_sales_purchase_order_details');
   }
 };

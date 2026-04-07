@@ -122,7 +122,7 @@ export default {
 
     await queryInterface.bulkInsert('s_sales_forecast_details', forecastDetails, { ignoreDuplicates: true });
 
-    // 2. SPR Data (Generated from Forecast 3)
+    // SPR Data (Generated from Forecast 3)
     const sprs = [
       {
         id: 1,
@@ -131,7 +131,7 @@ export default {
         source: 'Automatic',
         forecast_id: 3,
         request_date: new Date(),
-        required_date: new Date(new Date().setDate(new Date().getDate() + 14)), // 2 weeks from now
+        required_date: new Date(new Date().setDate(new Date().getDate() + 14)),
         confirmed_date: new Date(),
         description: 'Generated automatically from FC-R4-2026-05-001 for Fix Period',
         status: 'Approved',
@@ -154,7 +154,7 @@ export default {
       }));
     await queryInterface.bulkInsert('s_sales_purchase_request_details', sprDetails, { ignoreDuplicates: true });
 
-    // 3. SPO Data (Generated from SPR)
+    // SPO Data (Generated from SPR)
     const spos = [
       {
         id: 1,
@@ -185,9 +185,140 @@ export default {
       };
     });
     await queryInterface.bulkInsert('s_sales_purchase_order_details', spoDetails, { ignoreDuplicates: true });
+
+    // Delivery Plans & Orders Data ---
+    let dpIdCounter = 1;
+    let dpDetailIdCounter = 1;
+    let doIdCounter = 1;
+
+    const deliveryPlans = [];
+    const deliveryPlanDetails = [];
+    const deliveryOrders = [];
+
+    // Skenario 1: Completed Delivery (Parts 1-4)
+    deliveryPlans.push({
+      id: dpIdCounter,
+      dp_number: `DP-2026-06-00${dpIdCounter}`,
+      scheduled_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      time_start: '08:00:00',
+      time_end: '12:00:00',
+      warehouse_id: 1,
+      dock_id: 1,
+      destination: 'Gudang Pusat Customer A',
+      status: 'Shipped',
+      created_by: 1,
+      ...timestamp
+    });
+
+    const scenario1Details = spoDetails.slice(0, 4);
+    scenario1Details.forEach(spo => {
+      deliveryPlanDetails.push({
+        id: dpDetailIdCounter++,
+        delivery_plan_id: dpIdCounter,
+        spo_detail_id: spo.id,
+        planned_qty: spo.sent_qty,
+        ...timestamp
+      });
+    });
+
+    deliveryOrders.push({
+      id: doIdCounter,
+      do_number: `DO-2026-06-10${doIdCounter}`,
+      delivery_plan_id: dpIdCounter,
+      customer_id: 1,
+      vehicle_id: 1,
+      driver_id: 1,
+      shipment_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      delivery_status: 'Delivered',
+      proof_of_delivery: '/uploads/dummy-1.jpg',
+      notes: 'Diterima dengan baik oleh Bapak Budi',
+      created_by: 1,
+      ...timestamp
+    });
+
+    dpIdCounter++;
+    doIdCounter++;
+
+    // Skenario 2: In Transit (Parts 5-8)
+    deliveryPlans.push({
+      id: dpIdCounter,
+      dp_number: `DP-2026-06-00${dpIdCounter}`,
+      scheduled_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      time_start: '13:00:00',
+      time_end: '17:00:00',
+      warehouse_id: 1,
+      dock_id: 1,
+      destination: 'Gudang Cabang Customer A',
+      status: 'Shipped',
+      created_by: 1,
+      ...timestamp
+    });
+
+    const scenario2Details = spoDetails.slice(4, 8);
+    scenario2Details.forEach(spo => {
+      deliveryPlanDetails.push({
+        id: dpDetailIdCounter++,
+        delivery_plan_id: dpIdCounter,
+        spo_detail_id: spo.id,
+        planned_qty: spo.sent_qty,
+        ...timestamp
+      });
+    });
+
+    deliveryOrders.push({
+      id: doIdCounter,
+      do_number: `DO-2026-06-10${doIdCounter}`,
+      delivery_plan_id: dpIdCounter,
+      customer_id: 1,
+      vehicle_id: 1,
+      driver_id: 1,
+      shipment_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      delivery_status: 'In Transit',
+      proof_of_delivery: null,
+      notes: null,
+      created_by: 1,
+      ...timestamp
+    });
+
+    dpIdCounter++;
+    doIdCounter++;
+
+    // Skenario 3: Scheduled (Parts 9-12)
+    deliveryPlans.push({
+      id: dpIdCounter,
+      dp_number: `DP-2026-06-00${dpIdCounter}`,
+      scheduled_date: new Date(new Date().setDate(new Date().getDate() + 3)),
+      time_start: '08:00:00',
+      time_end: '12:00:00',
+      warehouse_id: 1,
+      dock_id: 1,
+      destination: 'Gudang Pusat Customer A',
+      status: 'Scheduled',
+      created_by: 1,
+      ...timestamp
+    });
+
+    const scenario3Details = spoDetails.slice(8, 12);
+    scenario3Details.forEach(spo => {
+      deliveryPlanDetails.push({
+        id: dpDetailIdCounter++,
+        delivery_plan_id: dpIdCounter,
+        spo_detail_id: spo.id,
+        planned_qty: spo.sent_qty,
+        ...timestamp
+      });
+    });
+    await queryInterface.bulkInsert('s_delivery_plans', deliveryPlans, { ignoreDuplicates: true });
+    await queryInterface.bulkInsert('s_delivery_plan_details', deliveryPlanDetails, { ignoreDuplicates: true });
+    await queryInterface.bulkInsert('s_delivery_orders', deliveryOrders, { ignoreDuplicates: true });
+
   },
 
   async down(queryInterface, Sequelize) {
+    await queryInterface.bulkDelete('s_delivery_orders', null, {});
+    await queryInterface.bulkDelete('s_delivery_plan_details', null, {});
+    await queryInterface.bulkDelete('s_delivery_plans', null, {});
+
     await queryInterface.bulkDelete('s_sales_purchase_order_details', null, {});
     await queryInterface.bulkDelete('s_sales_purchase_orders', null, {});
     await queryInterface.bulkDelete('s_sales_purchase_request_details', null, {});

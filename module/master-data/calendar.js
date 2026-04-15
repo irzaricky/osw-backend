@@ -295,7 +295,7 @@ class CalendarModule extends BaseModule {
       // 1. Fetch National Holidays from API
       let holidays = [];
       try {
-        const response = await axios.get(`https://hari-libur-api.vercel.app/api?year=${year}`);
+        const response = await axios.get(`https://libur.deno.dev/api?year=${year}`);
         holidays = response.data;
       } catch (err) {
         console.error('Failed to fetch from hari libur API:', err.message);
@@ -304,17 +304,15 @@ class CalendarModule extends BaseModule {
       // Map API holidays
       if (Array.isArray(holidays)) {
         holidays.forEach(holiday => {
-          const hDate = holiday.date || holiday.event_date;
-          const hEvent = holiday.event || holiday.event_name || 'Hari Libur Nasional';
+          const hDate = holiday.date;
+          const hEvent = holiday.name  || 'Hari Libur Nasional';
 
-          if (holiday.is_national_holiday && hDate) {
-            eventsToGenerate.push({
+          eventsToGenerate.push({
               date: hDate,
               ref_type_calendar_id: typeHoliday.id,
               description: hEvent
             });
             generatedDatesMem.add(hDate);
-          }
         });
       }
 

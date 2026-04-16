@@ -13,6 +13,16 @@ export default (sequelize) => {
         as: 'type'
       });
 
+      TWorkOrderStoring.belongsTo(models.SUsers, {
+        foreignKey: 'created_by',
+        as: 'user'
+      });
+
+      TWorkOrderStoring.belongsTo(models.SWarehouseAreas, {
+        foreignKey: 'warehouse_area_id',
+        as: 'area'
+      });
+
       TWorkOrderStoring.hasMany(models.TWorkOrderStoringItem, {
         foreignKey: 'wo_id',
         as: 'items'
@@ -59,7 +69,7 @@ export default (sequelize) => {
       allowNull: false
     },
     created_by: {
-      type: DataTypes.STRING(80),
+      type: DataTypes.INTEGER,
       allowNull: true
     }
   }, {

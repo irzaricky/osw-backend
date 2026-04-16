@@ -3,7 +3,7 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class TPartLabels extends Model {
     static associate(models) {
-      TPartLabels.belongsTo(models.SPart, {
+      TPartLabels.belongsTo(models.SParts, {
         foreignKey: 'part_id',
         as: 'part'
       });

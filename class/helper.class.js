@@ -433,6 +433,19 @@ class helper extends commonHelper {
 		};
 	}
 
+	async checkExists(model, id, name, transaction) {
+		const data = await model.findByPk(id, { transaction });
+
+		if (!data) {
+			throw {
+				status: false,
+				message: `${name} not found`,
+				code: 404
+			};
+		}
+
+		return data;
+	}
 }
 
 export default new helper();

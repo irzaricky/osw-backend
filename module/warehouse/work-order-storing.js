@@ -4,9 +4,12 @@ import { Op } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
+import PdfPrinter from 'pdfmake/src/printer.js';
+import QRCode from 'qrcode';
 import dayjs from 'dayjs';
+import path from 'path';
 
-const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas } = db;
+const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail } = db;
 
 class WorkOrderStoringModule extends BaseModule {
   async list(req) {
@@ -41,6 +44,23 @@ class WorkOrderStoringModule extends BaseModule {
           model: RefWorkOrderStoringType,
           as: 'type',
           attributes: ['id', 'name']
+        },
+        {
+          model: SWarehouseAreas,
+          as: 'area',
+          attributes: ['id', 'name']
+        },
+        {
+          model: SUsers,
+          as: 'user',
+          attributes: ['id', 'email'],
+          include: [
+            {
+              model: SUserDetail,
+              as: 'user_detail',
+              attributes: ['full_name']
+            }
+          ]
         }
       ]
 
@@ -58,6 +78,73 @@ class WorkOrderStoringModule extends BaseModule {
         data: helper.getPaginationData(rows, count, page, limit)
       };
     } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async detail(req) {
+    try {
+      const id = req.params.id;
+
+      const workOrder = await TWorkOrderStoring.findByPk(id, {
+        attributes: { exclude: ['wo_status_id', 'wo_type_id', 'warehouse_area_id', 'created_by', 'deleted_at'] },
+        include: [
+          {
+            model: RefWorkOrderStoringStatus,
+            as: 'status',
+            attributes: ['id', 'name']
+          },
+          {
+            model: RefWorkOrderStoringType,
+            as: 'type',
+            attributes: ['id', 'name']
+          },
+          {
+            model: SWarehouseAreas,
+            as: 'area',
+            attributes: ['id', 'name']
+          },
+          {
+            model: TWorkOrderStoringItem,
+            as: 'items',
+            attributes: ['id', 'total_kanban'],
+            include: [
+              {
+                model: SParts,
+                as: 'part',
+                attributes: ['id', 'part_number', 'part_name']
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!workOrder) {
+        return {
+          status: false,
+          message: 'Work Order Storing not found',
+          code: 404
+        };
+      }
+
+      return {
+        status: true,
+        data: workOrder
+      };
+
+    } catch (error) {
+      await t.rollback();
       if (config.debug) {
         return {
           status: false,
@@ -121,15 +208,24 @@ class WorkOrderStoringModule extends BaseModule {
 
       const woPrefix = `WO-${prefix}-${dateStr}-`;
 
-      const count = await TWorkOrderStoring.count({
+      const lastWO = await TWorkOrderStoring.findOne({
         where: {
           wo_number: {
             [Op.like]: `${woPrefix}%`
           }
-        }
+        },
+        order: [['wo_number', 'DESC']],
+        transaction: t
       });
 
-      const wo_number = `${woPrefix}${String(count + 1).padStart(3, '0')}`;
+      let nextNumber = 1;
+
+      if (lastWO) {
+        const lastSeq = parseInt(lastWO.wo_number.split('-').pop(), 10);
+        nextNumber = lastSeq + 1;
+      }
+
+      const wo_number = `${woPrefix}${String(nextNumber).padStart(3, '0')}`;
 
       const existing = await TWorkOrderStoring.findOne({
         where: { wo_number },
@@ -349,36 +445,58 @@ class WorkOrderStoringModule extends BaseModule {
         wo_status_id: value.wo_status_id
       }, { transaction: t });
 
-      const oldItems = await TWorkOrderStoringItem.findAll({
+      const existingItems = await TWorkOrderStoringItem.findAll({
         where: { wo_id: id },
-        attributes: ['id'],
         transaction: t
       });
 
-      const oldItemIds = oldItems.map(i => i.id);
+      const existingMap = new Map();
+      existingItems.forEach(item => {
+        existingMap.set(item.part_id, item);
+      });
 
-      if (oldItemIds.length) {
+      const incomingPartIds = value.items.map(i => i.part_id);
+
+      const updatedItems = [];
+
+      for (const newItem of value.items) {
+        const existing = existingMap.get(newItem.part_id);
+
+        if (existing) {
+          await existing.update({
+            total_kanban: newItem.total_kanban
+          }, { transaction: t });
+
+          updatedItems.push(existing);
+
+        } else {
+          const created = await TWorkOrderStoringItem.create({
+            wo_id: id,
+            part_id: newItem.part_id,
+            total_kanban: newItem.total_kanban
+          }, { transaction: t });
+
+          updatedItems.push(created);
+        }
+      }
+
+      const itemsToDelete = existingItems.filter(item =>
+        !incomingPartIds.includes(item.part_id)
+      );
+
+      const deleteIds = itemsToDelete.map(i => i.id);
+
+      if (deleteIds.length) {
         await TWorkOrderStoringItemLabel.destroy({
-          where: { wo_item_id: { [Op.in]: oldItemIds } },
+          where: { wo_item_id: { [Op.in]: deleteIds } },
+          transaction: t
+        });
+
+        await TWorkOrderStoringItem.destroy({
+          where: { id: { [Op.in]: deleteIds } },
           transaction: t
         });
       }
-
-      await TWorkOrderStoringItem.destroy({
-        where: { wo_id: id },
-        transaction: t
-      });
-
-      const items = value.items.map(item => ({
-        wo_id: id,
-        part_id: item.part_id,
-        total_kanban: item.total_kanban
-      }));
-
-      const createdItems = await TWorkOrderStoringItem.bulkCreate(items, {
-        transaction: t,
-        returning: true
-      });
 
       if (value.wo_status_id === 2) {
         const labels = [];
@@ -509,6 +627,230 @@ class WorkOrderStoringModule extends BaseModule {
 
     } catch (error) {
       await t.rollback();
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async printLabel(req, res) {
+    try {
+      const { wo_item_id } = req.params;
+
+      const item = await TWorkOrderStoringItem.findByPk(wo_item_id, {
+        attributes: ['id'],
+        include: [
+          {
+            model: TWorkOrderStoring,
+            as: 'work_order',
+            attributes: ['wo_number']
+          },
+          {
+            model: TWorkOrderStoringItemLabel,
+            as: 'item_labels',
+            attributes: ['id'],
+            include: [
+              {
+                model: TPartLabels,
+                as: 'label',
+                attributes: ['label_number'],
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    attributes: ['part_number', 'part_name'],
+                    include: [
+                      {
+                        model: SSuppliers,
+                        as: 'supplier',
+                        attributes: ['name']
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!item) {
+        return res.status(404).json({
+          status: false,
+          message: 'Work Order Item not found'
+        });
+      }
+
+      if (!item.item_labels || item.item_labels.length === 0) {
+        return res.status(400).json({
+          status: false,
+          message: 'No labels found'
+        });
+      }
+
+      const workOrder = item.work_order;
+      const part = item.item_labels[0]?.label?.part;
+
+      if (!part) {
+        return res.status(400).json({
+          status: false,
+          message: 'Part not found'
+        });
+      }
+
+      const printedAt = dayjs().format('DD/MM/YYYY HH:mm:ss');
+
+      const fonts = {
+        Roboto: {
+          normal: path.resolve('fonts/Roboto-Regular.ttf'),
+          bold: path.resolve('fonts/Roboto-Medium.ttf')
+        }
+      };
+
+      const printer = new PdfPrinter(fonts);
+
+      const labelItems = [];
+
+      for (const labelData of item.item_labels) {
+        const label = labelData.label;
+        if (!label) continue;
+
+        labelItems.push({
+          unbreakable: true,
+          stack: [
+            {
+              columns: [
+                {
+                  width: '*',
+                  text: 'LABEL PART',
+                  style: 'title',
+                  alignment: 'center',
+                  margin: [20, 0, 0, 0]
+                },
+                {
+                  width: 'auto',
+                  qr: label.label_number,
+                  fit: 60,
+                  alignment: 'right'
+                }
+              ],
+              margin: [0, 0, 0, 4]
+            },
+            {
+              text: label.label_number,
+              style: 'header',
+              alignment: 'right',
+              margin: [0, 0, 0, 4]
+            },
+            {
+              table: {
+                widths: ['35%', '*'],
+                body: [
+                  ['Work Order Number', workOrder.wo_number],
+                  ['Part Number', part.part_number],
+                  ['Part Name', part.part_name],
+                  ['Supplier', part.supplier?.name || '-'],
+                  ['Printed At', printedAt]
+                ].map(row => [
+                  { text: row[0], style: 'tableHeader', fillColor: '#EEEEEE' },
+                  { text: row[1], style: 'tableBody' }
+                ])
+              },
+              layout: {
+                paddingTop: () => 2,
+                paddingBottom: () => 2
+              }
+            }
+          ]
+        });
+      }
+
+      const tableBody = [];
+
+      for (let i = 0; i < labelItems.length; i += 2) {
+        tableBody.push([
+          {
+            margin: [5, 5, 5, 5],
+            ...labelItems[i],
+            height: 200
+          },
+          labelItems[i + 1]
+            ? {
+                margin: [5, 5, 5, 5],
+                ...labelItems[i + 1],
+                height: 200
+              }
+            : { text: '', height: 200 }
+        ]);
+      }
+
+      const docDefinition = {
+        pageSize: 'A4',
+        pageMargins: [10, 10, 10, 10],
+        content: [
+          {
+            table: {
+              widths: ['50%', '50%'],
+              body: tableBody
+            },
+            layout: {
+              paddingTop: () => 0,
+              paddingBottom: () => 0
+            }
+          }
+        ],
+        styles: {
+          title: { fontSize: 14, bold: true },
+          header: { fontSize: 9, bold: true },
+          tableHeader: { fontSize: 8, bold: true },
+          tableBody: { fontSize: 8 }
+        }
+      };
+
+      const pdfDoc = printer.createPdfKitDocument(docDefinition);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename=label-${part.part_number}.pdf`
+      );
+
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+
+      return;
+
+    } catch (error) {
+      console.error(error);
+
+      return res.status(500).json({
+        status: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async getDropdownWorkOrderStoringType() {
+    try {
+      const types = await RefWorkOrderStoringType.findAll({
+        attributes: ['id', 'name'],
+        order: [['name', 'ASC']]
+      });
+
+      return {
+        status: true,
+        data: types
+      };
+    } catch (error) {
       if (config.debug) {
         return {
           status: false,

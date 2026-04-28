@@ -11,6 +11,12 @@ router.get('/types/dropdown', auth.sessionChecker, async (req, res) => {
     helper.sendResponse(res, result);
 });
 
+// get dropdown work order storing status
+router.get('/statuses/dropdown', auth.sessionChecker, async (req, res) => {
+    const result = await workOrderStoringModule.getDropdownWorkOrderStoringStatus(req);
+    helper.sendResponse(res, result);
+});
+
 // get list work order storing
 router.get('/', auth.sessionChecker, async (req, res) => {
     const result = await workOrderStoringModule.list(req);

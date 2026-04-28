@@ -425,7 +425,7 @@ class WarehouseModule extends BaseModule {
     try {
       const categories = await RefWarehouseCategories.findAll({
         attributes: ['id', 'name'],
-        order: [['name', 'ASC']]
+        order: [['id', 'ASC']]
       });
 
       return {

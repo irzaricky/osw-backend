@@ -843,7 +843,34 @@ class WorkOrderStoringModule extends BaseModule {
     try {
       const types = await RefWorkOrderStoringType.findAll({
         attributes: ['id', 'name'],
-        order: [['name', 'ASC']]
+        order: [['id', 'ASC']]
+      });
+
+      return {
+        status: true,
+        data: types
+      };
+    } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async getDropdownWorkOrderStoringStatus() {
+    try {
+      const types = await RefWorkOrderStoringStatus.findAll({
+        attributes: ['id', 'name'],
+        order: [['id', 'ASC']]
       });
 
       return {

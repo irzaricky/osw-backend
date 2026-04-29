@@ -4,6 +4,7 @@ export default (sequelize) => {
   class SPackages extends Model {
     static associate(models) {
       SPackages.belongsTo(models.RefPackageTypes, { foreignKey: 'package_type_id', as: 'package_type' });
+      SPackages.hasMany(models.SParts, { foreignKey: 'package_id', as: 'parts' });
     }
   }
 

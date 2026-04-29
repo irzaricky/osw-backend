@@ -13,7 +13,8 @@ const {
   SWarehouseBins,
   TWarehouseStock,
   TWarehouseStockLog,
-  SParts
+  SParts,
+  SPackages
 } = db;
 
 class PlacementModule extends BaseModule {
@@ -184,7 +185,7 @@ async detail(req) {
             {
               model: SParts,
               as: 'part',
-              attributes: ['id', 'part_number', 'part_name', 'part_category']
+              attributes: ['id', 'part_number', 'part_name', 'part_category', 'package_id']
             },
             {
               model: TWorkOrderStoringItemLabel,
@@ -211,34 +212,59 @@ async detail(req) {
       };
     }
 
-    const items = workOrder.items.map(item => {
-      const totalLabel = item.item_labels.length;
-      const totalScanned = item.item_labels.filter(label => label.is_scanned_in).length;
-      const remaining = totalLabel - totalScanned;
+    const items = await Promise.all(workOrder.items.map(async item => {
+  const totalLabel = item.item_labels.length;
+  const totalScanned = item.item_labels.filter(label => label.is_scanned_in).length;
+  const remaining = totalLabel - totalScanned;
 
-      return {
-        wo_item_id: item.id,
-        part_id: item.part_id,
-        part_unique: item.part?.part_number,
-        part_number: item.part?.part_number,
-        part_name: item.part?.part_name,
-        part_category: item.part?.part_category,
-        total_kanban: item.total_kanban,
-        total_label: totalLabel,
-        total_scanned: totalScanned,
-        remaining,
-        progress: totalLabel > 0 ? Math.round((totalScanned / totalLabel) * 100) : 0,
-        labels: item.item_labels.map(label => ({
-          wo_item_label_id: label.id,
-          label_number: label.label?.label_number,
-          is_scanned_in: label.is_scanned_in,
-          is_scanned_out: label.is_scanned_out
-        }))
-      };
-    });
+  const packageData = item.part?.package_id
+    ? await SPackages.findByPk(item.part.package_id, {
+        attributes: ['id', 'package_code', 'name', 'capacity']
+      })
+    : null;
+
+  const capacity = packageData?.capacity || 0;
+  const totalPcs = item.total_kanban * capacity;
+  const scannedPcs = totalScanned * capacity;
+  const remainingPcs = remaining * capacity;
+
+        return {
+          wo_item_id: item.id,
+          part_id: item.part_id,
+          part_unique: item.part?.part_number,
+          part_number: item.part?.part_number,
+          part_name: item.part?.part_name,
+          part_category: item.part?.part_category,
+
+          package_id: packageData?.id || item.part?.package_id || null,
+          package_code: packageData?.package_code || null,
+          package_name: packageData?.name || null,
+          capacity_per_kanban: capacity,
+
+          total_kanban: item.total_kanban,
+          total_label: totalLabel,
+          total_scanned: totalScanned,
+          remaining,
+
+          total_pcs: totalPcs,
+          scanned_pcs: scannedPcs,
+          remaining_pcs: remainingPcs,
+
+          progress: totalLabel > 0 ? Math.round((totalScanned / totalLabel) * 100) : 0,
+
+          labels: item.item_labels.map(label => ({
+            wo_item_label_id: label.id,
+            label_number: label.label?.label_number,
+            is_scanned_in: label.is_scanned_in,
+            is_scanned_out: label.is_scanned_out
+          }))
+        };
+      }));
 
     const totalLabel = items.reduce((sum, item) => sum + item.total_label, 0);
     const totalScanned = items.reduce((sum, item) => sum + item.total_scanned, 0);
+    const totalPcs = items.reduce((sum, item) => sum + item.total_pcs, 0);
+    const scannedPcs = items.reduce((sum, item) => sum + item.scanned_pcs, 0);
 
     return {
       status: true,
@@ -254,6 +280,9 @@ async detail(req) {
         total_label: totalLabel,
         total_scanned: totalScanned,
         remaining: totalLabel - totalScanned,
+        total_pcs: totalPcs,
+        scanned_pcs: scannedPcs,
+        remaining_pcs: totalPcs - scannedPcs,
         progress: totalLabel > 0 ? Math.round((totalScanned / totalLabel) * 100) : 0,
         items
       }
@@ -382,7 +411,8 @@ async detail(req) {
           wo_id: Number(wo_id),
           wo_item_label_id: itemLabel.id,
           label_number,
-          part: itemLabel.work_order_item?.part
+          part: itemLabel.work_order_item?.part?.dataValues,
+          package: itemLabel.work_order_item?.part?.package
         }
       };
 

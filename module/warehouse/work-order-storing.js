@@ -307,7 +307,7 @@ class WorkOrderStoringModule extends BaseModule {
         returning: true
       });
 
-      if (value.wo_status_id === 2) {
+      if (value.wo_status_id === 2 && value.wo_category === 'Placement') {
         const labels = [];
 
         for (const item of createdItems) {
@@ -498,7 +498,7 @@ class WorkOrderStoringModule extends BaseModule {
         });
       }
 
-      if (value.wo_status_id === 2) {
+      if (value.wo_status_id === 2 && value.wo_category === 'Placement') {
         const labels = [];
 
         const dateStr = dayjs(workOrder.created_at).format('YYMMDD');
@@ -516,15 +516,23 @@ class WorkOrderStoringModule extends BaseModule {
 
           const prefix = `WO-${part.part_number}-${dateStr}-`;
 
-          const count = await TPartLabels.count({
+          const lastLabel = await TPartLabels.findOne({
             where: {
               label_number: { [Op.like]: `${prefix}%` }
             },
+            order: [['label_number', 'DESC']],
             transaction: t
           });
 
-          for (let i = 1; i <= item.total_kanban; i++) {
-            const labelNumber = `${prefix}${String(count + i).padStart(6, '0')}`;
+          let nextNumber = 1;
+
+          if (lastLabel) {
+            const lastSeq = parseInt(lastLabel.label_number.split('-').pop(), 10);
+            nextNumber = lastSeq + 1;
+          }
+
+          for (let i = 0; i < item.total_kanban; i++) {
+            const labelNumber = `${prefix}${String(nextNumber + i).padStart(6, '0')}`;
 
             const newLabel = await TPartLabels.create({
               label_number: labelNumber,

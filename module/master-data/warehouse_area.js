@@ -290,10 +290,21 @@ class WarehouseAreaModule extends BaseModule {
     }
   }
 
-  async getDropdown() {
+  async getDropdown(req) {
     try {
+      const { category_id } = req.query || {}
+
       const areas = await SWarehouseAreas.findAll({
         attributes: ['id', 'area_code', 'name'],
+        include: [
+          {
+            model: SWarehouses,
+            as: 'warehouse',
+            attributes: ['name'],
+            required: !!category_id,
+            where: category_id ? { category_id } : undefined
+          }
+        ],
         order: [['name', 'ASC']]
       })
 

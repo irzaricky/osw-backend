@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import dayjs from 'dayjs';
 import path from 'path';
 
-const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail } = db;
+const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail, SPackages } = db;
 
 class WorkOrderStoringModule extends BaseModule {
   async list(req) {
@@ -118,7 +118,7 @@ class WorkOrderStoringModule extends BaseModule {
           {
             model: TWorkOrderStoringItem,
             as: 'items',
-            attributes: ['id', 'total_kanban'],
+            attributes: ['id', 'part_id', 'total_kanban'],
             include: [
               {
                 model: SParts,
@@ -681,6 +681,11 @@ class WorkOrderStoringModule extends BaseModule {
                         model: SSuppliers,
                         as: 'supplier',
                         attributes: ['name']
+                      },
+                      {
+                        model: SPackages,
+                        as: 'package',
+                        attributes: ['capacity']
                       }
                     ]
                   }
@@ -767,6 +772,7 @@ class WorkOrderStoringModule extends BaseModule {
                   ['Part Number', part.part_number],
                   ['Part Name', part.part_name],
                   ['Supplier', part.supplier?.name || '-'],
+                  ['Qty per Kanban', part.package?.capacity || '-'],
                   ['Printed At', printedAt]
                 ].map(row => [
                   { text: row[0], style: 'tableHeader', fillColor: '#EEEEEE' },

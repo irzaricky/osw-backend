@@ -503,7 +503,7 @@ class WorkOrderStoringModule extends BaseModule {
 
         const dateStr = dayjs(workOrder.created_at).format('YYMMDD');
 
-        for (const item of createdItems) {
+        for (const item of updatedItems) {
           const part = await SParts.findByPk(item.part_id, { transaction: t });
 
           if (!part) {
@@ -725,7 +725,8 @@ class WorkOrderStoringModule extends BaseModule {
       const fonts = {
         Roboto: {
           normal: path.resolve('fonts/Roboto-Regular.ttf'),
-          bold: path.resolve('fonts/Roboto-Medium.ttf')
+          bold: path.resolve('fonts/Roboto-Medium.ttf'),
+          bolditalics: path.resolve('fonts/Roboto-MediumItalic.ttf')
         }
       };
 
@@ -739,50 +740,112 @@ class WorkOrderStoringModule extends BaseModule {
 
         labelItems.push({
           unbreakable: true,
+          border: [1, 1, 1, 1],
+          borderColor: '#000000',
+          borderWidth: [1, 1, 1, 1],
           stack: [
+            // Header with company branding
+            {
+              canvas: [
+                {
+                  type: 'rect',
+                  x: 0,
+                  y: 0,
+                  w: 280,
+                  h: 35,
+                  color: '#ffffff'
+                }
+              ]
+            },
             {
               columns: [
                 {
                   width: '*',
-                  text: 'LABEL PART',
-                  style: 'title',
-                  alignment: 'center',
-                  margin: [20, 0, 0, 0]
+                  stack: [
+                    {
+                      text: 'WAREHOUSE',
+                      style: 'companyHeader',
+                      color: '#1a237e'
+                    },
+                    {
+                      text: 'LABEL PART',
+                      style: 'companySubHeader',
+                      color: '#1a237e'
+                    }
+                  ]
                 },
                 {
                   width: 'auto',
                   qr: label.label_number,
-                  fit: 60,
+                  fit: 50,
+                  alignment: 'right',
+                  margin: [0, 2, 0, 0]
+                }
+              ],
+              margin: [6, -32, 6, 8]
+            },
+            // Label number prominent
+            {
+              text: label.label_number,
+              style: 'labelNumber',
+              alignment: 'center',
+              margin: [6, 0, 6, 6]
+            },
+            // Main info table with better styling
+            {
+              table: {
+                widths: ['40%', '*'],
+                body: [
+                  [
+                    { text: 'Work Order Number', style: 'tableLabel', fillColor: '#e8eaf6' },
+                    { text: workOrder.wo_number, style: 'tableValue' }
+                  ],
+                  [
+                    { text: 'Part Number', style: 'tableLabel', fillColor: '#e8eaf6' },
+                    { text: part.part_number, style: 'tableValueHighlight' }
+                  ],
+                  [
+                    { text: 'Part Name', style: 'tableLabel', fillColor: '#e8eaf6' },
+                    { text: part.part_name, style: 'tableValue' }
+                  ],
+                  [
+                    { text: 'Supplier', style: 'tableLabel', fillColor: '#e8eaf6' },
+                    { text: part.supplier?.name || '-', style: 'tableValue' }
+                  ],
+                  [
+                    { text: 'Qty per Kanban', style: 'tableLabel', fillColor: '#e8eaf6' },
+                    { text: part.package?.capacity || '-', style: 'tableValueHighlight' }
+                  ]
+                ]
+              },
+              layout: {
+                hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.5,
+                vLineWidth: () => 0,
+                hLineColor: () => '#c5cae9',
+                paddingTop: () => 6,
+                paddingBottom: () => 6,
+                paddingLeft: () => 8,
+                paddingRight: () => 8
+              },
+              margin: [6, 0, 6, 6]
+            },
+            // Footer
+            {
+              columns: [
+                {
+                  width: '*',
+                  text: 'Printed: ' + printedAt,
+                  style: 'footer',
+                  alignment: 'left'
+                },
+                {
+                  width: 'auto',
+                  text: 'OSW v1.0',
+                  style: 'footer',
                   alignment: 'right'
                 }
               ],
-              margin: [0, 0, 0, 4]
-            },
-            {
-              text: label.label_number,
-              style: 'header',
-              alignment: 'right',
-              margin: [0, 0, 0, 4]
-            },
-            {
-              table: {
-                widths: ['35%', '*'],
-                body: [
-                  ['Work Order Number', workOrder.wo_number],
-                  ['Part Number', part.part_number],
-                  ['Part Name', part.part_name],
-                  ['Supplier', part.supplier?.name || '-'],
-                  ['Qty per Kanban', part.package?.capacity || '-'],
-                  ['Printed At', printedAt]
-                ].map(row => [
-                  { text: row[0], style: 'tableHeader', fillColor: '#EEEEEE' },
-                  { text: row[1], style: 'tableBody' }
-                ])
-              },
-              layout: {
-                paddingTop: () => 2,
-                paddingBottom: () => 2
-              }
+              margin: [6, 2, 6, 6]
             }
           ]
         });
@@ -793,23 +856,23 @@ class WorkOrderStoringModule extends BaseModule {
       for (let i = 0; i < labelItems.length; i += 2) {
         tableBody.push([
           {
-            margin: [5, 5, 5, 5],
+            margin: [6, 6, 6, 6],
             ...labelItems[i],
-            height: 200
+            height: 220
           },
           labelItems[i + 1]
             ? {
-                margin: [5, 5, 5, 5],
+                margin: [6, 6, 6, 6],
                 ...labelItems[i + 1],
-                height: 200
+                height: 220
               }
-            : { text: '', height: 200 }
+            : { text: '', height: 220 }
         ]);
       }
 
       const docDefinition = {
         pageSize: 'A4',
-        pageMargins: [10, 10, 10, 10],
+        pageMargins: [12, 12, 12, 12],
         content: [
           {
             table: {
@@ -817,16 +880,28 @@ class WorkOrderStoringModule extends BaseModule {
               body: tableBody
             },
             layout: {
+              hLineWidth: (i, node) => 1,
+              vLineWidth: (i, node) => 1,
+              hLineColor: () => '#000000',
+              vLineColor: () => '#000000',
               paddingTop: () => 0,
-              paddingBottom: () => 0
+              paddingBottom: () => 0,
+              paddingLeft: () => 0,
+              paddingRight: () => 0
             }
           }
         ],
         styles: {
-          title: { fontSize: 14, bold: true },
-          header: { fontSize: 9, bold: true },
-          tableHeader: { fontSize: 8, bold: true },
-          tableBody: { fontSize: 8 }
+          companyHeader: { fontSize: 16, bold: true, italics: true },
+          companySubHeader: { fontSize: 10, bold: false },
+          labelNumber: { fontSize: 11, bold: true, color: '#1a237e' },
+          tableLabel: { fontSize: 9, bold: true, color: '#303f9f' },
+          tableValue: { fontSize: 9, color: '#212121' },
+          tableValueHighlight: { fontSize: 9, bold: true, color: '#1a237e' },
+          footer: { fontSize: 7, color: '#9e9e9e' }
+        },
+        defaultStyle: {
+          font: 'Roboto'
         }
       };
 

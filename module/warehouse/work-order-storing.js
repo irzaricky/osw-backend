@@ -1,6 +1,6 @@
 import db from '../../models/index.js';
 import { config } from '../../config/app.config.js';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
@@ -227,6 +227,34 @@ class WorkOrderStoringModule extends BaseModule {
 
       const wo_number = `${woPrefix}${String(nextNumber).padStart(3, '0')}`;
 
+      // Validate stock for Take Out
+      if (value.wo_category === 'Take Out') {
+        for (const item of value.items) {
+          const stockResult = await db.sequelize.query(`
+            SELECT COUNT(ws.id)::int AS total_kanban
+            FROM t_warehouse_stock ws
+            JOIN s_warehouse_bins b ON b.id = ws.bin_id
+            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
+            JOIN t_part_labels label ON label.id = wil.label_id
+            WHERE b.area_id = :area_id AND label.part_id = :part_id
+          `, {
+            replacements: { area_id: value.warehouse_area_id, part_id: item.part_id },
+            type: QueryTypes.SELECT,
+            transaction: t
+          });
+
+          const availableStock = stockResult[0]?.total_kanban || 0;
+          if (item.total_kanban > availableStock) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Insufficient stock for part ${item.part_id}. Requested: ${item.total_kanban}, Available: ${availableStock}`,
+              code: 400
+            };
+          }
+        }
+      }
+
       const existing = await TWorkOrderStoring.findOne({
         where: { wo_number },
         paranoid: false,
@@ -432,6 +460,34 @@ class WorkOrderStoringModule extends BaseModule {
       } catch (err) {
         await t.rollback();
         return err;
+      }
+
+      // Validate stock for Take Out
+      if (value.wo_category === 'Take Out') {
+        for (const item of value.items) {
+          const stockResult = await db.sequelize.query(`
+            SELECT COUNT(ws.id)::int AS total_kanban
+            FROM t_warehouse_stock ws
+            JOIN s_warehouse_bins b ON b.id = ws.bin_id
+            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
+            JOIN t_part_labels label ON label.id = wil.label_id
+            WHERE b.area_id = :area_id AND label.part_id = :part_id
+          `, {
+            replacements: { area_id: value.warehouse_area_id, part_id: item.part_id },
+            type: QueryTypes.SELECT,
+            transaction: t
+          });
+
+          const availableStock = stockResult[0]?.total_kanban || 0;
+          if (item.total_kanban > availableStock) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Insufficient stock for part ID ${item.part_id}. Requested: ${item.total_kanban}, Available: ${availableStock}`,
+              code: 400
+            };
+          }
+        }
       }
 
       await workOrder.update({

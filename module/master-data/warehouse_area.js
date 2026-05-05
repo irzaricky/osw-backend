@@ -1,6 +1,6 @@
 import db from '../../models/index.js'
 import { config } from '../../config/app.config.js'
-import { Op } from 'sequelize'
+import { Op, QueryTypes } from 'sequelize'
 import helper from '../../class/helper.class.js'
 import BaseModule from '../../class/base.module.js'
 import Joi from 'joi'
@@ -292,7 +292,40 @@ class WarehouseAreaModule extends BaseModule {
 
   async getDropdown(req) {
     try {
-      const { category_id } = req.query || {}
+      const { category_id, wo_category } = req.query || {}
+
+      if (category_id && wo_category === 'take_out') {
+        const areas = await db.sequelize.query(`
+          SELECT DISTINCT 
+            wa.id,
+            wa.area_code,
+            wa.name,
+            wh.name AS warehouse_name
+          FROM s_warehouse_areas wa
+          JOIN s_warehouses wh ON wh.id = wa.warehouse_id
+          JOIN s_warehouse_bins b ON b.area_id = wa.id
+          JOIN t_warehouse_stock ws ON ws.bin_id = b.id
+          WHERE wh.category_id = :category_id
+          ORDER BY wa.name ASC
+        `, {
+          replacements: { category_id },
+          type: QueryTypes.SELECT
+        })
+
+        const formatted = areas.map(a => ({
+          id: a.id,
+          area_code: a.area_code,
+          name: a.name,
+          warehouse: {
+            name: a.warehouse_name
+          }
+        }))
+
+        return {
+          status: true,
+          data: formatted
+        }
+      }
 
       const areas = await SWarehouseAreas.findAll({
         attributes: ['id', 'area_code', 'name'],

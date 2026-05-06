@@ -65,7 +65,7 @@ export default {
           forecast_id: 1,
           forecast_detail_number: `FC-Y-26-P${part_id}-${month}`,
           part_id: part_id,
-          qty_status: 'Fix',
+          qty_status: 'Temporary',
           forecast_qty: Math.floor(Math.random() * 101),
           ...timestamp
         });
@@ -90,7 +90,7 @@ export default {
           forecast_detail_number: `FC-HY-26S1-P${part_id}-${m.name}`,
           part_id: part_id,
           period_date: m.date,
-          qty_status: 'Fix',
+          qty_status: 'Temporary',
           forecast_qty: Math.floor(Math.random() * 101),
           ...timestamp
         });

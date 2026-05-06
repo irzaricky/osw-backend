@@ -7,7 +7,7 @@ export default (sequelize) => {
       SSalesForecasts.hasMany(models.SSalesForecastLogs, { foreignKey: 'forecast_id', as: 'logs' });
       SSalesForecasts.hasMany(models.SSalesPurchaseRequests, { foreignKey: 'forecast_id', as: 'purchase_requests' });
       SSalesForecasts.belongsTo(models.SCustomers, { foreignKey: 'customer_id', as: 'customer' });
-      SSalesForecasts.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
+      SSalesForecasts.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'staff' });
       SSalesForecasts.belongsTo(models.SUsers, { foreignKey: 'approved_by', as: 'approver' });
     }
   }

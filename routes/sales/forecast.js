@@ -51,29 +51,34 @@ router.get('/:id', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, result);
 });
 
-router.post('/', session.sessionChecker, async (req, res) => {
+router.post('/', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Forecast']), async (req, res) => {
   const result = await module.createDraft(req);
   return helper.sendResponse(res, result);
 });
 
-router.put('/:id', session.sessionChecker, async (req, res) => {
+router.put('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Forecast']), async (req, res) => {
   const result = await module.update(req);
   return helper.sendResponse(res, result);
 });
 
-router.put('/:id/detail', session.sessionChecker, async (req, res) => {
+router.put('/:id/submit', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Forecast']), async (req, res) => {
+  const result = await module.submit(req);
+  return helper.sendResponse(res, result);
+});
+
+router.put('/:id/detail', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Forecast']), async (req, res) => {
   const result = await module.updateDetails(req);
   return helper.sendResponse(res, result);
 });
 
-router.delete('/:id', session.sessionChecker, async (req, res) => {
+router.delete('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Forecast']), async (req, res) => {
   const result = await module.deleteDraft(req);
   return helper.sendResponse(res, result);
 });
 
 // SUPERVISOR
-router.put('/:id/approve', session.sessionChecker, async (req, res) => {
-  const result = await module.approve(req);
+router.put('/:id/review', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales Forecast']), async (req, res) => {
+  const result = await module.review(req);
   return helper.sendResponse(res, result);
 });
 

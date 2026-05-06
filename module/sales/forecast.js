@@ -35,6 +35,18 @@ class ForecastModule extends BaseModule {
         where.status = status;
       }
 
+      // Supervisor filtering
+      if (req.user.role === 'Supervisor Sales Forecast') {
+        const allowedStatuses = ['Submitted', 'Rejected', 'Approved'];
+        if (status) {
+          if (!allowedStatuses.includes(status)) {
+            where.status = { [Op.in]: [] };
+          }
+        } else {
+          where.status = { [Op.in]: allowedStatuses };
+        }
+      }
+
       if (forecast_type) {
         where.forecast_type = forecast_type;
       }
@@ -924,7 +936,65 @@ class ForecastModule extends BaseModule {
     }
   }
 
-  async approve(req) {
+  async submit(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      const forecast = await SSalesForecasts.findByPk(id, {
+        include: [{ model: SSalesForecastDetails, as: 'details' }],
+        transaction: t
+      });
+
+      if (!forecast) {
+        await t.rollback();
+        return { status: false, message: 'Forecast not found', code: 404 };
+      }
+
+      if (!['Draft', 'Rejected'].includes(forecast.status)) {
+        await t.rollback();
+        return { status: false, message: `Only Draft or Rejected forecasts can be submitted. Current status: ${forecast.status}`, code: 400 };
+      }
+
+      const oldData = JSON.parse(JSON.stringify(forecast));
+
+      await forecast.update({
+        status: 'Submitted'
+      }, { transaction: t });
+
+      // Log action
+      await SSalesForecastLogs.create({
+        forecast_id: forecast.id,
+        version: forecast.version,
+        total_qty: forecast.details.reduce((sum, d) => sum + d.forecast_qty, 0),
+        action: 'Submitted',
+        remarks: 'Forecast submitted for review',
+        changed_by: currentUser.id
+      }, { transaction: t });
+
+      // Audit Log
+      await this.logActivity(req, {
+        moduleCode: 'sales',
+        activityCode: 'FORECAST_SUBMITTED',
+        resourceId: forecast.id,
+        oldData,
+        newData: forecast,
+        description: `Forecast ${forecast.forecast_number} submitted`,
+        transaction: t
+      });
+
+      await t.commit();
+      return { status: true, message: 'Forecast submitted successfully', data: forecast };
+
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async review(req) {
     const t = await db.sequelize.transaction();
     try {
       const { id } = req.params;
@@ -998,13 +1068,18 @@ class ForecastModule extends BaseModule {
   async _generateSPR(forecast, transaction) {
     const currentMonthStr = dayjs().format('YYYY-MM');
 
-    // Get details for current month only
+    // Get details for current month OR qty_status = 'Fix'
     const details = await SSalesForecastDetails.findAll({
       where: {
         forecast_id: forecast.id,
-        period_date: {
-          [Op.between]: [`${currentMonthStr}-01`, `${currentMonthStr}-31`]
-        }
+        [Op.or]: [
+          {
+            period_date: {
+              [Op.between]: [`${currentMonthStr}-01`, `${currentMonthStr}-31`]
+            }
+          },
+          { qty_status: 'Fix' }
+        ]
       },
       transaction
     });

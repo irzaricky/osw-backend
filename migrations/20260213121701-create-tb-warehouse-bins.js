@@ -10,6 +10,7 @@ export default {
       },
       bin_code: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(50)
       },
       area_id: {

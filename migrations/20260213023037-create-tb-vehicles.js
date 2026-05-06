@@ -10,10 +10,12 @@ export default {
       },
       vehicle_code: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(20)
       },
       plate_number: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(20)
       },
       vehicle_type_id: {

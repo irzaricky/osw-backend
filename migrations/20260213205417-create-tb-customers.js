@@ -10,6 +10,7 @@ export default {
       },
       customer_code: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(50)
       },
       name: {
@@ -18,6 +19,7 @@ export default {
       },
       email: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(100)
       },
       address: {

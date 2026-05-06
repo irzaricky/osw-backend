@@ -10,6 +10,7 @@ export default {
       },
       email: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(100)
       },
       password: {

@@ -10,6 +10,7 @@ export default {
       },
       spo_number: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(50)
       },
       customer_id: {

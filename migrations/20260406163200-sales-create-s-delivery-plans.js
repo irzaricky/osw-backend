@@ -10,6 +10,7 @@ export default {
       },
       dp_number: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(50)
       },
       scheduled_date: {

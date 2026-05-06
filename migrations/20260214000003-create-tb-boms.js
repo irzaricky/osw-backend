@@ -10,6 +10,7 @@ export default {
       },
       bom_number: {
         allowNull: false,
+        unique: true,
         type: Sequelize.STRING(100)
       },
       description: {

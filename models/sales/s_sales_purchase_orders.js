@@ -13,8 +13,7 @@ export default (sequelize) => {
   SSalesPurchaseOrders.init({
     spo_number: {
       type: DataTypes.STRING(50),
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     customer_id: {
       type: DataTypes.INTEGER,

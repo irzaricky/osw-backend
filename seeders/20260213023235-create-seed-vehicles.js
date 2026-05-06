@@ -5,10 +5,10 @@ export default{
   async up(queryInterface, Sequelize) {
     // 1. Seed Reference Types
     await queryInterface.bulkInsert('ref_vehicle_types', [
-      { id: 1, name: 'TRUCK CDE', load_capacity: 50, created_at: new Date(), updated_at: new Date() },
-      { id: 2, name: 'TRUCK CDD', load_capacity: 60, created_at: new Date(), updated_at: new Date() },
-      { id: 3, name: 'WINGBOX 80', load_capacity: 80, created_at: new Date(), updated_at: new Date() },
-      { id: 4, name: 'WINGBOX 100', load_capacity: 100, created_at: new Date(), updated_at: new Date() }
+      { name: 'TRUCK CDE', load_capacity: 50, created_at: new Date(), updated_at: new Date() },
+      { name: 'TRUCK CDD', load_capacity: 60, created_at: new Date(), updated_at: new Date() },
+      { name: 'WINGBOX 80', load_capacity: 80, created_at: new Date(), updated_at: new Date() },
+      { name: 'WINGBOX 100', load_capacity: 100, created_at: new Date(), updated_at: new Date() }
     ]);
 
     // 2. Seed Static Vehicles

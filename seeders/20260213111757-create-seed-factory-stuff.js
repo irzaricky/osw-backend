@@ -4,37 +4,37 @@ export default {
 
     // 1. Seed Factories
     await queryInterface.bulkInsert('s_factories', [
-      { id: 1, name: 'Factory Assy', address: 'Jogja', phone: '129893', maps_url: 'https://maps.google.com', ...timestamp },
-      { id: 2, name: 'Factory Warehouse', address: 'Klaten', phone: '27189', maps_url: 'https://maps.google.com', ...timestamp },
-      { id: 3, name: 'Factory Painting', address: 'Wonogiri', phone: '21789', maps_url: 'https://maps.google.com', ...timestamp }
+      { name: 'Factory Assy', address: 'Jogja', phone: '129893', maps_url: 'https://maps.google.com', ...timestamp },
+      { name: 'Factory Warehouse', address: 'Klaten', phone: '27189', maps_url: 'https://maps.google.com', ...timestamp },
+      { name: 'Factory Painting', address: 'Wonogiri', phone: '21789', maps_url: 'https://maps.google.com', ...timestamp }
     ]);
 
     // 2. Seed Lines
     await queryInterface.bulkInsert('s_lines', [
-      { id: 1, line_code: 'ASSY-FRM', name: 'Line Assembly Frame', factory_id: 1, sequence: 10, ...timestamp },
-      { id: 2, line_code: 'ASSY-BATT', name: 'Line Battery Assembly', factory_id: 1, sequence: 20, ...timestamp },
-      { id: 3, line_code: 'ASSY-ELEC', name: 'Line Assembly Electrical', factory_id: 1, sequence: 30, ...timestamp },
-      { id: 4, line_code: 'ASSY-FNL', name: 'Line Assembly Final', factory_id: 1, sequence: 40, ...timestamp },
-      { id: 5, line_code: 'ASSY-TEST', name: 'Line Charging & Testing', factory_id: 1, sequence: 50, ...timestamp },
-      { id: 6, line_code: 'ASSY-QC', name: 'Line QC Final', factory_id: 1, sequence: 60, ...timestamp },
-      { id: 7, line_code: 'ASSY-RWK', name: 'Line Rework', factory_id: 1, sequence: 70, ...timestamp },
-      { id: 8, line_code: 'PAINT-PRM', name: 'Line Painting Primer', factory_id: 3, sequence: 80, ...timestamp },
-      { id: 9, line_code: 'PAINT-COL', name: 'Line Painting Color', factory_id: 3, sequence: 90, ...timestamp },
-      { id: 10, line_code: 'PAINT-COAT', name: 'Line Painting Color Coat', factory_id: 3, sequence: 100, ...timestamp },
-      { id: 11, line_code: 'WH-INQC', name: 'Line Incoming QC', factory_id: 2, sequence: 5, ...timestamp },
-      { id: 12, line_code: 'WH-MAT', name: 'Line Material Handling', factory_id: 2, sequence: 15, ...timestamp },
-      { id: 13, line_code: 'WH-PACK', name: 'Line Packing', factory_id: 2, sequence: 110, ...timestamp },
-      { id: 14, line_code: 'WH-FG', name: 'Line Finished Goods Storage', factory_id: 2, sequence: 120, ...timestamp }
+      { line_code: 'ASSY-FRM', name: 'Line Assembly Frame', factory_id: 1, sequence: 10, ...timestamp },
+      { line_code: 'ASSY-BATT', name: 'Line Battery Assembly', factory_id: 1, sequence: 20, ...timestamp },
+      { line_code: 'ASSY-ELEC', name: 'Line Assembly Electrical', factory_id: 1, sequence: 30, ...timestamp },
+      { line_code: 'ASSY-FNL', name: 'Line Assembly Final', factory_id: 1, sequence: 40, ...timestamp },
+      { line_code: 'ASSY-TEST', name: 'Line Charging & Testing', factory_id: 1, sequence: 50, ...timestamp },
+      { line_code: 'ASSY-QC', name: 'Line QC Final', factory_id: 1, sequence: 60, ...timestamp },
+      { line_code: 'ASSY-RWK', name: 'Line Rework', factory_id: 1, sequence: 70, ...timestamp },
+      { line_code: 'PAINT-PRM', name: 'Line Painting Primer', factory_id: 3, sequence: 80, ...timestamp },
+      { line_code: 'PAINT-COL', name: 'Line Painting Color', factory_id: 3, sequence: 90, ...timestamp },
+      { line_code: 'PAINT-COAT', name: 'Line Painting Color Coat', factory_id: 3, sequence: 100, ...timestamp },
+      { line_code: 'WH-INQC', name: 'Line Incoming QC', factory_id: 2, sequence: 5, ...timestamp },
+      { line_code: 'WH-MAT', name: 'Line Material Handling', factory_id: 2, sequence: 15, ...timestamp },
+      { line_code: 'WH-PACK', name: 'Line Packing', factory_id: 2, sequence: 110, ...timestamp },
+      { line_code: 'WH-FG', name: 'Line Finished Goods Storage', factory_id: 2, sequence: 120, ...timestamp }
     ]);
 
     // 3. Seed Reference Station Types
     await queryInterface.bulkInsert('ref_station_types', [
-      { id: 1, name: 'INSPECTION', ...timestamp },
-      { id: 2, name: 'ASSEMBLY', ...timestamp },
-      { id: 3, name: 'TESTING', ...timestamp },
-      { id: 4, name: 'PAINTING', ...timestamp },
-      { id: 5, name: 'OVEN', ...timestamp },
-      { id: 6, name: 'PACKING', ...timestamp }
+      { name: 'INSPECTION', ...timestamp },
+      { name: 'ASSEMBLY', ...timestamp },
+      { name: 'TESTING', ...timestamp },
+      { name: 'PAINTING', ...timestamp },
+      { name: 'OVEN', ...timestamp },
+      { name: 'PACKING', ...timestamp }
     ]);
 
     // 4. Seed Stations

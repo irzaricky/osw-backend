@@ -15,8 +15,7 @@ export default (sequelize) => {
     },
     forecast_detail_number: {
       type: DataTypes.STRING(50),
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     part_id: {
       type: DataTypes.INTEGER,
@@ -24,7 +23,7 @@ export default (sequelize) => {
     },
     period_date: {
       type: DataTypes.DATEONLY,
-      allowNull: false
+      allowNull: true
     },
     qty_status: {
       type: DataTypes.STRING(20),

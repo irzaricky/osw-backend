@@ -14,8 +14,7 @@ export default (sequelize) => {
   SSalesPurchaseRequests.init({
     spr_number: {
       type: DataTypes.STRING(50),
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     spr_name: {
       type: DataTypes.STRING(100),

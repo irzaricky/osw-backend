@@ -6,7 +6,6 @@ export default {
     //Forecast Data
     const forecasts = [
       {
-        id: 1,
         forecast_number: 'FC-YR-2026-001',
         forecast_type: 'Yearly',
         customer_id: 1,
@@ -21,7 +20,6 @@ export default {
         ...timestamp
       },
       {
-        id: 2,
         forecast_number: 'FC-HY-2026-S1-001',
         forecast_type: 'Half-Year',
         customer_id: 2,
@@ -36,7 +34,6 @@ export default {
         ...timestamp
       },
       {
-        id: 3,
         forecast_number: 'FC-R4-2026-05-001',
         forecast_type: '4-Month',
         customer_id: 1,
@@ -61,7 +58,6 @@ export default {
     for (let part_id = 1; part_id <= 12; part_id++) {
       for (const month of months) {
         forecastDetails.push({
-          id: detailIdCounter++,
           forecast_id: 1,
           forecast_detail_number: `FC-Y-26-P${part_id}-${month}`,
           part_id: part_id,
@@ -85,7 +81,6 @@ export default {
     for (let part_id = 1; part_id <= 12; part_id++) {
       for (const m of forecast_2) {
         forecastDetails.push({
-          id: detailIdCounter++,
           forecast_id: 2,
           forecast_detail_number: `FC-HY-26S1-P${part_id}-${m.name}`,
           part_id: part_id,
@@ -108,7 +103,6 @@ export default {
     for (let part_id = 1; part_id <= 12; part_id++) {
       for (const m of forecast_3) {
         forecastDetails.push({
-          id: detailIdCounter++,
           forecast_id: 3,
           forecast_detail_number: `FCM-2605-P${part_id}-${m.name}`,
           part_id: part_id,
@@ -125,7 +119,6 @@ export default {
     // SPR Data (Generated from Forecast 3)
     const sprs = [
       {
-        id: 1,
         spr_number: 'SPR-2026-05-101',
         spr_name: 'Request for May Fix Forecast Demand',
         source: 'Automatic',
@@ -146,7 +139,6 @@ export default {
     const sprDetails = forecastDetails
       .filter(fd => fd.forecast_id === 3 && fd.qty_status === 'Fix')
       .map((fd, index) => ({
-        id: index + 1,
         spr_id: 1,
         part_id: fd.part_id,
         qty: fd.forecast_qty,
@@ -157,7 +149,6 @@ export default {
     // SPO Data (Generated from SPR)
     const spos = [
       {
-        id: 1,
         spo_number: 'SPO-2026-06-200',
         customer_id: 1,
         spr_id: 1,
@@ -174,7 +165,6 @@ export default {
     const spoDetails = sprDetails.map((spr, index) => {
       const isClosed = index % 2 === 0;
       return {
-        id: index + 1,
         spo_id: 1,
         part_id: spr.part_id,
         ordered_qty: spr.qty,
@@ -197,7 +187,6 @@ export default {
 
     // Skenario 1: Completed Delivery (Parts 1-4)
     deliveryPlans.push({
-      id: dpIdCounter,
       dp_number: `DP-2026-06-00${dpIdCounter}`,
       scheduled_date: new Date(new Date().setDate(new Date().getDate() + 2)),
       time_start: '08:00:00',
@@ -211,18 +200,16 @@ export default {
     });
 
     const scenario1Details = spoDetails.slice(0, 4);
-    scenario1Details.forEach(spo => {
+    scenario1Details.forEach((spo, index) => {
       deliveryPlanDetails.push({
-        id: dpDetailIdCounter++,
         delivery_plan_id: dpIdCounter,
-        spo_detail_id: spo.id,
+        spo_detail_id: index + 1,
         planned_qty: spo.sent_qty,
         ...timestamp
       });
     });
 
     deliveryOrders.push({
-      id: doIdCounter,
       do_number: `DO-2026-06-10${doIdCounter}`,
       delivery_plan_id: dpIdCounter,
       customer_id: 1,
@@ -241,7 +228,6 @@ export default {
 
     // Skenario 2: In Transit (Parts 5-8)
     deliveryPlans.push({
-      id: dpIdCounter,
       dp_number: `DP-2026-06-00${dpIdCounter}`,
       scheduled_date: new Date(new Date().setDate(new Date().getDate() + 2)),
       time_start: '13:00:00',
@@ -255,18 +241,16 @@ export default {
     });
 
     const scenario2Details = spoDetails.slice(4, 8);
-    scenario2Details.forEach(spo => {
+    scenario2Details.forEach((spo, index) => {
       deliveryPlanDetails.push({
-        id: dpDetailIdCounter++,
         delivery_plan_id: dpIdCounter,
-        spo_detail_id: spo.id,
+        spo_detail_id: index + 5,
         planned_qty: spo.sent_qty,
         ...timestamp
       });
     });
 
     deliveryOrders.push({
-      id: doIdCounter,
       do_number: `DO-2026-06-10${doIdCounter}`,
       delivery_plan_id: dpIdCounter,
       customer_id: 1,
@@ -285,7 +269,6 @@ export default {
 
     // Skenario 3: Scheduled (Parts 9-12)
     deliveryPlans.push({
-      id: dpIdCounter,
       dp_number: `DP-2026-06-00${dpIdCounter}`,
       scheduled_date: new Date(new Date().setDate(new Date().getDate() + 3)),
       time_start: '08:00:00',
@@ -299,11 +282,10 @@ export default {
     });
 
     const scenario3Details = spoDetails.slice(8, 12);
-    scenario3Details.forEach(spo => {
+    scenario3Details.forEach((spo, index) => {
       deliveryPlanDetails.push({
-        id: dpDetailIdCounter++,
         delivery_plan_id: dpIdCounter,
-        spo_detail_id: spo.id,
+        spo_detail_id: index + 9,
         planned_qty: spo.sent_qty,
         ...timestamp
       });

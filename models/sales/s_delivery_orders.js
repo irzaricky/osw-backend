@@ -14,8 +14,7 @@ export default (sequelize) => {
   SDeliveryOrders.init({
     do_number: {
       type: DataTypes.STRING(50),
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     delivery_plan_id: {
       type: DataTypes.INTEGER,

@@ -14,8 +14,7 @@ export default (sequelize) => {
   SDeliveryPlans.init({
     dp_number: {
       type: DataTypes.STRING(50),
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     scheduled_date: {
       type: DataTypes.DATEONLY,

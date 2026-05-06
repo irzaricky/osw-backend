@@ -10,13 +10,11 @@ export default (sequelize) => {
   SVehicles.init({
     vehicle_code: {
       type: DataTypes.STRING,
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     plate_number: {
       type: DataTypes.STRING,
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     vehicle_type_id: {
       type: DataTypes.INTEGER,

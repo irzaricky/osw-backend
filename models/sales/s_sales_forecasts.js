@@ -15,8 +15,7 @@ export default (sequelize) => {
   SSalesForecasts.init({
     forecast_number: {
       type: DataTypes.STRING(50),
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     forecast_type: {
       type: DataTypes.STRING(50),

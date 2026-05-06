@@ -10,7 +10,6 @@ export default {
       },
       dock_code: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       name: {

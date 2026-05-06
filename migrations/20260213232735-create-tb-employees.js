@@ -11,7 +11,6 @@ export default {
       user_id: {
         allowNull: false,
         type: Sequelize.INTEGER,
-        unique: true,
         references: {
           model: 's_users',
           key: 'id'
@@ -21,7 +20,6 @@ export default {
       },
       employee_number: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       full_name: {

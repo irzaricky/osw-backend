@@ -10,7 +10,6 @@ export default {
       },
       supplier_code: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       name: {
@@ -19,7 +18,6 @@ export default {
       },
       email: {
         allowNull: true,
-        unique: true,
         type: Sequelize.STRING(100)
       },
       notes: {

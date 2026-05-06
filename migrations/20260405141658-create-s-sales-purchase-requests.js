@@ -10,7 +10,6 @@ export default {
       },
       spr_number: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       spr_name: {

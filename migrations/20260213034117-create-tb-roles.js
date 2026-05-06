@@ -10,7 +10,6 @@ export default {
       },
       name: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       division_id: {
@@ -27,7 +26,7 @@ export default {
         allowNull: false,
         type: Sequelize.BOOLEAN,
         defaultValue: true
-        
+
       },
       created_at: {
         allowNull: false,

@@ -41,6 +41,11 @@ router.post('/upload-detail', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, result);
 });
 
+router.get('/:forecast_id/historical-qty', session.sessionChecker, async (req, res) => {
+  const result = await module.getHistoricalQty(req);
+  return helper.sendResponse(res, result);
+});
+
 router.get('/:id', session.sessionChecker, async (req, res) => {
   const result = await module.detail(req);
   return helper.sendResponse(res, result);
@@ -53,6 +58,11 @@ router.post('/', session.sessionChecker, async (req, res) => {
 
 router.put('/:id', session.sessionChecker, async (req, res) => {
   const result = await module.update(req);
+  return helper.sendResponse(res, result);
+});
+
+router.put('/:id/detail', session.sessionChecker, async (req, res) => {
+  const result = await module.updateDetails(req);
   return helper.sendResponse(res, result);
 });
 

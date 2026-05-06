@@ -71,7 +71,7 @@ class ForecastModule extends BaseModule {
         include,
         limit,
         offset,
-        order: [['created_at', 'DESC']]
+        order: [['customer_id', 'ASC'], ['status', 'ASC']]
       });
 
       return {
@@ -129,22 +129,32 @@ class ForecastModule extends BaseModule {
 
   async downloadTemplate(req, res) {
     try {
+      const { forecast_type } = req.query;
+      const is4Month = forecast_type === '4-Month';
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Forecast Template');
 
-      // Add Headers
-      worksheet.columns = [
-        { header: 'Part Number', key: 'part_number', width: 25 },
-        { header: 'Period Date (YYYY-MM-DD)', key: 'period_date', width: 25 },
-        { header: 'Forecast Qty', key: 'forecast_qty', width: 20 }
-      ];
+      // Columns differ by forecast type
+      if (is4Month) {
+        worksheet.columns = [
+          { header: 'Part Number', key: 'part_number', width: 25 },
+          { header: 'Period Date (YYYY-MM-DD)', key: 'period_date', width: 25 },
+          { header: 'Forecast Qty', key: 'forecast_qty', width: 20 }
+        ];
+      } else {
+        worksheet.columns = [
+          { header: 'Part Number', key: 'part_number', width: 25 },
+          { header: 'Forecast Qty', key: 'forecast_qty', width: 20 }
+        ];
+      }
 
       // Styling headers
       worksheet.getRow(1).font = { bold: true };
       worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
+      const filename = is4Month ? 'forecast_4month_template.xlsx' : 'forecast_template.xlsx';
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename=sales_forecast_template.xlsx');
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
 
       await workbook.xlsx.write(res);
       res.end();
@@ -159,6 +169,9 @@ class ForecastModule extends BaseModule {
         return { status: false, message: 'No file uploaded. Please upload a file with the key "file"', code: 400 };
       }
 
+      const { forecast_type } = req.body; // 'Yearly', 'Half-Year', or '4-Month'
+      const is4Month = forecast_type === '4-Month';
+
       const file = req.files.file;
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(file.data);
@@ -171,58 +184,60 @@ class ForecastModule extends BaseModule {
       const details = [];
       const errors = [];
 
-      // Start from row 2 (skipping header)
       for (let i = 2; i <= worksheet.rowCount; i++) {
         const row = worksheet.getRow(i);
-        
-        let partNumber = row.getCell(1).text;
-        let periodDateStr = row.getCell(2).text;
-        let forecastQty = row.getCell(3).value;
 
-        if (partNumber) partNumber = partNumber.trim();
-        if (periodDateStr) periodDateStr = periodDateStr.trim();
+        let partNumber = row.getCell(1).text?.trim();
+        let periodDateStr = is4Month ? row.getCell(2).text?.trim() : null;
+        let forecastQty = parseInt(is4Month ? row.getCell(3).value : row.getCell(2).value) || 0;
 
-        forecastQty = parseInt(forecastQty) || 0;
+        if (!partNumber && !forecastQty) continue;
 
-        if (!partNumber && !periodDateStr && !forecastQty) continue; // Skip empty rows
-
-        if (!partNumber || !periodDateStr) {
-          errors.push(`Row ${i}: Part Number and Period Date are required.`);
+        if (!partNumber) {
+          errors.push(`Row ${i}: Part Number is required.`);
           continue;
         }
 
-        // Validate Part
         const part = await SParts.findOne({ where: { part_number: partNumber } });
         if (!part) {
           errors.push(`Row ${i}: Part Number '${partNumber}' not found.`);
           continue;
         }
 
-        // Validate Date
-        const periodDate = dayjs(periodDateStr);
-        if (!periodDate.isValid()) {
-          errors.push(`Row ${i}: Invalid date format '${periodDateStr}'. Use YYYY-MM-DD.`);
-          continue;
+        // For 4-Month: validate period_date
+        if (is4Month) {
+          if (!periodDateStr) {
+            errors.push(`Row ${i}: Period Date is required for 4-Month forecast.`);
+            continue;
+          }
+          const periodDate = dayjs(periodDateStr);
+          if (!periodDate.isValid()) {
+            errors.push(`Row ${i}: Invalid date format '${periodDateStr}'. Use YYYY-MM-DD.`);
+            continue;
+          }
+          details.push({
+            part_id: part.id,
+            part_number: part.part_number,
+            part_name: part.part_name,
+            period_date: periodDate.format('YYYY-MM-DD'),
+            forecast_qty: forecastQty
+          });
+        } else {
+          // Yearly / Half-Year: no period_date from user
+          details.push({
+            part_id: part.id,
+            part_number: part.part_number,
+            part_name: part.part_name,
+            forecast_qty: forecastQty
+          });
         }
-
-        details.push({
-          part_id: part.id,
-          part_number: part.part_number,
-          part_name: part.part_name,
-          period_date: periodDate.format('YYYY-MM-DD'),
-          forecast_qty: forecastQty
-        });
       }
 
       if (errors.length > 0) {
         return { status: false, message: 'Validation failed', data: errors, code: 400 };
       }
 
-      return {
-        status: true,
-        message: 'File parsed successfully',
-        data: details
-      };
+      return { status: true, message: 'File parsed successfully', data: details };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
@@ -312,6 +327,75 @@ class ForecastModule extends BaseModule {
     }
   }
 
+  async getHistoricalQty(req) {
+    try {
+      const { forecast_id } = req.params;
+      let { part_ids } = req.query;
+
+      if (!part_ids) return { status: true, data: {} };
+      if (!Array.isArray(part_ids)) part_ids = [part_ids];
+
+      // 1. Get current forecast
+      const currentForecast = await SSalesForecasts.findByPk(forecast_id, {
+        attributes: ['id', 'customer_id', 'forecast_type', 'start_period', 'end_period']
+      });
+      if (!currentForecast) return { status: false, message: 'Forecast not found', code: 404 };
+
+      // 2. Find closest previous approved forecast of same customer & type
+      const previousForecast = await SSalesForecasts.findOne({
+        where: {
+          customer_id: currentForecast.customer_id,
+          forecast_type: currentForecast.forecast_type,
+          status: 'Approved',
+          end_period: { [Op.lt]: currentForecast.start_period }
+        },
+        order: [['end_period', 'DESC']],
+        attributes: ['id', 'start_period', 'end_period']
+      });
+
+      if (!previousForecast) return { status: true, data: {} };
+
+      // 3. Get historical details for requested parts
+      const historicalDetails = await SSalesForecastDetails.findAll({
+        where: {
+          forecast_id: previousForecast.id,
+          part_id: { [Op.in]: part_ids.map(Number) }
+        },
+        attributes: ['part_id', 'period_date', 'forecast_qty']
+      });
+
+      // 4. Generate period arrays for index-based mapping
+      const generatePeriods = (start, end) => {
+        const periods = [];
+        let current = dayjs(start).startOf('month');
+        const endMonth = dayjs(end).startOf('month');
+        while (current.isBefore(endMonth) || current.isSame(endMonth)) {
+          periods.push(current.format('YYYY-MM-01'));
+          current = current.add(1, 'month');
+        }
+        return periods;
+      };
+
+      const prevPeriods = generatePeriods(previousForecast.start_period, previousForecast.end_period);
+      const currPeriods = generatePeriods(currentForecast.start_period, currentForecast.end_period);
+
+      const result = {};
+      historicalDetails.forEach(detail => {
+        const histIndex = prevPeriods.indexOf(dayjs(detail.period_date).format('YYYY-MM-01'));
+        if (histIndex >= 0 && histIndex < currPeriods.length) {
+          const targetPeriod = currPeriods[histIndex];
+          if (!result[detail.part_id]) result[detail.part_id] = {};
+          result[detail.part_id][targetPeriod] = detail.forecast_qty;
+        }
+      });
+
+      return { status: true, data: result };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
   async _checkDuplication(customer_id, forecast_type, start_period, end_period, excludeId = null, transaction) {
     const where = {
       customer_id,
@@ -375,16 +459,13 @@ class ForecastModule extends BaseModule {
 
       const detailSchema = Joi.object({
         part_id: Joi.number().integer().required(),
-        period_date: Joi.date().iso().required(),
-        qty_status: Joi.string().valid('Fix', 'Temporary').default('Temporary'),
+        period_date: Joi.date().iso().optional().allow(null, ''),
         forecast_qty: Joi.number().integer().min(0).required()
       });
 
       const schema = Joi.object({
         customer_id: Joi.number().integer().required(),
         forecast_type: Joi.string().valid('Yearly', 'Half-Year', '4-Month').required(),
-        start_period: Joi.date().iso().required(),
-        end_period: Joi.date().iso().required(),
         description: Joi.string().allow(null, '').optional(),
         details: Joi.array().items(detailSchema).optional().default([])
       });
@@ -395,7 +476,31 @@ class ForecastModule extends BaseModule {
         return validation;
       }
 
-      const { customer_id, forecast_type, start_period, end_period, description, details } = validation.value;
+      const { customer_id, forecast_type, description, details } = validation.value;
+
+      // Auto-calculate start_period and end_period from forecast_type
+      const today = dayjs();
+      let start_period, end_period;
+
+      if (forecast_type === 'Yearly') {
+        const nextYear = today.add(1, 'year').year();
+        start_period = `${nextYear}-01-01`;
+        end_period = `${nextYear}-12-31`;
+      } else if (forecast_type === 'Half-Year') {
+        // Next semester: if today is in H1 (Jan-Jun) → H2 starts Jul, if H2 (Jul-Dec) → H1 of next year
+        const currentMonth = today.month() + 1; // 1-12
+        if (currentMonth <= 6) {
+          start_period = `${today.year()}-07-01`;
+          end_period = `${today.year()}-12-31`;
+        } else {
+          const nextYear = today.add(1, 'year').year();
+          start_period = `${nextYear}-01-01`;
+          end_period = `${nextYear}-06-30`;
+        }
+      } else if (forecast_type === '4-Month') {
+        start_period = today.startOf('month').format('YYYY-MM-DD');
+        end_period = today.add(3, 'month').endOf('month').format('YYYY-MM-DD');
+      }
 
       // Duplicate validation
       const isDuplicate = await this._checkDuplication(customer_id, forecast_type, start_period, end_period, null, t);
@@ -429,22 +534,29 @@ class ForecastModule extends BaseModule {
       // Create Details
       if (details && details.length > 0) {
         const currentMonthStr = dayjs().format('YYYY-MM');
+        const is4Month = forecast_type === '4-Month';
+
         const detailRecords = details.map((d, index) => {
           totalQty += d.forecast_qty;
-          
-          let calculatedQtyStatus = 'Temporary';
-          if (forecast_type === '4-Month') {
-            const periodMonthStr = dayjs(d.period_date).format('YYYY-MM');
-            if (currentMonthStr === periodMonthStr) {
-              calculatedQtyStatus = 'Fix';
-            }
+
+          // Auto-set period_date for Yearly/Half-Year
+          const effectivePeriodDate = is4Month
+            ? d.period_date
+            : start_period; // single record covers the full period
+
+          let calculatedQtyStatus;
+          const periodMonthStr = dayjs(effectivePeriodDate).format('YYYY-MM');
+          if (periodMonthStr <= currentMonthStr) {
+            calculatedQtyStatus = 'Fix';
+          } else {
+            calculatedQtyStatus = 'Temporary';
           }
 
           return {
             forecast_id: forecast.id,
             forecast_detail_number: `${forecast_number}-D${(index + 1).toString().padStart(3, '0')}`,
             part_id: d.part_id,
-            period_date: d.period_date,
+            period_date: effectivePeriodDate,
             qty_status: calculatedQtyStatus,
             forecast_qty: d.forecast_qty
           };
@@ -506,21 +618,9 @@ class ForecastModule extends BaseModule {
         return { status: false, message: 'Only Draft forecasts can be updated directly', code: 400 };
       }
 
-      const detailSchema = Joi.object({
-        id: Joi.number().integer().optional(),
-        part_id: Joi.number().integer().required(),
-        period_date: Joi.date().iso().required(),
-        qty_status: Joi.string().valid('Fix', 'Temporary').default('Temporary'),
-        forecast_qty: Joi.number().integer().min(0).required()
-      });
-
       const schema = Joi.object({
         customer_id: Joi.number().integer().optional(),
-        forecast_type: Joi.string().valid('Yearly', 'Half-Year', '4-Month').optional(),
-        start_period: Joi.date().iso().optional(),
-        end_period: Joi.date().iso().optional(),
-        description: Joi.string().allow(null, '').optional(),
-        details: Joi.array().items(detailSchema).optional()
+        description: Joi.string().allow(null, '').optional()
       });
 
       const validation = helper.validate(data, schema);
@@ -532,14 +632,16 @@ class ForecastModule extends BaseModule {
       const updates = validation.value;
       const oldData = JSON.parse(JSON.stringify(forecast));
 
-      // Duplicate validation if period, customer, or type changes
-      const checkCustomer = updates.customer_id || forecast.customer_id;
-      const checkType = updates.forecast_type || forecast.forecast_type;
-      const checkStart = updates.start_period || forecast.start_period;
-      const checkEnd = updates.end_period || forecast.end_period;
-
-      if (updates.customer_id || updates.forecast_type || updates.start_period || updates.end_period) {
-        const isDuplicate = await this._checkDuplication(checkCustomer, checkType, checkStart, checkEnd, forecast.id, t);
+      // Check for duplicate if customer changes
+      if (updates.customer_id && updates.customer_id !== forecast.customer_id) {
+        const isDuplicate = await this._checkDuplication(
+          updates.customer_id,
+          forecast.forecast_type,
+          forecast.start_period,
+          forecast.end_period,
+          forecast.id,
+          t
+        );
         if (isDuplicate) {
           await t.rollback();
           return {
@@ -552,71 +654,10 @@ class ForecastModule extends BaseModule {
 
       await forecast.update(updates, { transaction: t });
 
-      let totalQty = 0;
-
-      if (updates.details) {
-        const existingDetails = await SSalesForecastDetails.findAll({
-          where: { forecast_id: forecast.id },
-          transaction: t
-        });
-
-        const existingIds = existingDetails.map(d => d.id);
-        const updatedIds = updates.details.filter(d => d.id).map(d => d.id);
-        const idsToDelete = existingIds.filter(id => !updatedIds.includes(id));
-
-        if (idsToDelete.length > 0) {
-          await SSalesForecastDetails.destroy({
-            where: { id: { [Op.in]: idsToDelete } },
-            transaction: t
-          });
-        }
-
-        let maxDetailSeq = existingDetails.length;
-        const currentMonthStr = dayjs().format('YYYY-MM');
-        const forecast_type = updates.forecast_type || forecast.forecast_type;
-
-        for (const detail of updates.details) {
-          totalQty += detail.forecast_qty;
-
-          let calculatedQtyStatus = 'Temporary';
-          if (forecast_type === '4-Month') {
-            const periodMonthStr = dayjs(detail.period_date).format('YYYY-MM');
-            if (currentMonthStr === periodMonthStr) {
-              calculatedQtyStatus = 'Fix';
-            }
-          }
-
-          if (detail.id) {
-            // Update
-            await SSalesForecastDetails.update({
-              part_id: detail.part_id,
-              period_date: detail.period_date,
-              qty_status: calculatedQtyStatus,
-              forecast_qty: detail.forecast_qty
-            }, {
-              where: { id: detail.id, forecast_id: forecast.id },
-              transaction: t
-            });
-          } else {
-            // Insert
-            maxDetailSeq++;
-            await SSalesForecastDetails.create({
-              forecast_id: forecast.id,
-              forecast_detail_number: `${forecast.forecast_number}-D${maxDetailSeq.toString().padStart(3, '0')}`,
-              part_id: detail.part_id,
-              period_date: detail.period_date,
-              qty_status: calculatedQtyStatus,
-              forecast_qty: detail.forecast_qty
-            }, { transaction: t });
-          }
-        }
-      } else {
-        // If details aren't in payload, calculate totalQty from existing
-        totalQty = await SSalesForecastDetails.sum('forecast_qty', {
-          where: { forecast_id: forecast.id },
-          transaction: t
-        }) || 0;
-      }
+      const totalQty = await SSalesForecastDetails.sum('forecast_qty', {
+        where: { forecast_id: forecast.id },
+        transaction: t
+      }) || 0;
 
       // Log update
       await SSalesForecastLogs.create({
@@ -624,7 +665,7 @@ class ForecastModule extends BaseModule {
         version: forecast.version,
         total_qty: totalQty,
         action: 'Updated Draft',
-        remarks: 'Updated draft forecast details',
+        remarks: 'Updated forecast header (customer/description)',
         changed_by: currentUser.id
       }, { transaction: t });
 
@@ -644,6 +685,163 @@ class ForecastModule extends BaseModule {
         status: true,
         message: 'Forecast draft updated successfully',
         data: forecast
+      };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) {
+        return { status: false, error: error.message, code: 500 };
+      }
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async updateDetails(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const data = req.body;
+      const currentUser = req.user;
+
+      const forecast = await SSalesForecasts.findByPk(id, { transaction: t });
+      if (!forecast) {
+        await t.rollback();
+        return { status: false, message: 'Forecast not found', code: 404 };
+      }
+
+      if (forecast.status !== 'Draft') {
+        await t.rollback();
+        return { status: false, message: 'Only Draft forecasts can be updated directly', code: 400 };
+      }
+
+      const detailSchema = Joi.object({
+        id: Joi.number().integer().optional(),
+        part_id: Joi.number().integer().required(),
+        period_date: Joi.date().iso().optional().allow(null, ''),
+        forecast_qty: Joi.number().integer().min(0).required()
+      });
+
+      const schema = Joi.object({
+        details: Joi.array().items(detailSchema).required()
+      });
+
+      const validation = helper.validate(data, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return validation;
+      }
+
+      const { details } = validation.value;
+      const oldData = JSON.parse(JSON.stringify(forecast));
+      
+      const existingDetails = await SSalesForecastDetails.findAll({
+        where: { forecast_id: forecast.id },
+        transaction: t
+      });
+
+      const existingIds = existingDetails.map(d => d.id);
+      const updatedIds = details.filter(d => d.id).map(d => d.id);
+      const idsToDelete = existingIds.filter(id => !updatedIds.includes(id));
+
+      // Validation: Prevent deletion of 'Fix' records
+      const fixedDetailsToDelete = existingDetails.filter(ed => idsToDelete.includes(ed.id) && ed.qty_status === 'Fix');
+      if (fixedDetailsToDelete.length > 0) {
+        await t.rollback();
+        return {
+          status: false,
+          message: `Cannot delete records with 'Fix' status.`,
+          code: 400
+        };
+      }
+
+      if (idsToDelete.length > 0) {
+        await SSalesForecastDetails.destroy({
+          where: { id: { [Op.in]: idsToDelete } },
+          transaction: t
+        });
+      }
+
+      let maxDetailSeq = existingDetails.length;
+      const currentMonthStr = dayjs().format('YYYY-MM');
+      const is4Month = forecast.forecast_type === '4-Month';
+      let totalQty = 0;
+
+      for (const detail of details) {
+        // Validation: Prevent quantity change for 'Fix' records
+        if (detail.id) {
+          const existingDetail = existingDetails.find(ed => ed.id === detail.id);
+          if (existingDetail && existingDetail.qty_status === 'Fix') {
+            if (Number(existingDetail.forecast_qty) !== Number(detail.forecast_qty)) {
+              await t.rollback();
+              return {
+                status: false,
+                message: `Cannot change quantity for a 'Fix' period (Part ID: ${existingDetail.part_id}, Date: ${existingDetail.period_date}).`,
+                code: 400
+              };
+            }
+          }
+        }
+
+        totalQty += detail.forecast_qty;
+
+        const effectivePeriodDate = is4Month ? detail.period_date : forecast.start_period;
+        let calculatedQtyStatus;
+        const periodMonthStr = dayjs(effectivePeriodDate).format('YYYY-MM');
+        if (periodMonthStr <= currentMonthStr) {
+          calculatedQtyStatus = 'Fix';
+        } else {
+          calculatedQtyStatus = 'Temporary';
+        }
+
+        if (detail.id) {
+          // Update
+          await SSalesForecastDetails.update({
+            part_id: detail.part_id,
+            period_date: effectivePeriodDate,
+            qty_status: calculatedQtyStatus,
+            forecast_qty: detail.forecast_qty
+          }, {
+            where: { id: detail.id, forecast_id: forecast.id },
+            transaction: t
+          });
+        } else {
+          // Insert
+          maxDetailSeq++;
+          await SSalesForecastDetails.create({
+            forecast_id: forecast.id,
+            forecast_detail_number: `${forecast.forecast_number}-D${maxDetailSeq.toString().padStart(3, '0')}`,
+            part_id: detail.part_id,
+            period_date: effectivePeriodDate,
+            qty_status: calculatedQtyStatus,
+            forecast_qty: detail.forecast_qty
+          }, { transaction: t });
+        }
+      }
+
+      // Log update
+      await SSalesForecastLogs.create({
+        forecast_id: forecast.id,
+        version: forecast.version,
+        total_qty: totalQty,
+        action: 'Updated Details',
+        remarks: 'Updated forecast details grid',
+        changed_by: currentUser.id
+      }, { transaction: t });
+
+      // Audit Log
+      await this.logActivity(req, {
+        moduleCode: 'sales',
+        activityCode: 'UPDATE_FORECAST_DETAILS',
+        resourceId: forecast.id,
+        oldData,
+        newData: { ...forecast.toJSON(), details },
+        description: `Updated details for forecast ${forecast.forecast_number}`,
+        transaction: t
+      });
+
+      await t.commit();
+      return {
+        status: true,
+        message: 'Forecast details updated successfully'
       };
     } catch (error) {
       await t.rollback();

@@ -10,7 +10,6 @@ export default {
       },
       do_number: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       delivery_plan_id: {

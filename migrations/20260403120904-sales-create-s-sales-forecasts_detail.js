@@ -20,7 +20,6 @@ export default {
       },
       forecast_detail_number: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       part_id: {

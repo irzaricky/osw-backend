@@ -1,6 +1,6 @@
 import db from '../../models/index.js';
 import { config } from '../../config/app.config.js';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
@@ -24,6 +24,7 @@ class TakeOutModule extends BaseModule {
         {
           model: TWorkOrderStoringItem,
           as: 'items',
+          attributes: ['id', 'wo_id', 'part_id', 'total_kanban'],
           include: [
             {
               model: TWorkOrderStoringItemLabel,
@@ -39,51 +40,47 @@ class TakeOutModule extends BaseModule {
     if (!workOrder || workOrder.wo_category !== 'Take Out') return;
 
     for (const item of workOrder.items) {
+      const targetKanban = Number(item.total_kanban || 0);
+      if (targetKanban <= 0) continue;
+
       const existingLabelIds = item.item_labels.map(row => row.label_id);
-      const needed = Number(item.total_kanban || 0) - existingLabelIds.length;
+      const needed = targetKanban - existingLabelIds.length;
 
       if (needed <= 0) continue;
 
-      const stocks = await TWarehouseStock.findAll({
-        include: [
-          {
-            model: TWorkOrderStoringItemLabel,
-            as: 'work_order_item_label',
-            include: [
-              {
-                model: TPartLabels,
-                as: 'label',
-                attributes: ['id', 'label_number', 'part_id'],
-                where: {
-                  part_id: item.part_id
-                }
-              }
-            ]
-          },
-          {
-            model: TWarehouseStockLog,
-            as: 'logs',
-            attributes: ['id', 'is_placement', 'created_at'],
-            required: false
-          }
-        ],
+      const replacements = {
+        part_id: item.part_id,
+        limit: needed
+      };
+
+      if (existingLabelIds.length) {
+        replacements.existing_label_ids = existingLabelIds;
+      }
+
+      const fifoStocks = await db.sequelize.query(`
+        SELECT
+          ws.id AS stock_id,
+          pl.id AS label_id,
+          pl.label_number,
+          COALESCE(MIN(wsl.created_at), ws.created_at) AS placement_at
+        FROM t_warehouse_stock ws
+        JOIN t_work_order_storing_item_label source_wil
+          ON source_wil.id = ws.wo_item_label_id
+        JOIN t_part_labels pl
+          ON pl.id = source_wil.label_id
+        LEFT JOIN t_warehouse_stock_log wsl
+          ON wsl.wh_stock_id = ws.id
+          AND wsl.is_placement = true
+        WHERE pl.part_id = :part_id
+        ${existingLabelIds.length ? 'AND pl.id NOT IN (:existing_label_ids)' : ''}
+        GROUP BY ws.id, pl.id, pl.label_number, ws.created_at
+        ORDER BY placement_at ASC, ws.id ASC
+        LIMIT :limit
+      `, {
+        replacements,
+        type: QueryTypes.SELECT,
         transaction
       });
-
-      const fifoStocks = stocks
-        .map(stock => {
-          const placementLog = stock.logs
-            ?.filter(log => log.is_placement)
-            ?.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))?.[0];
-
-          return {
-            label_id: stock.work_order_item_label?.label?.id,
-            placement_at: placementLog?.created_at || stock.created_at
-          };
-        })
-        .filter(row => row.label_id && !existingLabelIds.includes(row.label_id))
-        .sort((a, b) => new Date(a.placement_at) - new Date(b.placement_at))
-        .slice(0, needed);
 
       for (const fifo of fifoStocks) {
         await TWorkOrderStoringItemLabel.findOrCreate({
@@ -375,121 +372,97 @@ class TakeOutModule extends BaseModule {
         return { status: false, message: 'Work Order not found', code: 404 };
       }
 
-      if (workOrder.wo_category !== 'Take Out') {
-        return { status: false, message: 'This Work Order is not for Take Out', code: 400 };
-      }
-
       const result = [];
 
       for (const item of workOrder.items) {
-        const part = item.part;
-
-        const stocks = await TWarehouseStock.findAll({
-          include: [
-            {
-              model: TWorkOrderStoringItemLabel,
-              as: 'work_order_item_label',
-              include: [
-                {
-                  model: TPartLabels,
-                  as: 'label',
-                  attributes: ['id', 'label_number', 'part_id'],
-                  where: {
-                    part_id: item.part_id
-                  }
-                }
-              ]
-            },
-            {
-              model: SWarehouseBins,
-              as: 'bin',
-              attributes: ['id', 'bin_code', 'area_id', 'capacity', 'is_dedicated', 'dedicated_part_number']
-            },
-            {
-              model: TWarehouseStockLog,
-              as: 'logs',
-              attributes: ['id', 'is_placement', 'qty_per_kanban', 'created_at'],
-              required: false
-            }
-          ]
+        const stocks = await db.sequelize.query(`
+          SELECT
+            ws.id AS stock_id,
+            target_wil.id AS wo_item_label_id,
+            pl.id AS label_id,
+            pl.label_number,
+            p.id AS part_id,
+            p.part_number,
+            p.part_name,
+            b.id AS bin_id,
+            b.bin_code,
+            COALESCE(MIN(wsl.created_at), ws.created_at) AS placement_at,
+            COALESCE(pkg.capacity, 1) AS qty_per_kanban
+          FROM t_work_order_storing_item_label target_wil
+          JOIN t_part_labels pl
+            ON pl.id = target_wil.label_id
+          JOIN s_parts p
+            ON p.id = pl.part_id
+          JOIN t_warehouse_stock ws
+            ON ws.wo_item_label_id IN (
+              SELECT source_wil.id
+              FROM t_work_order_storing_item_label source_wil
+              WHERE source_wil.label_id = target_wil.label_id
+            )
+          LEFT JOIN s_packages pkg
+            ON pkg.id = p.package_id
+          LEFT JOIN s_warehouse_bins b
+            ON b.id = ws.bin_id
+          LEFT JOIN t_warehouse_stock_log wsl
+            ON wsl.wh_stock_id = ws.id
+            AND wsl.is_placement = true
+          WHERE target_wil.wo_item_id = :wo_item_id
+            AND target_wil.is_scanned_out = false
+          GROUP BY
+            ws.id,
+            target_wil.id,
+            pl.id,
+            pl.label_number,
+            p.id,
+            p.part_number,
+            p.part_name,
+            b.id,
+            b.bin_code,
+            pkg.capacity,
+            ws.created_at
+          ORDER BY placement_at ASC, ws.id ASC
+        `, {
+          replacements: {
+            wo_item_id: item.id
+          },
+          type: QueryTypes.SELECT
         });
 
-        const activeStocks = stocks
-          .map(stock => {
-            const placementLog = stock.logs
-              ?.filter(log => log.is_placement)
-              ?.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))?.[0];
+        const recommended = stocks[0] || null;
 
-            return {
-              stock_id: stock.id,
-              wo_item_label_id: stock.wo_item_label_id,
-              label_number: stock.work_order_item_label?.label?.label_number,
-              part_id: part.id,
-              part_number: part.part_number,
-              part_name: part.part_name,
-              bin_id: stock.bin?.id,
-              bin_code: stock.bin?.bin_code,
-              placement_at: placementLog?.created_at || stock.created_at,
-              qty_per_kanban: placementLog?.qty_per_kanban || 1
-            };
-          })
-          .filter(stock => stock.label_number)
-          .sort((a, b) => new Date(a.placement_at) - new Date(b.placement_at));
-
-        const recommended = activeStocks[0] || null;
-        const bins = [];
-
-        for (const stock of activeStocks) {
-          let bin = bins.find(row => row.bin_id === stock.bin_id);
+        const bins = stocks.reduce((acc, stock) => {
+          let bin = acc.find(row => row.bin_id === stock.bin_id);
 
           if (!bin) {
-            const allStocksInBin = await TWarehouseStock.findAll({
-              where: { bin_id: stock.bin_id },
-              include: [
-                {
-                  model: TWorkOrderStoringItemLabel,
-                  as: 'work_order_item_label',
-                  include: [
-                    {
-                      model: TPartLabels,
-                      as: 'label',
-                      attributes: ['id', 'label_number', 'part_id'],
-                      include: [
-                        {
-                          model: SParts,
-                          as: 'part',
-                          attributes: ['id', 'part_number', 'part_name']
-                        }
-                      ]
-                    }
-                  ]
-                }
-              ]
-            });
-
             bin = {
               bin_id: stock.bin_id,
               bin_code: stock.bin_code,
               is_recommended_bin: recommended?.bin_id === stock.bin_id,
-              stocks: allStocksInBin.map(row => ({
-                stock_id: row.id,
-                label_number: row.work_order_item_label?.label?.label_number,
-                part_id: row.work_order_item_label?.label?.part_id,
-                part_number: row.work_order_item_label?.label?.part?.part_number,
-                part_name: row.work_order_item_label?.label?.part?.part_name,
-                is_target_part: row.work_order_item_label?.label?.part_id === item.part_id
-              }))
+              stocks: []
             };
 
-            bins.push(bin);
+            acc.push(bin);
           }
-        }
+
+          bin.stocks.push({
+            stock_id: stock.stock_id,
+            label_number: stock.label_number,
+            part_id: stock.part_id,
+            part_number: stock.part_number,
+            part_name: stock.part_name,
+            placement_at: stock.placement_at,
+            qty_per_kanban: Number(stock.qty_per_kanban || 1),
+            is_target_part: true
+          });
+
+          return acc;
+        }, []);
 
         result.push({
           wo_item_id: item.id,
           part_id: item.part_id,
-          part_number: part?.part_number,
-          part_name: part?.part_name,
+          part_number: item.part?.part_number,
+          part_name: item.part?.part_name,
           total_kanban: item.total_kanban,
           recommended_label: recommended,
           bins
@@ -515,7 +488,8 @@ class TakeOutModule extends BaseModule {
       const data = req.body;
 
       const schema = Joi.object({
-        label_number: Joi.string().required()
+        label_number: Joi.string().required(),
+        force_fifo_override: Joi.boolean().optional().default(false)
       });
 
       const validation = helper.validate(data, schema);
@@ -524,7 +498,7 @@ class TakeOutModule extends BaseModule {
         return validation;
       }
 
-      const { label_number } = validation.value;
+      const { label_number, force_fifo_override } = validation.value;
 
       await this.ensureFifoLabelsAssigned(wo_id, t);
 
@@ -578,75 +552,7 @@ class TakeOutModule extends BaseModule {
         };
       }
 
-      const stock = await TWarehouseStock.findOne({
-        include: [
-          {
-            model: TWorkOrderStoringItemLabel,
-            as: 'work_order_item_label',
-            where: { label_id: label.id }
-          }
-        ],
-        transaction: t
-      });
-
-      if (!stock) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label is not currently available in warehouse stock',
-          code: 400
-        };
-      }
-
-      const fifoStock = await TWarehouseStock.findOne({
-        include: [
-          {
-            model: TWorkOrderStoringItemLabel,
-            as: 'work_order_item_label',
-            include: [
-              {
-                model: TPartLabels,
-                as: 'label',
-                attributes: ['id', 'label_number', 'part_id'],
-                where: {
-                  part_id: label.part_id
-                }
-              }
-            ]
-          },
-          {
-            model: TWarehouseStockLog,
-            as: 'logs',
-            where: {
-              is_placement: true
-            },
-            required: false
-          }
-        ],
-        order: [
-          [{ model: TWarehouseStockLog, as: 'logs' }, 'created_at', 'ASC'],
-          ['id', 'ASC']
-        ],
-        transaction: t
-      });
-
-      if (fifoStock && fifoStock.id !== stock.id) {
-        const recommendedLabel = fifoStock.work_order_item_label?.label?.label_number;
-
-        await t.rollback();
-        return {
-          status: false,
-          message: 'FIFO violation. Please take out the recommended label first.',
-          code: 400,
-          data: {
-            scanned_label: label_number,
-            recommended_stock_id: fifoStock.id,
-            recommended_label: recommendedLabel
-          }
-        };
-      }
-
-      const takeOutItemLabel = await TWorkOrderStoringItemLabel.findOne({
+      let takeOutItemLabel = await TWorkOrderStoringItemLabel.findOne({
         where: {
           wo_item_id: woItem.id,
           label_id: label.id
@@ -655,12 +561,30 @@ class TakeOutModule extends BaseModule {
       });
 
       if (!takeOutItemLabel) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label is not registered in this Take Out Work Order',
-          code: 400
-        };
+        const currentAssignedCount = await TWorkOrderStoringItemLabel.count({
+          where: {
+            wo_item_id: woItem.id
+          },
+          transaction: t
+        });
+
+        if (currentAssignedCount >= Number(woItem.total_kanban || 0)) {
+          await t.rollback();
+          return {
+            status: false,
+            message: 'Selected label is not registered in this Take Out Work Order',
+            code: 400
+          };
+        }
+
+        takeOutItemLabel = await TWorkOrderStoringItemLabel.create({
+          wo_item_id: woItem.id,
+          label_id: label.id,
+          is_scanned_in: true,
+          is_scanned_out: false
+        }, {
+          transaction: t
+        });
       }
 
       if (takeOutItemLabel.is_scanned_out) {
@@ -672,16 +596,62 @@ class TakeOutModule extends BaseModule {
         };
       }
 
+      const stockRows = await db.sequelize.query(`
+        SELECT
+          ws.id AS stock_id,
+          ws.wo_item_label_id,
+          ws.bin_id
+        FROM t_warehouse_stock ws
+        JOIN t_work_order_storing_item_label source_wil
+          ON source_wil.id = ws.wo_item_label_id
+        WHERE source_wil.label_id = :label_id
+        ORDER BY ws.id ASC
+        LIMIT 1
+      `, {
+        replacements: {
+          label_id: label.id
+        },
+        type: QueryTypes.SELECT,
+        transaction: t
+      });
+
+      const stockRow = stockRows[0];
+
+      if (!stockRow) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Label is not currently available in warehouse stock',
+          code: 400,
+          debug: {
+            label_number,
+            label_id: label.id,
+            take_out_wo_item_id: woItem.id,
+            take_out_wo_item_label_id: takeOutItemLabel.id
+          }
+        };
+      }
+
+      const stock = {
+        id: stockRow.stock_id,
+        wo_item_label_id: stockRow.wo_item_label_id,
+        bin_id: stockRow.bin_id
+      };
+
       await takeOutItemLabel.update({
         is_scanned_out: true
-      }, { transaction: t });
+      }, {
+        transaction: t
+      });
 
       await TWarehouseStockLog.create({
         wh_stock_id: stock.id,
         user_id: req.user?.id,
         is_placement: false,
         qty_per_kanban: 1
-      }, { transaction: t });
+      }, {
+        transaction: t
+      });
 
       await TWarehouseStock.destroy({
         where: {
@@ -693,7 +663,9 @@ class TakeOutModule extends BaseModule {
       if (workOrder.wo_status_id === 2) {
         await workOrder.update({
           wo_status_id: 3
-        }, { transaction: t });
+        }, {
+          transaction: t
+        });
       }
 
       const totalLabels = await TWorkOrderStoringItemLabel.count({
@@ -724,7 +696,9 @@ class TakeOutModule extends BaseModule {
       if (totalLabels > 0 && totalLabels === totalScannedOut) {
         await workOrder.update({
           wo_status_id: 4
-        }, { transaction: t });
+        }, {
+          transaction: t
+        });
       }
 
       await t.commit();
@@ -737,6 +711,8 @@ class TakeOutModule extends BaseModule {
           wo_number: workOrder.wo_number,
           label_number,
           placement: 'OUT',
+          fifo_override: false,
+          recommended_label: label_number,
           wo_item_label_id: takeOutItemLabel.id,
           total_label: totalLabels,
           total_scanned_out: totalScannedOut,
@@ -744,7 +720,9 @@ class TakeOutModule extends BaseModule {
         }
       };
     } catch (error) {
-      await t.rollback();
+      if (!t.finished) {
+        await t.rollback();
+      }
 
       return config.debug
         ? { status: false, error: error.message, code: 500 }

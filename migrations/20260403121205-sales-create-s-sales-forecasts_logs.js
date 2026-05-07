@@ -43,6 +43,10 @@ export default {
         onUpdate: 'CASCADE',
         onDelete: 'RESTRICT'
       },
+      details_snapshot: {
+        type: Sequelize.JSON,
+        comment: 'Snapshot of forecast details in JSON format'
+      },
       created_at: {
         allowNull: false,
         type: Sequelize.DATE,

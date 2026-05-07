@@ -32,6 +32,9 @@ export default (sequelize) => {
     changed_by: {
       type: DataTypes.INTEGER,
       allowNull: false
+    },
+    details_snapshot: {
+      type: DataTypes.JSON
     }
   }, {
     sequelize,

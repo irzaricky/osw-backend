@@ -7,8 +7,8 @@ import ExcelJS from 'exceljs';
 import Joi from 'joi';
 import dayjs from 'dayjs';
 
-const { 
-  SSalesForecasts, SSalesForecastDetails, SSalesForecastLogs, 
+const {
+  SSalesForecasts, SSalesForecastDetails, SSalesForecastLogs,
   SCustomers, SParts, SUsers, SUserDetail,
   SSalesPurchaseRequests, SSalesPurchaseRequestDetails
 } = db;
@@ -172,6 +172,138 @@ class ForecastModule extends BaseModule {
       res.end();
     } catch (error) {
       return helper.sendResponse(res, { status: false, message: 'Failed to generate template', code: 500 });
+    }
+  }
+
+  async exportExcel(req, res) {
+    try {
+      const { id } = req.params;
+      const { log_id } = req.query;
+
+      const forecast = await SSalesForecasts.findByPk(id, {
+        include: [
+          {
+            model: SCustomers,
+            as: 'customer',
+            attributes: ['customer_code', 'name']
+          },
+          {
+            model: SSalesForecastDetails,
+            as: 'details',
+            include: [
+              {
+                model: SParts,
+                as: 'part',
+                attributes: ['part_number', 'part_name']
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!forecast) {
+        return helper.sendResponse(res, { status: false, message: 'Forecast not found', code: 404 });
+      }
+
+      let details = [];
+      let displayVersion = forecast.version;
+
+      if (log_id) {
+        const log = await SSalesForecastLogs.findByPk(log_id);
+        if (log && log.details_snapshot) {
+          try {
+            details = JSON.parse(log.details_snapshot);
+            displayVersion = log.version;
+          } catch (e) {
+            return helper.sendResponse(res, { status: false, message: 'Invalid historical data format.', code: 500 });
+          }
+        } else {
+          return helper.sendResponse(res, { status: false, message: 'Historical snapshot not found for this log.', code: 404 });
+        }
+      } else {
+        details = forecast.details.map(d => ({
+          part_number: d.part?.part_number,
+          part_name: d.part?.part_name,
+          period_date: d.period_date,
+          qty_status: d.qty_status,
+          forecast_qty: d.forecast_qty
+        }));
+      }
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Forecast Details');
+
+      // 1. Header Info
+      worksheet.mergeCells('A1:B1');
+      worksheet.getCell('A1').value = log_id ? `SALES FORECAST (HISTORICAL ${displayVersion})` : 'SALES FORECAST (CURRENT)';
+      worksheet.getCell('A1').font = { size: 14, bold: true };
+
+      worksheet.addRow(['Forecast Number', forecast.forecast_number]);
+      worksheet.addRow(['Type', forecast.forecast_type]);
+      worksheet.addRow(['Customer', `[${forecast.customer.customer_code}] ${forecast.customer.name}`]);
+      worksheet.addRow(['Period', `${dayjs(forecast.start_period).format('MMM YYYY')} - ${dayjs(forecast.end_period).format('MMM YYYY')}`]);
+      worksheet.addRow(['Status', log_id ? 'Historical' : forecast.status]);
+      worksheet.addRow(['Version', displayVersion]);
+      worksheet.addRow([]); // Spacer
+
+      // 2. Table Headers
+      const tableHeaderRow = ['No', 'Part Number', 'Part Name', 'Period Date', 'Status', 'Qty'];
+      const headerRow = worksheet.addRow(tableHeaderRow);
+      headerRow.font = { bold: true };
+      headerRow.eachCell((cell) => {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFE0E0E0' }
+        };
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+      });
+
+      // 3. Data Rows
+      details.forEach((detail, index) => {
+        const rowData = [
+          index + 1,
+          detail.part_number,
+          detail.part_name,
+          dayjs(detail.period_date).format('YYYY-MM-DD'),
+          detail.qty_status,
+          detail.forecast_qty
+        ];
+        const row = worksheet.addRow(rowData);
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
+      });
+
+      // Adjust column widths
+      worksheet.getColumn(1).width = 5;
+      worksheet.getColumn(2).width = 25;
+      worksheet.getColumn(3).width = 35;
+      worksheet.getColumn(4).width = 20;
+      worksheet.getColumn(5).width = 15;
+      worksheet.getColumn(6).width = 15;
+
+      const filename = `Forecast_${forecast.forecast_number}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      if (config.debug) {
+        return helper.sendResponse(res, { status: false, error: error.message, code: 500 });
+      }
+      return helper.sendResponse(res, { status: false, message: 'Failed to export excel', code: 500 });
     }
   }
 
@@ -595,11 +727,15 @@ class ForecastModule extends BaseModule {
             : start_period; // single record covers the full period
 
           let calculatedQtyStatus;
-          const periodMonthStr = dayjs(effectivePeriodDate).format('YYYY-MM');
-          if (periodMonthStr <= currentMonthStr) {
-            calculatedQtyStatus = 'Fix';
-          } else {
+          if (forecast_type === 'Yearly' || forecast_type === 'Half-Year') {
             calculatedQtyStatus = 'Temporary';
+          } else {
+            const periodMonthStr = dayjs(effectivePeriodDate).format('YYYY-MM');
+            if (periodMonthStr <= currentMonthStr) {
+              calculatedQtyStatus = 'Fix';
+            } else {
+              calculatedQtyStatus = 'Temporary';
+            }
           }
 
           return {
@@ -782,7 +918,7 @@ class ForecastModule extends BaseModule {
 
       const { details } = validation.value;
       const oldData = JSON.parse(JSON.stringify(forecast));
-      
+
       const existingDetails = await SSalesForecastDetails.findAll({
         where: { forecast_id: forecast.id },
         transaction: t
@@ -835,11 +971,15 @@ class ForecastModule extends BaseModule {
 
         const effectivePeriodDate = is4Month ? detail.period_date : forecast.start_period;
         let calculatedQtyStatus;
-        const periodMonthStr = dayjs(effectivePeriodDate).format('YYYY-MM');
-        if (periodMonthStr <= currentMonthStr) {
-          calculatedQtyStatus = 'Fix';
-        } else {
+        if (forecast.forecast_type === 'Yearly' || forecast.forecast_type === 'Half-Year') {
           calculatedQtyStatus = 'Temporary';
+        } else {
+          const periodMonthStr = dayjs(effectivePeriodDate).format('YYYY-MM');
+          if (periodMonthStr <= currentMonthStr) {
+            calculatedQtyStatus = 'Fix';
+          } else {
+            calculatedQtyStatus = 'Temporary';
+          }
         }
 
         if (detail.id) {
@@ -981,7 +1121,13 @@ class ForecastModule extends BaseModule {
       const currentUser = req.user;
 
       const forecast = await SSalesForecasts.findByPk(id, {
-        include: [{ model: SSalesForecastDetails, as: 'details' }],
+        include: [
+          {
+            model: SSalesForecastDetails,
+            as: 'details',
+            include: [{ model: SParts, as: 'part', attributes: ['part_number', 'part_name'] }]
+          }
+        ],
         transaction: t
       });
 
@@ -997,6 +1143,17 @@ class ForecastModule extends BaseModule {
 
       const oldData = JSON.parse(JSON.stringify(forecast));
       const currentTotalQty = forecast.details.reduce((sum, d) => sum + d.forecast_qty, 0);
+
+      if (forecast.details.length === 0) {
+        await t.rollback();
+        return { status: false, message: 'Forecast details cannot be empty.', code: 400 };
+      }
+
+      if (currentTotalQty <= 0) {
+        await t.rollback();
+        return { status: false, message: 'Total forecast quantity must be greater than 0.', code: 400 };
+      }
+
       const updates = { status: 'Submitted' };
 
       if (forecast.status === 'Rejected') {
@@ -1008,16 +1165,26 @@ class ForecastModule extends BaseModule {
 
         if (lastRejectedLog && Number(lastRejectedLog.total_qty) === Number(currentTotalQty)) {
           await t.rollback();
-          return { 
-            status: false, 
-            message: 'Quantity must be modified before resubmitting.', 
-            code: 400 
+          return {
+            status: false,
+            message: 'Quantity must be modified before resubmitting.',
+            code: 400
           };
         }
         updates.version = this._incrementVersion(forecast.version);
       }
 
       await forecast.update(updates, { transaction: t });
+
+      // Create snapshot of details
+      const detailsSnapshot = JSON.stringify(forecast.details.map(d => ({
+        part_id: d.part_id,
+        part_number: d.part?.part_number,
+        part_name: d.part?.part_name,
+        period_date: d.period_date,
+        qty_status: d.qty_status,
+        forecast_qty: d.forecast_qty
+      })));
 
       // Log action
       await SSalesForecastLogs.create({
@@ -1026,6 +1193,7 @@ class ForecastModule extends BaseModule {
         total_qty: currentTotalQty,
         action: 'Submitted',
         remarks: 'Forecast submitted for review',
+        details_snapshot: detailsSnapshot,
         changed_by: currentUser.id
       }, { transaction: t });
 

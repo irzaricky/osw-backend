@@ -41,6 +41,10 @@ router.post('/upload-detail', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, result);
 });
 
+router.get('/:id/export', session.sessionChecker, async (req, res) => {
+  await module.exportExcel(req, res);
+});
+
 router.get('/:forecast_id/historical-qty', session.sessionChecker, async (req, res) => {
   const result = await module.getHistoricalQty(req);
   return helper.sendResponse(res, result);

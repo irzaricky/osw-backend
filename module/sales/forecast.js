@@ -535,19 +535,17 @@ class ForecastModule extends BaseModule {
       let start_period, end_period;
 
       if (forecast_type === 'Yearly') {
-        const nextYear = today.add(1, 'year').year();
-        start_period = `${nextYear}-01-01`;
-        end_period = `${nextYear}-12-31`;
+        const currentYear = today.year();
+        start_period = `${currentYear}-01-01`;
+        end_period = `${currentYear}-12-31`;
       } else if (forecast_type === 'Half-Year') {
-        // Next semester: if today is in H1 (Jan-Jun) → H2 starts Jul, if H2 (Jul-Dec) → H1 of next year
         const currentMonth = today.month() + 1; // 1-12
         if (currentMonth <= 6) {
+          start_period = `${today.year()}-01-01`;
+          end_period = `${today.year()}-06-30`;
+        } else {
           start_period = `${today.year()}-07-01`;
           end_period = `${today.year()}-12-31`;
-        } else {
-          const nextYear = today.add(1, 'year').year();
-          start_period = `${nextYear}-01-01`;
-          end_period = `${nextYear}-06-30`;
         }
       } else if (forecast_type === '4-Month') {
         start_period = today.startOf('month').format('YYYY-MM-DD');

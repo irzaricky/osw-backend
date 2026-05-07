@@ -14,9 +14,6 @@ export default (sequelize) => {
 
       // Part belongs to Supplier
       SParts.belongsTo(models.SSuppliers, { foreignKey: 'supplier_id', as: 'supplier' });
-
-      // Part belongs to Package
-      SParts.belongsTo(models.SPackages, { foreignKey: 'package_id', as: 'package' });
     }
   }
 
@@ -52,11 +49,7 @@ export default (sequelize) => {
     
     // Common
     package_name: DataTypes.STRING,
-    package_code: DataTypes.STRING,
-    package_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    }
+    package_code: DataTypes.STRING
   }, {
     sequelize,
     modelName: 'SParts',

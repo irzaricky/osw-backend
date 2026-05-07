@@ -42,8 +42,8 @@ class WarehouseModule extends BaseModule {
         },
         {
           model: RefWarehouseCategories,
-          as: 'category',
-          attributes: ['id', 'name']
+            as: 'category',
+            attributes: ['id', 'name']
         }
       ];
 
@@ -425,7 +425,7 @@ class WarehouseModule extends BaseModule {
     try {
       const categories = await RefWarehouseCategories.findAll({
         attributes: ['id', 'name'],
-        order: [['id', 'ASC']]
+        order: [['name', 'ASC']]
       });
 
       return {

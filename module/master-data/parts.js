@@ -1,6 +1,6 @@
 import db from '../../models/index.js'
 import { config } from '../../config/app.config.js'
-import { Op, QueryTypes } from 'sequelize'
+import { Op } from 'sequelize'
 import helper from '../../class/helper.class.js'
 import BaseModule from '../../class/base.module.js'
 import ExcelJS from 'exceljs'
@@ -14,72 +14,25 @@ class PartsModule extends BaseModule {
       const params = req.query || {}
       const search = (params.search || '').trim()
       const partTypeCode = (params.part_type_code || '').trim()
-      const wo_category = (params.wo_category || '').trim()
-      const area_id = params.area_id ? parseInt(params.area_id) : null
 
-      let rows
+      const where = { deleted_at: null }
 
-      if (wo_category === 'take_out' && area_id) {
-        let whereClause = ''
-        const replacements = { area_id }
-
-        if (partTypeCode) {
-          whereClause += ' AND part.part_type_code = :part_type_code'
-          replacements.part_type_code = partTypeCode
-        }
-
-        if (search) {
-          whereClause += ` AND (part.part_number ILIKE :search OR part.part_name ILIKE :search)`
-          replacements.search = `%${search}%`
-        }
-
-        rows = await db.sequelize.query(`
-          SELECT
-            part.id,
-            part.part_number,
-            part.part_name,
-            part.part_type_code,
-            COUNT(ws.id)::int AS available_stock
-          FROM t_warehouse_stock ws
-          JOIN s_warehouse_bins b ON b.id = ws.bin_id
-          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-          JOIN t_part_labels label ON label.id = wil.label_id
-          JOIN s_parts part ON part.id = label.part_id
-          WHERE b.area_id = :area_id ${whereClause}
-          GROUP BY part.id, part.part_number, part.part_name, part.part_type_code
-          ORDER BY part.part_number ASC
-        `, {
-          replacements,
-          type: QueryTypes.SELECT
-        })
-
-        rows = rows.map(row => ({
-          id: row.id,
-          part_number: row.part_number,
-          part_name: row.part_name,
-          part_type_code: row.part_type_code,
-          available_stock: row.available_stock
-        }))
-      } else {
-        const where = { deleted_at: null }
-
-        if (partTypeCode) {
-          where.part_type_code = partTypeCode
-        }
-
-        if (search) {
-          where[Op.or] = [
-            { part_number: { [Op.iLike]: `%${search}%` } },
-            { part_name: { [Op.iLike]: `%${search}%` } }
-          ]
-        }
-
-        rows = await SParts.findAll({
-          where,
-          attributes: ['id', 'part_number', 'part_name', 'part_type_code'],
-          order: [['part_number', 'ASC']]
-        })
+      if (partTypeCode) {
+        where.part_type_code = partTypeCode
       }
+
+      if (search) {
+        where[Op.or] = [
+          { part_number: { [Op.iLike]: `%${search}%` } },
+          { part_name: { [Op.iLike]: `%${search}%` } }
+        ]
+      }
+
+      const rows = await SParts.findAll({
+        where,
+        attributes: ['id', 'part_number', 'part_name', 'part_type_code'],
+        order: [['part_number', 'ASC']]
+      })
 
       return helper.sendResponse(res, {
         status: true,

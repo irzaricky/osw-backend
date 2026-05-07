@@ -46,6 +46,11 @@ router.get('/:forecast_id/historical-qty', session.sessionChecker, async (req, r
   return helper.sendResponse(res, result);
 });
 
+router.get('/:forecast_id/logs', session.sessionChecker, async (req, res) => {
+  const result = await module.getLogs(req);
+  return helper.sendResponse(res, result);
+});
+
 router.get('/:id', session.sessionChecker, async (req, res) => {
   const result = await module.detail(req);
   return helper.sendResponse(res, result);

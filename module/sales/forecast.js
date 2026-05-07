@@ -339,6 +339,36 @@ class ForecastModule extends BaseModule {
     }
   }
 
+  async getLogs(req) {
+    try {
+      const { forecast_id } = req.params;
+
+      const logs = await SSalesForecastLogs.findAll({
+        where: { forecast_id },
+        include: [
+          {
+            model: SUsers,
+            as: 'user',
+            attributes: ['id', 'email'],
+            include: [
+              {
+                model: SUserDetail,
+                as: 'user_detail',
+                attributes: ['full_name']
+              }
+            ]
+          }
+        ],
+        order: [['created_at', 'DESC']]
+      });
+
+      return { status: true, data: logs };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
   async getHistoricalQty(req) {
     try {
       const { forecast_id } = req.params;

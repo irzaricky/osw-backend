@@ -3,7 +3,7 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class SCustomers extends Model {
     static associate(models) {
-      // Define associations here if needed
+      SCustomers.hasMany(models.SSalesForecasts, { foreignKey: 'customer_id', as: 'forecasts' });
     }
   }
 

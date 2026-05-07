@@ -1,40 +1,54 @@
 /** @type {import('sequelize-cli').Migration} */
 export default {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('s_vehicles', {
+    await queryInterface.createTable('s_sales_purchase_order_details', {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
         type: Sequelize.INTEGER
       },
-      vehicle_code: {
-        allowNull: false,
-        type: Sequelize.STRING(20)
-      },
-      plate_number: {
-        allowNull: false,
-        type: Sequelize.STRING(20)
-      },
-      vehicle_type_id: {
+      spo_id: {
         allowNull: false,
         type: Sequelize.INTEGER,
         references: {
-          model: 'ref_vehicle_types',
+          model: 's_sales_purchase_orders',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'CASCADE'
+      },
+      part_id: {
+        allowNull: false,
+        type: Sequelize.INTEGER,
+        references: {
+          model: 's_parts',
           key: 'id'
         },
         onUpdate: 'CASCADE',
         onDelete: 'RESTRICT'
       },
-      image: {
+      ordered_qty: {
+        allowNull: false,
+        defaultValue: 0,
+        type: Sequelize.INTEGER
+      },
+      sent_qty: {
+        allowNull: false,
+        defaultValue: 0,
+        type: Sequelize.INTEGER,
+        comment: 'Jumlah yang sudah terkirim'
+      },
+      last_shipment_date: {
         allowNull: true,
-        type: Sequelize.STRING(255)
+        type: Sequelize.DATEONLY,
+        comment: 'Tanggal pengiriman terakhir'
       },
       status: {
         allowNull: false,
-        type: Sequelize.BOOLEAN,
-        defaultValue: true,
-        comment: 'Active/Inactive'
+        defaultValue: 'Open',
+        type: Sequelize.STRING(20),
+        comment: 'Open, Partial, Closed'
       },
       created_at: {
         allowNull: false,
@@ -47,13 +61,11 @@ export default {
         defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       },
       deleted_at: {
-        allowNull: true,
         type: Sequelize.DATE
       }
     });
   },
-
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('s_vehicles');
+    await queryInterface.dropTable('s_sales_purchase_order_details');
   }
 };

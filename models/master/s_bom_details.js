@@ -25,6 +25,7 @@ export default (sequelize) => {
       defaultValue: 1
     },
     level: DataTypes.INTEGER,
+    type: DataTypes.STRING(50),
     child_bom_number: DataTypes.STRING,
     notes: DataTypes.TEXT
   }, {

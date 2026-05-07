@@ -10,7 +10,6 @@ export default {
       },
       name: {
         allowNull: false,
-        unique: true,
         type: Sequelize.STRING(50)
       },
       load_capacity: {

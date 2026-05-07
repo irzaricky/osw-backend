@@ -4,9 +4,9 @@ export default {
 
     // 1. Seed Warehouse Categories
     const categories = [
-      { id: 1, name: 'Raw Materials', ...timestamp },
-      { id: 2, name: 'WIP', ...timestamp },
-      { id: 3, name: 'Finish Good', ...timestamp }
+      { name: 'Raw Materials', ...timestamp },
+      { name: 'WIP', ...timestamp },
+      { name: 'Finish Good', ...timestamp }
     ];
     await queryInterface.bulkInsert('ref_warehouse_categories', categories, { ignoreDuplicates: true });
 
@@ -50,32 +50,32 @@ export default {
     // Assuming Factory ID 2 is 'Factory Warehouse' from previous seed.
     // Assuming Line IDs: 'Line Material' (ID 12), 'Line Finish Good' (ID 14) from previous seed.
     const warehouses = [
-      { id: 1, warehouse_code: 'WH-MAT-01', name: 'Main Material Warehouse', line_id: 12, category_id: 1, notes: 'Gudang utama penyimpanan sparepart & komponen vendor', ...timestamp },
-      { id: 2, warehouse_code: 'WH-WIP-02', name: 'Work In Proggress warehouse', line_id: 12, category_id: 2, notes: 'Gudang menyimpan barang setengah jadi', ...timestamp },
-      { id: 3, warehouse_code: 'WH-FG-03', name: 'Finish Good Warehouse', line_id: 14, category_id: 3, notes: 'Gudang penyimpanan sepeda yang sudah dirakit & packing', ...timestamp }
+      { warehouse_code: 'WH-MAT-01', name: 'Main Material Warehouse', line_id: 12, category_id: 1, notes: 'Gudang utama penyimpanan sparepart & komponen vendor', ...timestamp },
+      { warehouse_code: 'WH-WIP-02', name: 'Work In Proggress warehouse', line_id: 12, category_id: 2, notes: 'Gudang menyimpan barang setengah jadi', ...timestamp },
+      { warehouse_code: 'WH-FG-03', name: 'Finish Good Warehouse', line_id: 14, category_id: 3, notes: 'Gudang penyimpanan sepeda yang sudah dirakit & packing', ...timestamp }
     ];
     await queryInterface.bulkInsert('s_warehouses', warehouses, { ignoreDuplicates: true });
 
     // 4. Seed Warehouse Areas
     const areas = [
       // WH-MAT-01 Areas
-      { id: 1, area_code: 'AREA-ELEC', name: 'Electronic & Battery Zone', warehouse_id: 1, total_cols: 5, total_rows: 4, notes: 'Area khusus Baterai', ...timestamp },
-      { id: 2, area_code: 'AREA-FRAME', name: 'Heavy Metal Zone', warehouse_id: 1, total_cols: 10, total_rows: 3, notes: 'Area khusus Frame, Fork, dan Logam berat', ...timestamp },
-      { id: 3, area_code: 'AREA-SMALL', name: 'Small Parts Zone', warehouse_id: 1, total_cols: 5, total_rows: 4, notes: 'Area Baut, Mur, Kabel, Jari-jari', ...timestamp },
-      { id: 4, area_code: 'AREA-TIRE', name: 'Rubber & Rim Zone', warehouse_id: 1, total_cols: 8, total_rows: 4, notes: 'Area Ban dan Velg', ...timestamp },
+      { area_code: 'AREA-ELEC', name: 'Electronic & Battery Zone', warehouse_id: 1, total_cols: 5, total_rows: 4, notes: 'Area khusus Baterai', ...timestamp },
+      { area_code: 'AREA-FRAME', name: 'Heavy Metal Zone', warehouse_id: 1, total_cols: 10, total_rows: 3, notes: 'Area khusus Frame, Fork, dan Logam berat', ...timestamp },
+      { area_code: 'AREA-SMALL', name: 'Small Parts Zone', warehouse_id: 1, total_cols: 5, total_rows: 4, notes: 'Area Baut, Mur, Kabel, Jari-jari', ...timestamp },
+      { area_code: 'AREA-TIRE', name: 'Rubber & Rim Zone', warehouse_id: 1, total_cols: 8, total_rows: 4, notes: 'Area Ban dan Velg', ...timestamp },
       
       // WH-WIP-02 Areas
-      { id: 5, area_code: 'WIP-FRAME', name: 'WIP Frame & Fork', warehouse_id: 2, total_cols: 6, total_rows: 3, notes: 'Proses perakitan rangka', ...timestamp },
-      { id: 6, area_code: 'WIP-WHEEL', name: 'WIP Wheel Assembly', warehouse_id: 2, total_cols: 6, total_rows: 3, notes: 'Perakitan roda & motor', ...timestamp },
-      { id: 7, area_code: 'WIP-ELEC', name: 'WIP Electrical Assembly', warehouse_id: 2, total_cols: 5, total_rows: 3, notes: 'Instalasi baterai & controller', ...timestamp },
-      { id: 8, area_code: 'WIP-GENERAL', name: 'WIP General Assembly', warehouse_id: 2, total_cols: 6, total_rows: 4, notes: 'Perakitan akhir sepeda', ...timestamp },
+      { area_code: 'WIP-FRAME', name: 'WIP Frame & Fork', warehouse_id: 2, total_cols: 6, total_rows: 3, notes: 'Proses perakitan rangka', ...timestamp },
+      { area_code: 'WIP-WHEEL', name: 'WIP Wheel Assembly', warehouse_id: 2, total_cols: 6, total_rows: 3, notes: 'Perakitan roda & motor', ...timestamp },
+      { area_code: 'WIP-ELEC', name: 'WIP Electrical Assembly', warehouse_id: 2, total_cols: 5, total_rows: 3, notes: 'Instalasi baterai & controller', ...timestamp },
+      { area_code: 'WIP-GENERAL', name: 'WIP General Assembly', warehouse_id: 2, total_cols: 6, total_rows: 4, notes: 'Perakitan akhir sepeda', ...timestamp },
 
       // WH-FG-03 Areas
-      { id: 9, area_code: 'AREA-VOLT', name: 'VoltCity Staging Area', warehouse_id: 3, total_cols: 6, total_rows: 2, notes: 'Area khusus Sepeda Volt (Box Besar)', ...timestamp },
-      { id: 10, area_code: 'AREA-ECO', name: 'EcoFold Staging Area', warehouse_id: 3, total_cols: 5, total_rows: 3, notes: 'Area khusus Sepeda Eco (Box Standart)', ...timestamp },
+      { area_code: 'AREA-VOLT', name: 'VoltCity Staging Area', warehouse_id: 3, total_cols: 6, total_rows: 2, notes: 'Area khusus Sepeda Volt (Box Besar)', ...timestamp },
+      { area_code: 'AREA-ECO', name: 'EcoFold Staging Area', warehouse_id: 3, total_cols: 5, total_rows: 3, notes: 'Area khusus Sepeda Eco (Box Standart)', ...timestamp },
       
       // Extra Area for Rejects (implied by bins) - assigning to WH-MAT-01 for now
-      { id: 11, area_code: 'AREA-REJECT', name: 'Quarantine Area', warehouse_id: 1, total_cols: 5, total_rows: 5, notes: 'Area Barang NG', ...timestamp }
+      { area_code: 'AREA-REJECT', name: 'Quarantine Area', warehouse_id: 1, total_cols: 5, total_rows: 5, notes: 'Area Barang NG', ...timestamp }
     ];
     await queryInterface.bulkInsert('s_warehouse_areas', areas, { ignoreDuplicates: true });
 

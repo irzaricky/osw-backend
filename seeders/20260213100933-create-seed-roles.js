@@ -2,10 +2,10 @@ export default {
   async up(queryInterface, Sequelize) {
     // 1. Seed Divisions
     await queryInterface.bulkInsert('ref_divisions', [
-      { id: 1, name: 'SALES', created_at: new Date(), updated_at: new Date() },
-      { id: 2, name: 'WAREHOUSE', created_at: new Date(), updated_at: new Date() },
-      { id: 3, name: 'PPIC', created_at: new Date(), updated_at: new Date() },
-      { id: 4, name: 'PURCHASING', created_at: new Date(), updated_at: new Date() }
+      { name: 'SALES', created_at: new Date(), updated_at: new Date() },
+      { name: 'WAREHOUSE', created_at: new Date(), updated_at: new Date() },
+      { name: 'PPIC', created_at: new Date(), updated_at: new Date() },
+      { name: 'PURCHASING', created_at: new Date(), updated_at: new Date() }
     ]);
 
     // 2. Seed Roles

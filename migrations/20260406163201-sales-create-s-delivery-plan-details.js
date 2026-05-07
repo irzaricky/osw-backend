@@ -1,40 +1,38 @@
 /** @type {import('sequelize-cli').Migration} */
 export default {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('s_vehicles', {
+    await queryInterface.createTable('s_delivery_plan_details', {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
         type: Sequelize.INTEGER
       },
-      vehicle_code: {
-        allowNull: false,
-        type: Sequelize.STRING(20)
-      },
-      plate_number: {
-        allowNull: false,
-        type: Sequelize.STRING(20)
-      },
-      vehicle_type_id: {
+      delivery_plan_id: {
         allowNull: false,
         type: Sequelize.INTEGER,
         references: {
-          model: 'ref_vehicle_types',
+          model: 's_delivery_plans',
           key: 'id'
         },
         onUpdate: 'CASCADE',
-        onDelete: 'RESTRICT'
+        onDelete: 'CASCADE'
       },
-      image: {
-        allowNull: true,
-        type: Sequelize.STRING(255)
-      },
-      status: {
+      spo_detail_id: {
         allowNull: false,
-        type: Sequelize.BOOLEAN,
-        defaultValue: true,
-        comment: 'Active/Inactive'
+        type: Sequelize.INTEGER,
+        references: {
+          model: 's_sales_purchase_order_details',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'RESTRICT',
+        comment: 'Referensi ke detail item SPO / Sales Order yang akan dikirim'
+      },
+      planned_qty: {
+        allowNull: false,
+        defaultValue: 0,
+        type: Sequelize.INTEGER
       },
       created_at: {
         allowNull: false,
@@ -47,13 +45,12 @@ export default {
         defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       },
       deleted_at: {
-        allowNull: true,
         type: Sequelize.DATE
       }
     });
   },
 
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('s_vehicles');
+    await queryInterface.dropTable('s_delivery_plan_details');
   }
 };

@@ -10,8 +10,7 @@ export default (sequelize) => {
   RefVehicleType.init({
     name: {
       type: DataTypes.STRING,
-      allowNull: false,
-      unique: true
+      allowNull: false
     },
     load_capacity: {
       type: DataTypes.INTEGER,

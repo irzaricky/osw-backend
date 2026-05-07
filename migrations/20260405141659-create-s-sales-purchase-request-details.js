@@ -1,40 +1,37 @@
 /** @type {import('sequelize-cli').Migration} */
 export default {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('s_vehicles', {
+    await queryInterface.createTable('s_sales_purchase_request_details', {
       id: {
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
         type: Sequelize.INTEGER
       },
-      vehicle_code: {
-        allowNull: false,
-        type: Sequelize.STRING(20)
-      },
-      plate_number: {
-        allowNull: false,
-        type: Sequelize.STRING(20)
-      },
-      vehicle_type_id: {
+      spr_id: {
         allowNull: false,
         type: Sequelize.INTEGER,
         references: {
-          model: 'ref_vehicle_types',
+          model: 's_sales_purchase_requests',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'CASCADE'
+      },
+      part_id: {
+        allowNull: false,
+        type: Sequelize.INTEGER,
+        references: {
+          model: 's_parts',
           key: 'id'
         },
         onUpdate: 'CASCADE',
         onDelete: 'RESTRICT'
       },
-      image: {
-        allowNull: true,
-        type: Sequelize.STRING(255)
-      },
-      status: {
+      qty: {
         allowNull: false,
-        type: Sequelize.BOOLEAN,
-        defaultValue: true,
-        comment: 'Active/Inactive'
+        defaultValue: 0,
+        type: Sequelize.INTEGER
       },
       created_at: {
         allowNull: false,
@@ -47,13 +44,11 @@ export default {
         defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       },
       deleted_at: {
-        allowNull: true,
         type: Sequelize.DATE
       }
     });
   },
-
   async down(queryInterface, Sequelize) {
-    await queryInterface.dropTable('s_vehicles');
+    await queryInterface.dropTable('s_sales_purchase_request_details');
   }
 };

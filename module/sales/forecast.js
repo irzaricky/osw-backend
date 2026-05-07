@@ -493,6 +493,16 @@ class ForecastModule extends BaseModule {
     return `${prefix}-${seq.toString().padStart(4, '0')}`;
   }
 
+  _incrementVersion(currentVersion) {
+    if (!currentVersion) return 'V1';
+    const match = currentVersion.match(/^V(\d+)$/);
+    if (match) {
+      const nextNum = parseInt(match[1], 10) + 1;
+      return `V${nextNum}`;
+    }
+    return 'V1';
+  }
+
   async createDraft(req) {
     const t = await db.sequelize.transaction();
     try {
@@ -655,9 +665,9 @@ class ForecastModule extends BaseModule {
         return { status: false, message: 'Forecast not found', code: 404 };
       }
 
-      if (forecast.status !== 'Draft') {
+      if (!['Draft', 'Rejected'].includes(forecast.status)) {
         await t.rollback();
-        return { status: false, message: 'Only Draft forecasts can be updated directly', code: 400 };
+        return { status: false, message: 'Only Draft or Rejected forecasts can be updated directly', code: 400 };
       }
 
       const schema = Joi.object({
@@ -750,9 +760,9 @@ class ForecastModule extends BaseModule {
         return { status: false, message: 'Forecast not found', code: 404 };
       }
 
-      if (forecast.status !== 'Draft') {
+      if (!['Draft', 'Rejected'].includes(forecast.status)) {
         await t.rollback();
-        return { status: false, message: 'Only Draft forecasts can be updated directly', code: 400 };
+        return { status: false, message: 'Only Draft or Rejected forecasts can be updated directly', code: 400 };
       }
 
       const detailSchema = Joi.object({
@@ -988,16 +998,34 @@ class ForecastModule extends BaseModule {
       }
 
       const oldData = JSON.parse(JSON.stringify(forecast));
+      const currentTotalQty = forecast.details.reduce((sum, d) => sum + d.forecast_qty, 0);
+      const updates = { status: 'Submitted' };
 
-      await forecast.update({
-        status: 'Submitted'
-      }, { transaction: t });
+      if (forecast.status === 'Rejected') {
+        const lastRejectedLog = await SSalesForecastLogs.findOne({
+          where: { forecast_id: id, action: 'Rejected' },
+          order: [['created_at', 'DESC']],
+          transaction: t
+        });
+
+        if (lastRejectedLog && Number(lastRejectedLog.total_qty) === Number(currentTotalQty)) {
+          await t.rollback();
+          return { 
+            status: false, 
+            message: 'Quantity must be modified before resubmitting.', 
+            code: 400 
+          };
+        }
+        updates.version = this._incrementVersion(forecast.version);
+      }
+
+      await forecast.update(updates, { transaction: t });
 
       // Log action
       await SSalesForecastLogs.create({
         forecast_id: forecast.id,
         version: forecast.version,
-        total_qty: forecast.details.reduce((sum, d) => sum + d.forecast_qty, 0),
+        total_qty: currentTotalQty,
         action: 'Submitted',
         remarks: 'Forecast submitted for review',
         changed_by: currentUser.id

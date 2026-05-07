@@ -1,6 +1,6 @@
 import db from '../../models/index.js';
 import { config } from '../../config/app.config.js';
-import { Op, QueryTypes } from 'sequelize';
+import { Op, fn, col, QueryTypes, where as sequelizeWhere } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
@@ -19,6 +19,8 @@ class WorkOrderStoringModule extends BaseModule {
       const search = params.search || '';
       const wo_status_id = params.wo_status_id;
       const wo_category = params.wo_category;
+      const start_date = params.start_date;
+      const end_date = params.end_date;
 
       const where = {};
 
@@ -32,6 +34,35 @@ class WorkOrderStoringModule extends BaseModule {
 
       if (wo_category) {
         where.wo_category = wo_category;
+      }
+
+      if (start_date && end_date) {
+        where[Op.and] = [
+          sequelizeWhere(
+            fn('DATE', col('wo_date')),
+            {
+              [Op.between]: [start_date, end_date]
+            }
+          )
+        ];
+      } else if (start_date) {
+        where[Op.and] = [
+          sequelizeWhere(
+            fn('DATE', col('wo_date')),
+            {
+              [Op.gte]: start_date
+            }
+          )
+        ];
+      } else if (end_date) {
+        where[Op.and] = [
+          sequelizeWhere(
+            fn('DATE', col('wo_date')),
+            {
+              [Op.lte]: end_date
+            }
+          )
+        ];
       }
 
       const include = [

@@ -6,6 +6,7 @@ export default (sequelize) => {
       SWarehouses.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
       SWarehouses.belongsTo(models.RefWarehouseCategories, { foreignKey: 'category_id', as: 'category' });
       SWarehouses.hasMany(models.SWarehouseAreas, { foreignKey: 'warehouse_id', as: 'areas' });
+      SWarehouses.hasOne(models.SWarehouseLayout, { foreignKey: 'warehouse_id', as: 'warehouse_layout' });
     }
   }
 

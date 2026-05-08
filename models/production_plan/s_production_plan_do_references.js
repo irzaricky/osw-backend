@@ -4,7 +4,7 @@ export default (sequelize) => {
   class SProductionPlanDoReference extends Model {
     static associate(models) {
       SProductionPlanDoReference.belongsTo(models.SProductionPlan, { foreignKey: 'plan_id', as: 'plan' });
-      SProductionPlanDoReference.belongsTo(models.SDeliveryOrder, { foreignKey: 'do_id', as: 'delivery_order' });
+      SProductionPlanDoReference.belongsTo(models.SDeliveryOrders, { foreignKey: 'do_id', as: 'delivery_order' });
     }
   }
 

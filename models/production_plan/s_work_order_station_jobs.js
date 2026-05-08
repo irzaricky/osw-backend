@@ -4,8 +4,8 @@ export default (sequelize) => {
   class SWorkOrderStationJob extends Model {
     static associate(models) {
       SWorkOrderStationJob.belongsTo(models.SWorkOrderStation, { foreignKey: 'wo_station_id', as: 'work_order_station' });
-      SWorkOrderStationJob.belongsTo(models.SStationJob, { foreignKey: 'station_job_id', as: 'station_job' });
-      SWorkOrderStationJob.belongsTo(models.SJob, { foreignKey: 'job_id', as: 'job' });
+      SWorkOrderStationJob.belongsTo(models.SStationJobs, { foreignKey: 'station_job_id', as: 'station_job' });
+      SWorkOrderStationJob.belongsTo(models.SJobs, { foreignKey: 'job_id', as: 'job' });
     }
   }
 

@@ -4,7 +4,7 @@ export default (sequelize) => {
   class SProductionPlanAdjustment extends Model {
     static associate(models) {
       SProductionPlanAdjustment.belongsTo(models.SProductionPlan, { foreignKey: 'plan_id', as: 'plan' });
-      SProductionPlanAdjustment.belongsTo(models.SLine, { foreignKey: 'line_id', as: 'line' });
+      SProductionPlanAdjustment.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
     }
   }
 

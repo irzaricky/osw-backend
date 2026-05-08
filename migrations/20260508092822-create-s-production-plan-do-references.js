@@ -23,7 +23,7 @@ export default {
     });
 
     await queryInterface.addConstraint('s_production_plan_do_references', {
-      fields: ['plan_id', 'do_header_id'],
+      fields: ['plan_id', 'do_id'],
       type: 'unique',
       name: 'uniq_plan_do'
     });

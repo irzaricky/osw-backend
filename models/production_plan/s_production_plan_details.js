@@ -4,10 +4,10 @@ export default (sequelize) => {
   class SProductionPlanDetail extends Model {
     static associate(models) {
       SProductionPlanDetail.belongsTo(models.SProductionPlan, { foreignKey: 'plan_id', as: 'plan' });
-      SProductionPlanDetail.belongsTo(models.SDeliveryOrder, { foreignKey: 'do_id', as: 'delivery_order' });
-      SProductionPlanDetail.belongsTo(models.SDeliveryOrderDetail, { foreignKey: 'do_detail_id', as: 'delivery_order_detail' });
-      SProductionPlanDetail.belongsTo(models.SCustomer, { foreignKey: 'customer_id', as: 'customer' });
-      SProductionPlanDetail.belongsTo(models.SPart, { foreignKey: 'part_id', as: 'part' });
+      SProductionPlanDetail.belongsTo(models.SDeliveryOrders, { foreignKey: 'do_id', as: 'delivery_order' });
+      SProductionPlanDetail.belongsTo(models.SDeliveryOrderDetails, { foreignKey: 'do_detail_id', as: 'delivery_order_detail' });
+      SProductionPlanDetail.belongsTo(models.SCustomers, { foreignKey: 'customer_id', as: 'customer' });
+      SProductionPlanDetail.belongsTo(models.SParts, { foreignKey: 'part_id', as: 'part' });
       SProductionPlanDetail.hasMany(models.SProductionOrderProduct, { foreignKey: 'plan_detail_id', as: 'production_order_products' });
     }
   }

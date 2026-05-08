@@ -60,7 +60,7 @@ export default {
     });
 
     await queryInterface.addConstraint('s_production_plan_details', {
-      fields: ['plan_header_id', 'sequence'],
+      fields: ['plan_id', 'sequence'],
       type: 'unique',
       name: 'uniq_plan_sequence'
     });

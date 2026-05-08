@@ -33,7 +33,7 @@ export default {
     });
 
     await queryInterface.addConstraint('s_production_plan_capacity_params', {
-      fields: ['plan_header_id', 'line_id', 'param_type'],
+      fields: ['plan_id', 'line_id', 'param_type'],
       type: 'unique',
       name: 'uniq_capacity_param'
     });

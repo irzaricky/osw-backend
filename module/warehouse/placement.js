@@ -27,7 +27,8 @@ async list(req) {
     const warehouse_area_id = params.warehouse_area_id;
     const wo_status_id = params.wo_status_id;
     const wo_type_id = params.wo_type_id;
-    const wo_date = params.wo_date;
+    const wo_date_start = params.wo_date_start;
+    const wo_date_end = params.wo_date_end;
 
     const where = {
       wo_category: 'Placement'
@@ -44,16 +45,14 @@ async list(req) {
       where.warehouse_area_id = warehouse_area_id;
     }
 
-    if (wo_status_id) {
-      where.wo_status_id = wo_status_id;
-    }
-
     if (wo_type_id) {
       where.wo_type_id = wo_type_id;
     }
 
-    if (wo_date) {
-      where.wo_date = wo_date;
+    if (wo_date_start && wo_date_end) {
+      where.wo_date = {
+        [Op.between]: [wo_date_start, wo_date_end]
+      };
     }
 
     const { count, rows } = await TWorkOrderStoring.findAndCountAll({

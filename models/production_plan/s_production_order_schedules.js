@@ -5,9 +5,9 @@ export default (sequelize) => {
     static associate(models) {
       SProductionOrderSchedule.belongsTo(models.SProductionOrder, { foreignKey: 'po_id', as: 'production_order' });
       SProductionOrderSchedule.belongsTo(models.SProductionOrderProduct, { foreignKey: 'po_product_id', as: 'product' });
-      SProductionOrderSchedule.belongsTo(models.SLine, { foreignKey: 'line_id', as: 'line' });
-      SProductionOrderSchedule.belongsTo(models.SShift, { foreignKey: 'shift_id', as: 'shift' });
-      SProductionOrderSchedule.belongsTo(models.SPart, { foreignKey: 'part_id', as: 'part' });
+      SProductionOrderSchedule.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
+      SProductionOrderSchedule.belongsTo(models.SShifts, { foreignKey: 'shift_id', as: 'shift' });
+      SProductionOrderSchedule.belongsTo(models.SParts, { foreignKey: 'part_id', as: 'part' });
       SProductionOrderSchedule.hasMany(models.SWorkOrder, { foreignKey: 'po_schedule_id', as: 'work_orders' });
     }
   }

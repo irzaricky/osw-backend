@@ -4,6 +4,7 @@ export default (sequelize) => {
   class SWarehouseBins extends Model {
     static associate(models) {
       SWarehouseBins.belongsTo(models.SWarehouseAreas, { foreignKey: 'area_id', as: 'area' });
+      SWarehouseBins.hasMany(models.TWarehouseStock, { foreignKey: 'bin_id', as: 'stocks' });
     }
   }
 

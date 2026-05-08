@@ -1,0 +1,69 @@
+import { Model, DataTypes } from 'sequelize';
+
+export default (sequelize) => {
+  class SProductionPlanCapacityResult extends Model {
+    static associate(models) {
+      SProductionPlanCapacityResult.belongsTo(models.SProductionPlan, { foreignKey: 'plan_id', as: 'plan' });
+      SProductionPlanCapacityResult.belongsTo(models.SLine, { foreignKey: 'line_id', as: 'line' });
+    }
+  }
+
+  SProductionPlanCapacityResult.init({
+    plan_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
+    line_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
+    total_stations: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
+    total_jobs: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
+    max_takt_time: {
+      type: DataTypes.INTEGER
+    },
+    capacity_per_hour: {
+      type: DataTypes.DECIMAL(10, 2)
+    },
+    total_capacity_minutes: {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false
+    },
+    total_required_minutes: {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false
+    },
+    capacity_gap_minutes: {
+      type: DataTypes.DECIMAL(15, 2)
+    },
+    utilization_pct: {
+      type: DataTypes.DECIMAL(5, 2)
+    },
+    status: {
+      type: DataTypes.STRING(50),
+      allowNull: false
+    },
+    calculated_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    },
+    calculation_version: {
+      type: DataTypes.INTEGER,
+      defaultValue: 1
+    }
+  }, {
+    sequelize,
+    modelName: 'SProductionPlanCapacityResult',
+    tableName: 's_production_plan_capacity_results',
+    underscored: true,
+    timestamps: false
+  });
+
+  return SProductionPlanCapacityResult;
+};

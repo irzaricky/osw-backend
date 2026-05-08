@@ -8,6 +8,7 @@ export default (sequelize) => {
       SDeliveryOrders.belongsTo(models.SVehicles, { foreignKey: 'vehicle_id', as: 'vehicle' });
       SDeliveryOrders.belongsTo(models.SUserDetail, { foreignKey: 'driver_id', targetKey: 'user_id', as: 'driver' });
       SDeliveryOrders.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
+      SDeliveryOrders.hasMany(models.SDeliveryOrderDetails, { foreignKey: 'delivery_order_id', as: 'details' });
     }
   }
 
@@ -47,6 +48,10 @@ export default (sequelize) => {
     },
     notes: {
       type: DataTypes.TEXT,
+      allowNull: true
+    },
+    received_at: {
+      type: DataTypes.DATE,
       allowNull: true
     },
     created_by: {

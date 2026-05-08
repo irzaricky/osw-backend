@@ -5,6 +5,7 @@ export default (sequelize) => {
     static associate(models) {
       SDeliveryPlanDetails.belongsTo(models.SDeliveryPlans, { foreignKey: 'delivery_plan_id', as: 'deliveryPlan' });
       SDeliveryPlanDetails.belongsTo(models.SSalesPurchaseOrderDetails, { foreignKey: 'spo_detail_id', as: 'spoDetail' });
+      SDeliveryPlanDetails.hasMany(models.SDeliveryOrderDetails, { foreignKey: 'delivery_plan_detail_id', as: 'doDetails' });
     }
   }
 

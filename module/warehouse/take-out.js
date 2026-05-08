@@ -99,111 +99,134 @@ class TakeOutModule extends BaseModule {
   }
 
   async list(req) {
-    try {
-      const params = req.query;
-      const { limit, page, offset } = helper.getPagination(params);
+  try {
+    const params = req.query;
+    const { limit, page, offset } = helper.getPagination(params);
 
-      const search = params.search || '';
-      const warehouse_area_id = params.warehouse_area_id;
-      const wo_status_id = params.wo_status_id;
-      const wo_type_id = params.wo_type_id;
-      const wo_date = params.wo_date;
+    const search = params.search || '';
+    const warehouse_area_id = params.warehouse_area_id;
+    const wo_status_id = params.wo_status_id;
+    const wo_type_id = params.wo_type_id;
+    const wo_date_start = params.wo_date_start;
+    const wo_date_end = params.wo_date_end;
 
-      const where = {
-        wo_category: 'Take Out'
+    const where = {
+      wo_category: 'Take Out'
+    };
+
+    if (wo_status_id) {
+      where.wo_status_id = wo_status_id;
+    } else {
+      where.wo_status_id = {
+        [Op.in]: [2, 3]
       };
+    }
 
-      if (wo_status_id) {
-        where.wo_status_id = wo_status_id;
-      } else {
-        where.wo_status_id = {
-          [Op.in]: [2, 3]
-        };
-      }
+    if (search) {
+      where.wo_number = {
+        [Op.iLike]: `%${search}%`
+      };
+    }
 
-      if (search) {
-        where.wo_number = {
-          [Op.iLike]: `%${search}%`
-        };
-      }
+    if (warehouse_area_id) {
+      where.warehouse_area_id = warehouse_area_id;
+    }
 
-      if (warehouse_area_id) where.warehouse_area_id = warehouse_area_id;
-      if (wo_type_id) where.wo_type_id = wo_type_id;
-      if (wo_date) where.wo_date = wo_date;
+    if (wo_type_id) {
+      where.wo_type_id = wo_type_id;
+    }
 
-      const { count, rows } = await TWorkOrderStoring.findAndCountAll({
-        where,
-        limit,
-        offset,
-        attributes: ['id', 'wo_number', 'wo_category', 'wo_date', 'wo_description'],
-        include: [
-          {
-            model: db.RefWorkOrderStoringType,
-            as: 'type',
-            attributes: ['id', 'name']
-          },
-          {
-            model: db.RefWorkOrderStoringStatus,
-            as: 'status',
-            attributes: ['id', 'name']
-          },
-          {
-            model: db.SWarehouseAreas,
-            as: 'area',
-            attributes: ['id', 'name']
-          },
-          {
-            model: TWorkOrderStoringItem,
-            as: 'items',
-            attributes: ['id'],
-            include: [
-              {
-                model: TWorkOrderStoringItemLabel,
-                as: 'item_labels',
-                attributes: ['id', 'is_scanned_out']
-              }
-            ]
-          }
-        ],
-        distinct: true,
-        order: [['id', 'DESC']]
-      });
+    if (wo_date_start && wo_date_end) {
+      where.wo_date = {
+        [Op.between]: [wo_date_start, wo_date_end]
+      };
+    }
 
-      const data = rows.map(wo => {
-        let totalLabel = 0;
-        let totalScannedOut = 0;
+    const { count, rows } = await TWorkOrderStoring.findAndCountAll({
+      where,
+      limit,
+      offset,
+      attributes: ['id'],
+      distinct: true,
+      order: [['id', 'DESC']]
+    });
 
-        wo.items.forEach(item => {
-          totalLabel += item.item_labels.length;
-          totalScannedOut += item.item_labels.filter(label => label.is_scanned_out).length;
-        });
+    for (const wo of rows) {
+      await this.ensureFifoLabelsAssigned(wo.id);
+    }
 
-        return {
-          wo_id: wo.id,
-          wo_number: wo.wo_number,
-          wo_category: wo.wo_category,
-          wo_date: wo.wo_date,
-          wo_description: wo.wo_description,
-          type: wo.type,
-          area: wo.area,
-          status: wo.status,
-          total_label: totalLabel,
-          total_scanned_out: totalScannedOut,
-          remaining: totalLabel - totalScannedOut,
-          progress: totalLabel > 0 ? Math.round((totalScannedOut / totalLabel) * 100) : 0
-        };
+    const refreshedRows = await TWorkOrderStoring.findAll({
+      where,
+      limit,
+      offset,
+      attributes: ['id', 'wo_number', 'wo_category', 'wo_date', 'wo_description'],
+      include: [
+        {
+          model: db.RefWorkOrderStoringType,
+          as: 'type',
+          attributes: ['id', 'name']
+        },
+        {
+          model: db.RefWorkOrderStoringStatus,
+          as: 'status',
+          attributes: ['id', 'name']
+        },
+        {
+          model: db.SWarehouseAreas,
+          as: 'area',
+          attributes: ['id', 'name']
+        },
+        {
+          model: TWorkOrderStoringItem,
+          as: 'items',
+          attributes: ['id'],
+          include: [
+            {
+              model: TWorkOrderStoringItemLabel,
+              as: 'item_labels',
+              attributes: ['id', 'is_scanned_out']
+            }
+          ]
+        }
+      ],
+      order: [['id', 'DESC']]
+    });
+
+    const data = refreshedRows.map(wo => {
+      let totalLabel = 0;
+      let totalScannedOut = 0;
+
+      wo.items.forEach(item => {
+        totalLabel += item.item_labels.length;
+        totalScannedOut += item.item_labels.filter(label => label.is_scanned_out).length;
       });
 
       return {
-        status: true,
-        data: helper.getPaginationData(data, count, page, limit)
+        wo_id: wo.id,
+        wo_number: wo.wo_number,
+        wo_category: wo.wo_category,
+        wo_date: wo.wo_date,
+        wo_description: wo.wo_description,
+        type: wo.type,
+        area: wo.area,
+        status: wo.status,
+        total_label: totalLabel,
+        total_scanned_out: totalScannedOut,
+        remaining: totalLabel - totalScannedOut,
+        progress: totalLabel > 0 ? Math.round((totalScannedOut / totalLabel) * 100) : 0
       };
-    } catch (error) {
-      return config.debug
-        ? { status: false, error: error.message, code: 500 }
-        : { status: false, message: 'Internal server error', code: 500 };
-    }
+    });
+
+    return {
+      status: true,
+      data: helper.getPaginationData(data, count, page, limit)
+    };
+  } catch (error) {
+    return config.debug
+      ? { status: false, error: error.message, code: 500 }
+      : { status: false, message: 'Internal server error', code: 500 };
   }
+}
 
   async detail(req) {
     try {
@@ -653,12 +676,19 @@ class TakeOutModule extends BaseModule {
         transaction: t
       });
 
-      await TWarehouseStock.destroy({
-        where: {
-          id: stock.id
+      await db.sequelize.query(`
+        DELETE FROM t_warehouse_stock
+        WHERE id = :stock_id
+      `, {
+        replacements: {
+          stock_id: stock.id
         },
+        type: QueryTypes.DELETE,
         transaction: t
       });
+
+      // console.log('DELETED STOCK:', deletedStock);
+      // console.log('STOCK ID DELETED:', stock.id);
 
       if (workOrder.wo_status_id === 2) {
         await workOrder.update({

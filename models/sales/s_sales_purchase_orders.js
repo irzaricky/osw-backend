@@ -36,7 +36,8 @@ export default (sequelize) => {
     status: {
       type: DataTypes.STRING(50),
       allowNull: false,
-      defaultValue: 'Draft'
+      defaultValue: 'Draft',
+      comment: 'Draft / Submitted / Approved / Waiting PPIC / Rejected'
     },
     created_by: {
       type: DataTypes.INTEGER,

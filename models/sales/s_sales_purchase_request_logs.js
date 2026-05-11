@@ -22,6 +22,7 @@ export default (sequelize) => {
       allowNull: false
     },
     remarks: DataTypes.TEXT,
+    snapshot: DataTypes.JSON,
     changed_by: {
       type: DataTypes.INTEGER,
       allowNull: false

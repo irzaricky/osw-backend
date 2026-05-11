@@ -10,7 +10,7 @@ import dayjs from 'dayjs';
 const {
   SSalesForecasts, SSalesForecastDetails, SSalesForecastLogs,
   SCustomers, SParts, SUsers, SUserDetail,
-  SSalesPurchaseRequests, SSalesPurchaseRequestDetails
+  SSalesPurchaseRequests, SSalesPurchaseRequestDetails, SSalesPurchaseRequestLogs
 } = db;
 
 class ForecastModule extends BaseModule {
@@ -928,9 +928,9 @@ class ForecastModule extends BaseModule {
       const updatedIds = details.filter(d => d.id).map(d => d.id);
       const idsToDelete = existingIds.filter(id => !updatedIds.includes(id));
 
-      // Validation: Prevent deletion of 'Fix' records
+      // Validation: Prevent deletion of 'Fix' records (Except if it's still Draft or Rejected)
       const fixedDetailsToDelete = existingDetails.filter(ed => idsToDelete.includes(ed.id) && ed.qty_status === 'Fix');
-      if (fixedDetailsToDelete.length > 0) {
+      if (!['Draft', 'Rejected'].includes(forecast.status) && fixedDetailsToDelete.length > 0) {
         await t.rollback();
         return {
           status: false,
@@ -952,10 +952,10 @@ class ForecastModule extends BaseModule {
       let totalQty = 0;
 
       for (const detail of details) {
-        // Validation: Prevent quantity change for 'Fix' records
+        // Validation: Prevent quantity change for 'Fix' records (Except if it's still Draft or Rejected)
         if (detail.id) {
           const existingDetail = existingDetails.find(ed => ed.id === detail.id);
-          if (existingDetail && existingDetail.qty_status === 'Fix') {
+          if (!['Draft', 'Rejected'].includes(forecast.status) && existingDetail && existingDetail.qty_status === 'Fix') {
             if (Number(existingDetail.forecast_qty) !== Number(detail.forecast_qty)) {
               await t.rollback();
               return {
@@ -1292,23 +1292,22 @@ class ForecastModule extends BaseModule {
   async _generateSPR(forecast, transaction) {
     const currentMonthStr = dayjs().format('YYYY-MM');
 
-    // Get details for current month OR qty_status = 'Fix'
+    // Get details with qty_status = 'Fix' (Locked) for the current month
     const details = await SSalesForecastDetails.findAll({
       where: {
         forecast_id: forecast.id,
-        [Op.or]: [
-          {
-            period_date: {
-              [Op.between]: [`${currentMonthStr}-01`, `${currentMonthStr}-31`]
-            }
-          },
-          { qty_status: 'Fix' }
-        ]
+        qty_status: 'Fix',
+        period_date: {
+          [Op.between]: [
+            dayjs().startOf('month').format('YYYY-MM-DD'),
+            dayjs().endOf('month').format('YYYY-MM-DD')
+          ]
+        }
       },
       transaction
     });
 
-    if (details.length === 0) return; // No details for current month, skip SPR generation
+    if (details.length === 0) return; // No locked details, skip SPR generation
 
     // Aggregate qty per part_id
     const partAggregations = {};
@@ -1333,14 +1332,9 @@ class ForecastModule extends BaseModule {
     let seq = 1;
     if (lastSPR) {
       const parts = lastSPR.spr_number.split('-');
-      if (parts.length > 3) {
-        const lastSeqStr = parts[parts.length - 1];
-        if (!isNaN(lastSeqStr)) {
-          seq = parseInt(lastSeqStr, 10) + 1;
-        }
-      } else if (parts.length === 3) {
-        // Handle format SPR-YYYY-MM
-        seq = parseInt(parts[2], 10) + 1;
+      const lastSeqStr = parts[parts.length - 1];
+      if (!isNaN(lastSeqStr)) {
+        seq = parseInt(lastSeqStr, 10) + 1;
       }
     }
     const spr_number = `${prefix}-${seq.toString().padStart(4, '0')}`;
@@ -1356,20 +1350,34 @@ class ForecastModule extends BaseModule {
       request_date: dayjs().format('YYYY-MM-DD'),
       required_date,
       description: `Auto-generated from Approved Forecast ${forecast.forecast_number}`,
-      status: 'Draft',
+      status: 'Waiting PPIC',
       created_by: forecast.approved_by
     }, { transaction });
 
     // Create details
+    const detailRecords = [];
     for (const [part_id, qty] of Object.entries(partAggregations)) {
       if (qty > 0) {
-        await SSalesPurchaseRequestDetails.create({
+        detailRecords.push({
           spr_id: spr.id,
           part_id: parseInt(part_id, 10),
           qty
-        }, { transaction });
+        });
       }
     }
+
+    if (detailRecords.length > 0) {
+      await SSalesPurchaseRequestDetails.bulkCreate(detailRecords, { transaction });
+    }
+
+    // Log creation
+    await SSalesPurchaseRequestLogs.create({
+      spr_id: spr.id,
+      status: 'Waiting PPIC',
+      action: 'Created (Auto)',
+      remarks: `Automatically generated from forecast ${forecast.forecast_number}`,
+      changed_by: forecast.approved_by
+    }, { transaction });
   }
 }
 

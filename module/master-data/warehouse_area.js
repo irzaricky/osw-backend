@@ -5,7 +5,7 @@ import helper from '../../class/helper.class.js'
 import BaseModule from '../../class/base.module.js'
 import Joi from 'joi'
 
-const { SWarehouseAreas, SWarehouseBins, SWarehouses, RefWarehouseCategories } = db
+const { SWarehouseAreas, SWarehouseBins, SWarehouses, RefWarehouseCategories, SAreaLayout } = db
 
 class WarehouseAreaModule extends BaseModule {
   async list(req) {
@@ -292,8 +292,9 @@ class WarehouseAreaModule extends BaseModule {
 
   async getDropdown(req) {
     try {
-      const { category_id, wo_category } = req.query || {}
+      const { category_id, warehouse_id, wo_category, exclude_has_layout } = req.query || {}
 
+      // Take Out Flow
       if (category_id && wo_category === 'take_out') {
         const areas = await db.sequelize.query(`
           SELECT DISTINCT 
@@ -327,15 +328,39 @@ class WarehouseAreaModule extends BaseModule {
         }
       }
 
+      // Exclude has layout
+      let excludeAreaIds = [];
+
+      if (exclude_has_layout === 'true') {
+        const usedAreas = await SAreaLayout.findAll({
+          attributes: ['area_id']
+        });
+
+        excludeAreaIds = usedAreas.map(item => item.area_id);
+      }
+
       const areas = await SWarehouseAreas.findAll({
-        attributes: ['id', 'area_code', 'name'],
+        attributes: ['id', 'area_code', 'name', 'total_cols', 'total_rows'],
+        where: {
+          ...(excludeAreaIds.length > 0 && {
+            id: {
+              [Op.notIn]: excludeAreaIds
+            }
+          })
+        },
         include: [
           {
             model: SWarehouses,
             as: 'warehouse',
             attributes: ['name'],
-            required: !!category_id,
-            where: category_id ? { category_id } : undefined
+            required: !!category_id || !!warehouse_id,
+            where:
+              category_id || warehouse_id
+                ? {
+                    ...(category_id && { category_id }),
+                    ...(warehouse_id && { id: warehouse_id })
+                  }
+                : undefined
           }
         ],
         order: [['name', 'ASC']]

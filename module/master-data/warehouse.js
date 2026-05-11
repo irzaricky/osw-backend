@@ -5,7 +5,7 @@ import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
 
-const { SWarehouses, SLines, RefWarehouseCategories } = db;
+const { SWarehouses, SLines, RefWarehouseCategories, SWarehouseLayout } = db;
 
 class WarehouseModule extends BaseModule {
 
@@ -394,10 +394,30 @@ class WarehouseModule extends BaseModule {
     }
   }
 
-  async getDropdown() {
+  async getDropdown(req) {
     try {
+      const params = req.query;
+      const exclude_has_layout = params.exclude_has_layout === 'true';
+
+      const include = [];
+
+      const where = {};
+
+      if (exclude_has_layout) {
+        include.push({
+          model: SWarehouseLayout,
+          as: 'warehouse_layout',
+          attributes: ['id'],
+          required: false
+        });
+
+        where['$warehouse_layout.id$'] = null;
+      }
+
       const warehouses = await SWarehouses.findAll({
         attributes: ['id', 'warehouse_code', 'name'],
+        include,
+        where,
         order: [['name', 'ASC']]
       });
 

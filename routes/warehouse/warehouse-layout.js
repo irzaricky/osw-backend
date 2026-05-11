@@ -11,15 +11,21 @@ router.get('/', auth.sessionChecker, async (req, res) => {
   helper.sendResponse(res, result);
 });
 
+// get detail warehouse layout
+router.get('/:id', auth.sessionChecker, async (req, res) => {
+  const result = await warehouseLayoutModule.detail(req);
+  helper.sendResponse(res, result);
+});
+
 // post add warehouse layout
 router.post('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
   const result = await warehouseLayoutModule.add(req);
   helper.sendResponse(res, result);
 });
 
-// get detail warehouse layout
-router.get('/:id', auth.sessionChecker, async (req, res) => {
-  const result = await warehouseLayoutModule.detail(req);
+// get detail area layout
+router.get('/area-layout/:id', auth.sessionChecker, async (req, res) => {
+  const result = await warehouseLayoutModule.detailAreaLayout(req);
   helper.sendResponse(res, result);
 });
 
@@ -29,33 +35,15 @@ router.post('/:id/area-layout', auth.sessionChecker, auth.permissionChecker(['Su
   helper.sendResponse(res, result);
 });
 
-// post add area spacing
-router.post('/area-spacing', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
-  const result = await warehouseLayoutModule.addAreaSpacing(req);
-  helper.sendResponse(res, result);
-});
-
-// patch move area layout
-router.patch('/area-layout/:id/move', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
-  const result = await warehouseLayoutModule.moveAreaLayout(req);
-  helper.sendResponse(res, result);
-});
-
-// put update area spacing
-router.put('/area-spacing/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
-  const result = await warehouseLayoutModule.updateAreaSpacing(req);
+// put update area layout
+router.put('/area-layout/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await warehouseLayoutModule.updateAreaLayout(req);
   helper.sendResponse(res, result);
 });
 
 // delete area layout
 router.delete('/area-layout/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
   const result = await warehouseLayoutModule.deleteAreaLayout(req);
-  helper.sendResponse(res, result);
-});
-
-// delete area spacing
-router.delete('/area-spacing/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
-  const result = await warehouseLayoutModule.deleteAreaSpacing(req);
   helper.sendResponse(res, result);
 });
 

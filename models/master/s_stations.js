@@ -5,6 +5,7 @@ export default (sequelize) => {
     static associate(models) {
       SStations.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
       SStations.belongsTo(models.RefStationTypes, { foreignKey: 'station_type_id', as: 'station_type' });
+      SStations.hasMany(models.SStationJobs, { foreignKey: 'station_id', as: 'station_jobs' });
     }
   }
 

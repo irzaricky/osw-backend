@@ -27,6 +27,7 @@ export default {
       manpower: { type: Sequelize.INTEGER, allowNull: false },
       efficiency_factor: { type: Sequelize.DECIMAL(5,4), defaultValue: 0.85 },
       overtime_hours: { type: Sequelize.DECIMAL(5,2), defaultValue: 0 },
+      max_takt_time: { type: Sequelize.INTEGER, allowNull: false },
 
       created_at: { allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       updated_at: { allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') }

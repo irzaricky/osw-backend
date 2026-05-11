@@ -19,7 +19,7 @@ export default {
 
       impacted_wo_count: { type: Sequelize.INTEGER },
 
-      rescheduled_by: { type: Sequelize.STRING(100) },
+      rescheduled_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
 
       rescheduled_at: {
         allowNull: false,

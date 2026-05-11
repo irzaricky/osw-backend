@@ -1,0 +1,164 @@
+export default {
+  async up(queryInterface, Sequelize) {
+    // =========================
+    // SALES PURCHASE ORDERS
+    // =========================
+    const spoData = [];
+
+    for (let i = 1; i <= 10; i++) {
+      spoData.push({
+        spo_number: `SPO-2026-${String(i).padStart(4, '0')}`,
+        customer_id: ((i - 1) % 6) + 1,
+        spr_id: null,
+        shipping_address: `Alamat Customer ${i}`,
+        spo_date: new Date(),
+        delivery_due_date: new Date(Date.now() + i * 86400000),
+        status: 'Approved',
+        created_by: 1,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    const insertedSPOs = await queryInterface.bulkInsert(
+      's_sales_purchase_orders',
+      spoData,
+      {
+        returning: true,
+      }
+    );
+
+    // =========================
+    // SPO DETAILS
+    // =========================
+    const spoDetailData = [];
+
+    for (let i = 1; i <= 10; i++) {
+      spoDetailData.push({
+        spo_id: insertedSPOs[i - 1].id,
+        part_id: i,
+        ordered_qty: 100 + i * 10,
+        sent_qty: 20 + i * 5,
+        last_shipment_date: new Date(),
+        status: 'Open',
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    await queryInterface.bulkInsert(
+      's_sales_purchase_order_details',
+      spoDetailData,
+      {}
+    );
+
+    // =========================
+    // DELIVERY PLANS
+    // =========================
+    const deliveryPlanData = [];
+
+    for (let i = 1; i <= 10; i++) {
+      deliveryPlanData.push({
+        dp_number: `DP-2026-${String(i).padStart(4, '0')}`,
+        scheduled_date: new Date(),
+        time_start: '08:00:00',
+        time_end: '10:00:00',
+        warehouse_id: ((i - 1) % 3) + 1,
+        dock_id: ((i - 1) % 3) + 1,
+        destination: `Destination ${i}`,
+        status: 'Scheduled',
+        created_by: 1,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    await queryInterface.bulkInsert(
+      's_delivery_plans',
+      deliveryPlanData,
+      {}
+    );
+
+    // =========================
+    // DELIVERY PLAN DETAILS
+    // =========================
+    const deliveryPlanDetailData = [];
+
+    for (let i = 1; i <= 10; i++) {
+      deliveryPlanDetailData.push({
+        delivery_plan_id: i,
+        spo_detail_id: i,
+        planned_qty: 50 + i * 5,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    await queryInterface.bulkInsert(
+      's_delivery_plan_details',
+      deliveryPlanDetailData,
+      {}
+    );
+
+    // =========================
+    // DELIVERY ORDERS
+    // =========================
+    const deliveryOrderData = [];
+
+    for (let i = 1; i <= 10; i++) {
+      deliveryOrderData.push({
+        do_number: `DO-2026-${String(i).padStart(4, '0')}`,
+        delivery_plan_id: i,
+        customer_id: ((i - 1) % 6) + 1,
+        vehicle_id: ((i - 1) % 5) + 1,
+        driver_id: ((i - 1) % 5) + 1,
+        shipment_date: new Date(),
+        delivery_status: 'Delivered',
+        proof_of_delivery: null,
+        notes: `Pengiriman batch ${i}`,
+        created_by: 1,
+        created_at: new Date(),
+        updated_at: new Date(),
+        received_at: null,
+      });
+    }
+
+    await queryInterface.bulkInsert(
+      's_delivery_orders',
+      deliveryOrderData,
+      {}
+    );
+
+    // =========================
+    // DELIVERY ORDER DETAILS
+    // =========================
+    const deliveryOrderDetailData = [];
+
+    for (let i = 1; i <= 10; i++) {
+      deliveryOrderDetailData.push({
+        delivery_order_id: i,
+        delivery_plan_detail_id: i,
+        sent_qty: 40 + i * 5,
+        received_qty: null,
+        notes: `Detail shipment ${i}`,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    await queryInterface.bulkInsert(
+      's_delivery_order_details',
+      deliveryOrderDetailData,
+      {}
+    );
+  },
+
+  async down(queryInterface, Sequelize) {
+    await queryInterface.bulkDelete('s_delivery_order_details', null, {});
+    await queryInterface.bulkDelete('s_delivery_orders', null, {});
+    await queryInterface.bulkDelete('s_delivery_plan_details', null, {});
+    await queryInterface.bulkDelete('s_delivery_plans', null, {});
+    await queryInterface.bulkDelete('s_sales_purchase_order_details', null, {});
+    await queryInterface.bulkDelete('s_sales_purchase_orders', null, {});
+  },
+};

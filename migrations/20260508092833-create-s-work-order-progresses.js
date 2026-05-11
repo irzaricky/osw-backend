@@ -19,7 +19,7 @@ export default {
       cumulative_qty: { allowNull: false, type: Sequelize.INTEGER },
       progress_pct: { type: Sequelize.DECIMAL(5,2) },
 
-      reported_by: { type: Sequelize.STRING(100) },
+      reported_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
 
       created_at: {
         type: Sequelize.DATE,

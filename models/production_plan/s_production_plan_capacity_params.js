@@ -44,6 +44,9 @@ export default (sequelize) => {
     overtime_hours: {
       type: DataTypes.DECIMAL(5, 2),
       defaultValue: 0
+    },
+    max_takt_time: {
+      type: DataTypes.INTEGER
     }
   }, {
     sequelize,

@@ -18,13 +18,32 @@ export default {
       status: { type: Sequelize.STRING(50), defaultValue: 'Draft' },
 
       notes: Sequelize.TEXT,
-      created_by: Sequelize.STRING(100),
+      created_by: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        references: {
+          model: 's_users',
+          key: 'id'
+        },
+      },
 
-      approved_by: Sequelize.STRING(100),
+      approved_by: {
+        type: Sequelize.INTEGER,
+        references: {
+          model: 's_users',
+          key: 'id'
+        },
+      },
       approved_at: Sequelize.DATE,
       approval_notes: Sequelize.TEXT,
 
-      rejected_by: Sequelize.STRING(100),
+      rejected_by: {
+        type: Sequelize.INTEGER,
+        references: {
+          model: 's_users',
+          key: 'id'
+        },
+      },
       rejected_at: Sequelize.DATE,
       rejection_reason: Sequelize.TEXT,
 

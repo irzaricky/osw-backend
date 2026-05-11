@@ -4,6 +4,7 @@ export default (sequelize) => {
   class SProductionOrderRescheduleLog extends Model {
     static associate(models) {
       SProductionOrderRescheduleLog.belongsTo(models.SProductionOrder, { foreignKey: 'po_id', as: 'production_order' });
+      SProductionOrderRescheduleLog.belongsTo(models.SUsers, { foreignKey: 'rescheduled_by', as: 'rescheduler' });
     }
   }
 
@@ -36,7 +37,7 @@ export default (sequelize) => {
       type: DataTypes.INTEGER
     },
     rescheduled_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
     },
     rescheduled_at: {
       type: DataTypes.DATE,

@@ -31,18 +31,18 @@ export default {
       status: { allowNull: false, defaultValue: 'Draft', type: Sequelize.STRING(50) },
 
       notes: { type: Sequelize.TEXT },
-      created_by: { type: Sequelize.STRING(100) },
+      created_by: { type: Sequelize.INTEGER, allowNull: false, references: { model: 's_users', key: 'id' } },
 
-      released_by: { type: Sequelize.STRING(100) },
+      released_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
       released_at: { type: Sequelize.DATE },
 
-      rejected_by: { type: Sequelize.STRING(100) },
+      rejected_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
       rejected_at: { type: Sequelize.DATE },
 
       completed_at: { type: Sequelize.DATE },
       closed_at: { type: Sequelize.DATE },
 
-      cancelled_by: { type: Sequelize.STRING(100) },
+      cancelled_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
       cancelled_at: { type: Sequelize.DATE },
 
       created_at: { allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },

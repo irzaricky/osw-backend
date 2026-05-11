@@ -20,7 +20,7 @@ export default {
       defect_qty: { type: Sequelize.INTEGER },
       defect_type: { type: Sequelize.STRING(100) },
 
-      reported_by: { type: Sequelize.STRING(100) },
+      reported_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
 
       reported_time: {
         allowNull: false,
@@ -30,7 +30,7 @@ export default {
 
       resolution: { type: Sequelize.TEXT },
 
-      resolved_by: { type: Sequelize.STRING(100) },
+      resolved_by: { type: Sequelize.INTEGER, references: { model: 's_users', key: 'id' } },
       resolved_time: { type: Sequelize.DATE },
 
       created_at: { type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },

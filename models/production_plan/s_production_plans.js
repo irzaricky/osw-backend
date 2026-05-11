@@ -9,6 +9,9 @@ export default (sequelize) => {
       SProductionPlan.hasMany(models.SProductionPlanCapacityResult, { foreignKey: 'plan_id', as: 'capacity_results' });
       SProductionPlan.hasMany(models.SProductionPlanAdjustment, { foreignKey: 'plan_id', as: 'adjustments' });
       SProductionPlan.hasMany(models.SProductionOrder, { foreignKey: 'plan_id', as: 'production_orders' });
+      SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
+      SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'approved_by', as: 'approver' });
+      SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'rejected_by', as: 'rejector' });
     }
   }
 
@@ -51,10 +54,11 @@ export default (sequelize) => {
       type: DataTypes.TEXT
     },
     created_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER,
+        allowNull: false
     },
     approved_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER,
     },
     approved_at: {
       type: DataTypes.DATE
@@ -63,7 +67,7 @@ export default (sequelize) => {
       type: DataTypes.TEXT
     },
     rejected_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER,
     },
     rejected_at: {
       type: DataTypes.DATE

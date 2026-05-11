@@ -8,6 +8,10 @@ export default (sequelize) => {
       SProductionOrder.hasMany(models.SProductionOrderSchedule, { foreignKey: 'po_id', as: 'schedules' });
       SProductionOrder.hasMany(models.SProductionOrderRescheduleLog, { foreignKey: 'po_id', as: 'reschedule_logs' });
       SProductionOrder.hasMany(models.SWorkOrder, { foreignKey: 'po_id', as: 'work_orders' });
+      SProductionOrder.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
+      SProductionOrder.belongsTo(models.SUsers, { foreignKey: 'released_by', as: 'releaser' });
+      SProductionOrder.belongsTo(models.SUsers, { foreignKey: 'rejected_by', as: 'rejector' });
+      SProductionOrder.belongsTo(models.SUsers, { foreignKey: 'cancelled_by', as: 'canceller' });
     }
   }
 
@@ -74,16 +78,17 @@ export default (sequelize) => {
       type: DataTypes.TEXT
     },
     created_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER,
+        allowNull: false
     },
     released_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
     },
     released_at: {
       type: DataTypes.DATE
     },
     rejected_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
     },
     rejected_at: {
       type: DataTypes.DATE
@@ -95,7 +100,7 @@ export default (sequelize) => {
       type: DataTypes.DATE
     },
     cancelled_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
     },
     cancelled_at: {
       type: DataTypes.DATE

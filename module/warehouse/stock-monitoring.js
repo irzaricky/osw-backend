@@ -227,6 +227,7 @@ const fullBinPreview = await db.sequelize.query(`
     part_category,
     low_stock_only,
     aging_only,
+    stock_status,
     date_from,
     date_to
     } = req.query
@@ -280,6 +281,22 @@ if (aging_only === 'true') {
       WHERE COALESCE(place_log.placement_at, ws.created_at) <= NOW() - INTERVAL '7 days'
     ) > 0
   `)
+}
+
+if (stock_status) {
+  having.push(`
+    CASE
+      WHEN COALESCE(part.safety_stock, 0) > 0
+        AND COUNT(ws.id) <= (COALESCE(part.safety_stock, 0) * 0.5)
+      THEN 'Critical'
+      WHEN COALESCE(part.safety_stock, 0) > 0
+        AND COUNT(ws.id) <= COALESCE(part.safety_stock, 0)
+      THEN 'Warning'
+      ELSE 'Safe'
+    END = :stock_status
+  `)
+
+  replacements.stock_status = stock_status
 }
 
 const havingClause = having.length

@@ -5,7 +5,7 @@ import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
 
-const { SWarehouses, SWarehouseAreas, RefWarehouseCategories, SWarehouseLayout, SAreaLayout, SAreaSpacing, SWarehouseBins, TWarehouseStock } = db;
+const { SWarehouses, SWarehouseAreas, RefWarehouseCategories, SWarehouseLayout, SAreaLayout, SAreaSpacing, SWarehouseBins, TWarehouseStock, TWorkOrderStoringItemLabel, TPartLabels, SParts, SPackages } = db;
 
 class WarehouseLayoutModule extends BaseModule {
   async list(req) {
@@ -890,6 +890,177 @@ class WarehouseLayoutModule extends BaseModule {
       };
     } catch (error) {
       await t.rollback();
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async detailStorageBin(req) {
+    try {
+      const id = req.params.id;
+
+      const params = req.query;
+      const { limit, page, offset } = helper.getPagination(params);
+      const search = params.search || '';
+
+      const bin = await SWarehouseBins.findByPk(id, {
+        attributes: [
+          'id',
+          'bin_code',
+          'capacity',
+          'dedicated_part_number'
+        ],
+        include: [
+          {
+            model: SWarehouseAreas,
+            as: 'area',
+            attributes: [
+              'id',
+              'area_code',
+              'name'
+            ],
+            include: [
+              {
+                model: SWarehouses,
+                as: 'warehouse',
+                attributes: [
+                  'id',
+                  'warehouse_code',
+                  'name'
+                ]
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!bin) {
+        return {
+          status: false,
+          message: 'Storage bin not found',
+          code: 404
+        };
+      }
+
+      const whereStock = {
+        bin_id: id
+      };
+
+      if (search) {
+        whereStock[Op.or] = [
+          {
+            '$work_order_item_label.label.label_number$': {
+              [Op.iLike]: `%${search}%`
+            }
+          },
+          {
+            '$work_order_item_label.label.part.part_number$': {
+              [Op.iLike]: `%${search}%`
+            }
+          },
+          {
+            '$work_order_item_label.label.part.part_name$': {
+              [Op.iLike]: `%${search}%`
+            }
+          }
+        ];
+      }
+
+      const { count, rows } = await TWarehouseStock.findAndCountAll({
+        where: whereStock,
+        limit,
+        offset,
+        distinct: true,
+        attributes: ['id', 'createdAt'],
+        include: [
+          {
+            model: TWorkOrderStoringItemLabel,
+            as: 'work_order_item_label',
+            attributes: ['id'],
+            include: [
+              {
+                model: TPartLabels,
+                as: 'label',
+                attributes: ['id', 'label_number'],
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    attributes: ['id', 'part_number', 'part_name'],
+                    include: [
+                      {
+                        model: SPackages,
+                        as: 'package',
+                        attributes: ['id', 'capacity']
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        order: [['created_at', 'DESC']]
+      });
+
+      const mappedStocks = rows.map(item => {
+        const label = item.work_order_item_label?.label;
+        const part = label?.part;
+        const packageData = part?.package;
+
+        return {
+          id: item.id,
+          created_at: item.createdAt,
+          label_number: label?.label_number || null,
+          part_number: part?.part_number || null,
+          part_name: part?.part_name || null,
+          package_capacity: packageData?.capacity || 0
+        };
+      });
+
+      return {
+        status: true,
+        data: {
+          bin: {
+            id: bin.id,
+            bin_code: bin.bin_code,
+            capacity: bin.capacity,
+            dedicated_part_number: bin.dedicated_part_number,
+            area: bin.area
+              ? {
+                  id: bin.area.id,
+                  area_code: bin.area.area_code,
+                  name: bin.area.name,
+                  warehouse: bin.area.warehouse
+                    ? {
+                        id: bin.area.warehouse.id,
+                        warehouse_code: bin.area.warehouse.warehouse_code,
+                        name: bin.area.warehouse.name
+                      }
+                    : null
+                }
+              : null
+          },
+          stocks:
+            helper.getPaginationData(
+              mappedStocks,
+              count,
+              page,
+              limit
+            )
+        }
+      };
+    } catch (error) {
       if (config.debug) {
         return {
           status: false,

@@ -47,4 +47,10 @@ router.delete('/area-layout/:id', auth.sessionChecker, auth.permissionChecker(['
   helper.sendResponse(res, result);
 });
 
+// get detail storage bin
+router.get('/storage-bin/:id', auth.sessionChecker, async (req, res) => {
+  const result = await warehouseLayoutModule.detailStorageBin(req);
+  helper.sendResponse(res, result);
+});
+
 export default router;

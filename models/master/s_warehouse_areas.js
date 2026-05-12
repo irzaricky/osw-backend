@@ -7,7 +7,6 @@ export default (sequelize) => {
       SWarehouseAreas.hasMany(models.SWarehouseBins, { foreignKey: 'area_id', as: 'bins' });
       SWarehouseAreas.hasMany(models.SDocks, { foreignKey: 'area_id', as: 'docks' });
       SWarehouseAreas.hasOne(models.SAreaLayout, { foreignKey: 'area_id', as: 'area_layout' });
-      SWarehouseAreas.hasMany(models.SAreaSpacing, { foreignKey: 'area_id', as: 'area_spacings' });
     }
   }
 

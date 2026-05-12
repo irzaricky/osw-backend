@@ -23,17 +23,17 @@ router.get('/', auth.sessionChecker, async (req, res) => {
     helper.sendResponse(res, result);
 });
 
-// post add work order storing
-router.post('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
-    const result = await workOrderStoringModule.add(req);
-    helper.sendResponse(res, result);
-});
-
 // get detail work order storing
 router.get('/:id', auth.sessionChecker, async (req, res) => {
     const result = await workOrderStoringModule.detail(req);
     helper.sendResponse(res, result);
 })
+
+// post add work order storing
+router.post('/', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+    const result = await workOrderStoringModule.add(req);
+    helper.sendResponse(res, result);
+});
 
 // put update work order storing
 router.put('/:id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {

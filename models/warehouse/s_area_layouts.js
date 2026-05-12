@@ -11,6 +11,10 @@ export default (sequelize, DataTypes) => {
         foreignKey: 'area_id',
         as: 'area'
       });
+      SAreaLayout.hasMany(models.SAreaSpacing, {
+        foreignKey: 'area_layout_id',
+        as: 'area_spacings'
+      });
     }
   }
 

@@ -3,15 +3,15 @@ import { Model } from 'sequelize';
 export default (sequelize, DataTypes) => {
   class SAreaSpacing extends Model {
     static associate(models) {
-      SAreaSpacing.belongsTo(models.SWarehouseAreas, {
-        foreignKey: 'area_id',
-        as: 'area'
+      SAreaSpacing.belongsTo(models.SAreaLayout, {
+        foreignKey: 'area_layout_id',
+        as: 'area_layout'
       });
     }
   }
 
   SAreaSpacing.init({
-    area_id: {
+    area_layout_id: {
       allowNull: false,
       type: DataTypes.INTEGER
     },

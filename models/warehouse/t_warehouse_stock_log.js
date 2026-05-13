@@ -32,7 +32,11 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 1
-    }
+    },
+    old_data: {
+  type: DataTypes.JSONB,
+  allowNull: true
+}
   }, {
     sequelize,
     modelName: 'TWarehouseStockLog',

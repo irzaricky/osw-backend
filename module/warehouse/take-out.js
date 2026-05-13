@@ -662,34 +662,96 @@ class TakeOutModule extends BaseModule {
       };
 
       await takeOutItemLabel.update({
-        is_scanned_out: true
-      }, {
-        transaction: t
-      });
+  is_scanned_out: true
+}, {
+  transaction: t
+})
 
-      await TWarehouseStockLog.create({
-        wh_stock_id: stock.id,
-        user_id: req.user?.id,
-        is_placement: false,
-        qty_per_kanban: 1,
-        fifo_override:
-          selectedLabel !== recommendedLabel,
-          recommended_label: recommendedLabel,
-          selected_label: selectedLabel
-      }, {
-        transaction: t
-      });
+console.log('INSERT OUT LOG RUNNING:', {
+  stock,
+  workOrderId: workOrder.id,
+  labelId: label.id,
+  partId: label.part_id,
+  binId: stock.bin_id
+})
 
-      await db.sequelize.query(`
-        DELETE FROM t_warehouse_stock
-        WHERE id = :stock_id
-      `, {
-        replacements: {
-          stock_id: stock.id
-        },
-        type: QueryTypes.DELETE,
-        transaction: t
-      });
+const checkLog = await db.sequelize.query(`
+  SELECT *
+  FROM t_warehouse_stock_log
+  WHERE wh_stock_id = :stock_id
+  ORDER BY id DESC
+  LIMIT 1
+`, {
+  replacements: {
+    stock_id: stock.id
+  },
+  type: QueryTypes.SELECT,
+  transaction: t
+})
+
+console.log('CHECK INSERT LOG:', checkLog)
+
+await db.sequelize.query(`
+
+  INSERT INTO t_warehouse_stock_log (
+    wh_stock_id,
+    wo_id,
+    wo_item_label_id,
+    label_id,
+    part_id,
+    bin_id,
+    user_id,
+    is_placement,
+    qty_per_kanban,
+    fifo_override,
+    recommended_label,
+    selected_label,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    :wh_stock_id,
+    :wo_id,
+    :wo_item_label_id,
+    :label_id,
+    :part_id,
+    :bin_id,
+    :user_id,
+    false,
+    :qty_per_kanban,
+    :fifo_override,
+    :recommended_label,
+    :selected_label,
+    NOW(),
+    NOW()
+  )
+`, {
+  replacements: {
+    wh_stock_id: stock.id,
+    wo_id: workOrder.id,
+    wo_item_label_id: stock.wo_item_label_id,
+    label_id: label.id,
+    part_id: label.part_id,
+    bin_id: stock.bin_id,
+    user_id: req.user?.id || null,
+    qty_per_kanban: 1,
+    fifo_override: false,
+    recommended_label: label_number,
+    selected_label: label_number
+  },
+  transaction: t
+})
+
+await db.sequelize.query(`
+  DELETE FROM t_warehouse_stock
+  WHERE id = :stock_id
+`, {
+  replacements: {
+    stock_id: stock.id
+  },
+  type: QueryTypes.DELETE,
+  transaction: t
+})
 
       // console.log('DELETED STOCK:', deletedStock);
       // console.log('STOCK ID DELETED:', stock.id);

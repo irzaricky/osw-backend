@@ -683,12 +683,46 @@ async detail(req) {
         bin_id: bin.id
       }, { transaction: t });
 
-      await TWarehouseStockLog.create({
+     await db.sequelize.query(`
+      INSERT INTO t_warehouse_stock_log (
+        wh_stock_id,
+        wo_id,
+        wo_item_label_id,
+        label_id,
+        part_id,
+        bin_id,
+        user_id,
+        is_placement,
+        qty_per_kanban,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        :wh_stock_id,
+        :wo_id,
+        :wo_item_label_id,
+        :label_id,
+        :part_id,
+        :bin_id,
+        :user_id,
+        true,
+        :qty_per_kanban,
+        NOW(),
+        NOW()
+      )
+    `, {
+      replacements: {
         wh_stock_id: stock.id,
-        user_id: req.user?.id,
-        is_placement: true,
-        qty_per_kanban
-      }, { transaction: t });
+        wo_id: workOrder.id,
+        wo_item_label_id: stock.wo_item_label_id,
+        label_id: label.id,
+        part_id: itemLabel.work_order_item.part.id,
+        bin_id: bin.id,
+        user_id: req.user?.id || null,
+        qty_per_kanban: qty_per_kanban || 1
+      },
+      transaction: t
+    });
 
       await itemLabel.update({
         is_scanned_in: true

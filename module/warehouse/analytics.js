@@ -30,7 +30,12 @@ class WarehouseAnalyticsModule extends BaseModule {
 
     if (warehouse_area_id) {
       stockWhere.push(`b.area_id = :warehouse_area_id`);
-      movementWhere.push(`b.area_id = :warehouse_area_id`);
+      movementWhere.push(`
+        COALESCE(
+          b.area_id,
+          NULLIF(wsl.old_data->>'warehouse_area_id', '')::int
+        ) = :warehouse_area_id
+      `);
       replacements.warehouse_area_id = warehouse_area_id;
     }
 
@@ -42,7 +47,12 @@ class WarehouseAnalyticsModule extends BaseModule {
 
     if (part_number) {
       stockWhere.push(`part.part_number ILIKE :part_number`);
-      movementWhere.push(`part.part_number ILIKE :part_number`);
+      movementWhere.push(`
+        COALESCE(
+          part.part_number,
+          wsl.old_data->>'part_number'
+        ) ILIKE :part_number
+      `);
       replacements.part_number = `%${part_number}%`;
     }
 
@@ -194,10 +204,10 @@ class WarehouseAnalyticsModule extends BaseModule {
 
       const rows = await db.sequelize.query(`
         SELECT
-          part.id AS part_id,
-          part.part_number,
-          part.part_name,
-          part.part_category,
+          COALESCE(part.id, NULLIF(wsl.old_data->>'part_id', '')::int) AS part_id,
+          COALESCE(part.part_number, wsl.old_data->>'part_number') AS part_number,
+          COALESCE(part.part_name, wsl.old_data->>'part_name') AS part_name,
+          COALESCE(part.part_category, wsl.old_data->>'part_category') AS part_category,
           COUNT(wsl.id)::int AS movement_count,
           COALESCE(SUM(pkg.capacity), 0)::int AS total_pcs_out
         FROM t_warehouse_stock_log wsl
@@ -208,7 +218,11 @@ class WarehouseAnalyticsModule extends BaseModule {
         LEFT JOIN s_packages pkg ON pkg.id = part.package_id
         LEFT JOIN s_warehouse_bins b ON b.id = ws.bin_id
         ${movementWhereClause}
-        GROUP BY part.id, part.part_number, part.part_name, part.part_category
+        GROUP BY
+          COALESCE(part.id, NULLIF(wsl.old_data->>'part_id', '')::int),
+          COALESCE(part.part_number, wsl.old_data->>'part_number'),
+          COALESCE(part.part_name, wsl.old_data->>'part_name'),
+          COALESCE(part.part_category, wsl.old_data->>'part_category')
         HAVING part.id IS NOT NULL
         ORDER BY movement_count DESC
         LIMIT 5

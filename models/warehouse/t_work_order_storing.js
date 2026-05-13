@@ -18,6 +18,11 @@ export default (sequelize) => {
         as: 'user'
       });
 
+      TWorkOrderStoring.belongsTo(models.SMaterialDeliveryOrder, {
+        foreignKey: 'ref_doc_id',
+        as: 'ref_doc'
+      });
+
       TWorkOrderStoring.belongsTo(models.SWarehouseAreas, {
         foreignKey: 'warehouse_area_id',
         as: 'area'
@@ -39,6 +44,10 @@ export default (sequelize) => {
     wo_category: {
       type: DataTypes.ENUM('Placement', 'Take Out'),
       allowNull: false
+    },
+    ref_doc_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     },
     ref_doc_number: {
       type: DataTypes.STRING(120),

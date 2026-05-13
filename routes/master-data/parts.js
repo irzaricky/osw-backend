@@ -22,6 +22,22 @@ router.get(
   }
 );
 router.get(
+  '/dd-category',
+  auth.sessionChecker,
+  auth.permissionChecker(['Superadmin', 'Admin*']),
+  async (req, res) => {
+    await partsModule.ddPartCategories(req, res);
+  }
+);
+router.get(
+  '/dd-package',
+  auth.sessionChecker,
+  auth.permissionChecker(['Superadmin', 'Admin*']),
+  async (req, res) => {
+    await partsModule.ddPackages(req, res);
+  }
+);
+router.get(
   '/',
   auth.sessionChecker,
   auth.permissionChecker(['Superadmin', 'Admin*']),

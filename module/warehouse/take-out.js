@@ -10,9 +10,6 @@ const {
   TWorkOrderStoringItem,
   TWorkOrderStoringItemLabel,
   TPartLabels,
-  TWarehouseStock,
-  TWarehouseStockLog,
-  SWarehouseBins,
   SParts,
   SPackages
 } = db;
@@ -99,134 +96,129 @@ class TakeOutModule extends BaseModule {
   }
 
   async list(req) {
-  try {
-    const params = req.query;
-    const { limit, page, offset } = helper.getPagination(params);
+    try {
+      const params = req.query;
+      const { limit, page, offset } = helper.getPagination(params);
 
-    const search = params.search || '';
-    const warehouse_area_id = params.warehouse_area_id;
-    const wo_status_id = params.wo_status_id;
-    const wo_type_id = params.wo_type_id;
-    const wo_date_start = params.wo_date_start;
-    const wo_date_end = params.wo_date_end;
+      const search = params.search || '';
+      const warehouse_area_id = params.warehouse_area_id;
+      const wo_status_id = params.wo_status_id;
+      const wo_type_id = params.wo_type_id;
+      const wo_date_start = params.wo_date_start;
+      const wo_date_end = params.wo_date_end;
 
-    const where = {
-      wo_category: 'Take Out'
-    };
-
-    if (wo_status_id) {
-      where.wo_status_id = wo_status_id;
-    } else {
-      where.wo_status_id = {
-        [Op.in]: [2, 3]
+      const where = {
+        wo_category: 'Take Out'
       };
-    }
 
-    if (search) {
-      where.wo_number = {
-        [Op.iLike]: `%${search}%`
-      };
-    }
+      if (wo_status_id) {
+        where.wo_status_id = wo_status_id;
+      } else {
+        where.wo_status_id = {
+          [Op.in]: [2, 3]
+        };
+      }
 
-    if (warehouse_area_id) {
-      where.warehouse_area_id = warehouse_area_id;
-    }
+      if (search) {
+        where.wo_number = {
+          [Op.iLike]: `%${search}%`
+        };
+      }
 
-    if (wo_type_id) {
-      where.wo_type_id = wo_type_id;
-    }
+      if (warehouse_area_id) where.warehouse_area_id = warehouse_area_id;
+      if (wo_type_id) where.wo_type_id = wo_type_id;
 
-    if (wo_date_start && wo_date_end) {
-      where.wo_date = {
-        [Op.between]: [wo_date_start, wo_date_end]
-      };
-    }
+      if (wo_date_start && wo_date_end) {
+        where.wo_date = {
+          [Op.between]: [wo_date_start, wo_date_end]
+        };
+      }
 
-    const { count, rows } = await TWorkOrderStoring.findAndCountAll({
-      where,
-      limit,
-      offset,
-      attributes: ['id'],
-      distinct: true,
-      order: [['id', 'DESC']]
-    });
+      const { count, rows } = await TWorkOrderStoring.findAndCountAll({
+        where,
+        limit,
+        offset,
+        attributes: ['id'],
+        distinct: true,
+        order: [['id', 'DESC']]
+      });
 
-    for (const wo of rows) {
-      await this.ensureFifoLabelsAssigned(wo.id);
-    }
+      for (const wo of rows) {
+        await this.ensureFifoLabelsAssigned(wo.id);
+      }
 
-    const refreshedRows = await TWorkOrderStoring.findAll({
-      where,
-      limit,
-      offset,
-      attributes: ['id', 'wo_number', 'wo_category', 'wo_date', 'wo_description'],
-      include: [
-        {
-          model: db.RefWorkOrderStoringType,
-          as: 'type',
-          attributes: ['id', 'name']
-        },
-        {
-          model: db.RefWorkOrderStoringStatus,
-          as: 'status',
-          attributes: ['id', 'name']
-        },
-        {
-          model: db.SWarehouseAreas,
-          as: 'area',
-          attributes: ['id', 'name']
-        },
-        {
-          model: TWorkOrderStoringItem,
-          as: 'items',
-          attributes: ['id'],
-          include: [
-            {
-              model: TWorkOrderStoringItemLabel,
-              as: 'item_labels',
-              attributes: ['id', 'is_scanned_out']
-            }
-          ]
-        }
-      ],
-      order: [['id', 'DESC']]
-    });
+      const refreshedRows = await TWorkOrderStoring.findAll({
+        where,
+        limit,
+        offset,
+        attributes: ['id', 'wo_number', 'wo_category', 'wo_date', 'wo_description'],
+        include: [
+          {
+            model: db.RefWorkOrderStoringType,
+            as: 'type',
+            attributes: ['id', 'name']
+          },
+          {
+            model: db.RefWorkOrderStoringStatus,
+            as: 'status',
+            attributes: ['id', 'name']
+          },
+          {
+            model: db.SWarehouseAreas,
+            as: 'area',
+            attributes: ['id', 'name']
+          },
+          {
+            model: TWorkOrderStoringItem,
+            as: 'items',
+            attributes: ['id'],
+            include: [
+              {
+                model: TWorkOrderStoringItemLabel,
+                as: 'item_labels',
+                attributes: ['id', 'is_scanned_out']
+              }
+            ]
+          }
+        ],
+        order: [['id', 'DESC']]
+      });
 
-    const data = refreshedRows.map(wo => {
-      let totalLabel = 0;
-      let totalScannedOut = 0;
+      const data = refreshedRows.map(wo => {
+        let totalLabel = 0;
+        let totalScannedOut = 0;
 
-      wo.items.forEach(item => {
-        totalLabel += item.item_labels.length;
-        totalScannedOut += item.item_labels.filter(label => label.is_scanned_out).length;
+        wo.items.forEach(item => {
+          totalLabel += item.item_labels.length;
+          totalScannedOut += item.item_labels.filter(label => label.is_scanned_out).length;
+        });
+
+        return {
+          wo_id: wo.id,
+          wo_number: wo.wo_number,
+          wo_category: wo.wo_category,
+          wo_date: wo.wo_date,
+          wo_description: wo.wo_description,
+          type: wo.type,
+          area: wo.area,
+          status: wo.status,
+          total_label: totalLabel,
+          total_scanned_out: totalScannedOut,
+          remaining: totalLabel - totalScannedOut,
+          progress: totalLabel > 0 ? Math.round((totalScannedOut / totalLabel) * 100) : 0
+        };
       });
 
       return {
-        wo_id: wo.id,
-        wo_number: wo.wo_number,
-        wo_category: wo.wo_category,
-        wo_date: wo.wo_date,
-        wo_description: wo.wo_description,
-        type: wo.type,
-        area: wo.area,
-        status: wo.status,
-        total_label: totalLabel,
-        total_scanned_out: totalScannedOut,
-        remaining: totalLabel - totalScannedOut,
-        progress: totalLabel > 0 ? Math.round((totalScannedOut / totalLabel) * 100) : 0
+        status: true,
+        data: helper.getPaginationData(data, count, page, limit)
       };
-    });
-
-    return {
-      status: true,
-      data: helper.getPaginationData(data, count, page, limit)
-    };
-  } catch (error) {
-    return config.debug
-      ? { status: false, error: error.message, code: 500 }
-      : { status: false, message: 'Internal server error', code: 500 };
+    } catch (error) {
+      return config.debug
+        ? { status: false, error: error.message, code: 500 }
+        : { status: false, message: 'Internal server error', code: 500 };
+    }
   }
-}
 
   async detail(req) {
     try {
@@ -368,463 +360,401 @@ class TakeOutModule extends BaseModule {
         : { status: false, message: 'Internal server error', code: 500 };
     }
   }
-
   async recommendations(req) {
-    try {
-      const { wo_id } = req.params;
+  try {
+    const { wo_id } = req.params;
 
-      await this.ensureFifoLabelsAssigned(wo_id);
+    await this.ensureFifoLabelsAssigned(wo_id);
 
-      const workOrder = await TWorkOrderStoring.findByPk(wo_id, {
-        include: [
-          {
-            model: TWorkOrderStoringItem,
-            as: 'items',
-            include: [
-              {
-                model: SParts,
-                as: 'part',
-                attributes: ['id', 'part_number', 'part_name', 'part_category', 'package_id']
-              }
-            ]
-          }
-        ]
-      });
-
-      if (!workOrder) {
-        return { status: false, message: 'Work Order not found', code: 404 };
-      }
-
-      const result = [];
-
-      for (const item of workOrder.items) {
-        const stocks = await db.sequelize.query(`
-          SELECT
-            ws.id AS stock_id,
-            target_wil.id AS wo_item_label_id,
-            pl.id AS label_id,
-            pl.label_number,
-            p.id AS part_id,
-            p.part_number,
-            p.part_name,
-            b.id AS bin_id,
-            b.bin_code,
-            COALESCE(MIN(wsl.created_at), ws.created_at) AS placement_at,
-            COALESCE(pkg.capacity, 1) AS qty_per_kanban
-          FROM t_work_order_storing_item_label target_wil
-          JOIN t_part_labels pl
-            ON pl.id = target_wil.label_id
-          JOIN s_parts p
-            ON p.id = pl.part_id
-          JOIN t_warehouse_stock ws
-            ON ws.wo_item_label_id IN (
-              SELECT source_wil.id
-              FROM t_work_order_storing_item_label source_wil
-              WHERE source_wil.label_id = target_wil.label_id
-            )
-          LEFT JOIN s_packages pkg
-            ON pkg.id = p.package_id
-          LEFT JOIN s_warehouse_bins b
-            ON b.id = ws.bin_id
-          LEFT JOIN t_warehouse_stock_log wsl
-            ON wsl.wh_stock_id = ws.id
-            AND wsl.is_placement = true
-          WHERE target_wil.wo_item_id = :wo_item_id
-            AND target_wil.is_scanned_out = false
-          GROUP BY
-            ws.id,
-            target_wil.id,
-            pl.id,
-            pl.label_number,
-            p.id,
-            p.part_number,
-            p.part_name,
-            b.id,
-            b.bin_code,
-            pkg.capacity,
-            ws.created_at
-          ORDER BY placement_at ASC, ws.id ASC
-        `, {
-          replacements: {
-            wo_item_id: item.id
-          },
-          type: QueryTypes.SELECT
-        });
-
-        const recommended = stocks[0] || null;
-
-        const bins = stocks.reduce((acc, stock) => {
-          let bin = acc.find(row => row.bin_id === stock.bin_id);
-
-          if (!bin) {
-            bin = {
-              bin_id: stock.bin_id,
-              bin_code: stock.bin_code,
-              is_recommended_bin: recommended?.bin_id === stock.bin_id,
-              stocks: []
-            };
-
-            acc.push(bin);
-          }
-
-          bin.stocks.push({
-            stock_id: stock.stock_id,
-            label_number: stock.label_number,
-            part_id: stock.part_id,
-            part_number: stock.part_number,
-            part_name: stock.part_name,
-            placement_at: stock.placement_at,
-            qty_per_kanban: Number(stock.qty_per_kanban || 1),
-            is_target_part: true
-          });
-
-          return acc;
-        }, []);
-
-        result.push({
-          wo_item_id: item.id,
-          part_id: item.part_id,
-          part_number: item.part?.part_number,
-          part_name: item.part?.part_name,
-          total_kanban: item.total_kanban,
-          recommended_label: recommended,
-          bins
-        });
-      }
-
-      return {
-        status: true,
-        data: result
-      };
-    } catch (error) {
-      return config.debug
-        ? { status: false, error: error.message, code: 500 }
-        : { status: false, message: 'Internal server error', code: 500 };
-    }
-  }
-
-  async scanLabelOut(req) {
-    const t = await db.sequelize.transaction();
-
-    try {
-      const { wo_id } = req.params;
-      const data = req.body;
-
-      const schema = Joi.object({
-        label_number: Joi.string().required(),
-        force_fifo_override: Joi.boolean().optional().default(false)
-      });
-
-      const validation = helper.validate(data, schema);
-      if (!validation.status) {
-        await t.rollback();
-        return validation;
-      }
-
-      const { label_number, force_fifo_override } = validation.value;
-
-      await this.ensureFifoLabelsAssigned(wo_id, t);
-
-      const workOrder = await TWorkOrderStoring.findByPk(wo_id, {
-        transaction: t
-      });
-
-      if (!workOrder) {
-        await t.rollback();
-        return { status: false, message: 'Work Order not found', code: 404 };
-      }
-
-      if (workOrder.wo_category !== 'Take Out') {
-        await t.rollback();
-        return { status: false, message: 'This Work Order is not for Take Out', code: 400 };
-      }
-
-      if (![2, 3].includes(workOrder.wo_status_id)) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Only Submitted or In Progress Work Order can be processed',
-          code: 400
-        };
-      }
-
-      const label = await TPartLabels.findOne({
-        where: { label_number },
-        transaction: t
-      });
-
-      if (!label) {
-        await t.rollback();
-        return { status: false, message: 'Part label not found', code: 404 };
-      }
-
-      const woItem = await TWorkOrderStoringItem.findOne({
-        where: {
-          wo_id,
-          part_id: label.part_id
-        },
-        transaction: t
-      });
-
-      if (!woItem) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label part is not requested in this Work Order',
-          code: 400
-        };
-      }
-
-      let takeOutItemLabel = await TWorkOrderStoringItemLabel.findOne({
-        where: {
-          wo_item_id: woItem.id,
-          label_id: label.id
-        },
-        transaction: t
-      });
-
-      if (!takeOutItemLabel) {
-        const currentAssignedCount = await TWorkOrderStoringItemLabel.count({
-          where: {
-            wo_item_id: woItem.id
-          },
-          transaction: t
-        });
-
-        if (currentAssignedCount >= Number(woItem.total_kanban || 0)) {
-          await t.rollback();
-          return {
-            status: false,
-            message: 'Selected label is not registered in this Take Out Work Order',
-            code: 400
-          };
+    const workOrder = await TWorkOrderStoring.findByPk(wo_id, {
+      include: [
+        {
+          model: TWorkOrderStoringItem,
+          as: 'items',
+          include: [
+            {
+              model: SParts,
+              as: 'part',
+              attributes: ['id', 'part_number', 'part_name', 'part_category', 'package_id']
+            }
+          ]
         }
+      ]
+    });
 
-        takeOutItemLabel = await TWorkOrderStoringItemLabel.create({
-          wo_item_id: woItem.id,
-          label_id: label.id,
-          is_scanned_in: true,
-          is_scanned_out: false
-        }, {
-          transaction: t
-        });
-      }
+    if (!workOrder) {
+      return {
+        status: false,
+        message: 'Work Order not found',
+        code: 404
+      };
+    }
 
-      if (takeOutItemLabel.is_scanned_out) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label already taken out',
-          code: 400
-        };
-      }
+    const result = [];
 
-      const stockRows = await db.sequelize.query(`
+    for (const item of workOrder.items) {
+      const stocks = await db.sequelize.query(`
         SELECT
           ws.id AS stock_id,
-          ws.wo_item_label_id,
-          ws.bin_id
-        FROM t_warehouse_stock ws
-        JOIN t_work_order_storing_item_label source_wil
-          ON source_wil.id = ws.wo_item_label_id
-        WHERE source_wil.label_id = :label_id
-        ORDER BY ws.id ASC
-        LIMIT 1
+          target_wil.id AS wo_item_label_id,
+          pl.id AS label_id,
+          pl.label_number,
+          p.id AS part_id,
+          p.part_number,
+          p.part_name,
+          b.id AS bin_id,
+          b.bin_code,
+          COALESCE(MIN(wsl.created_at), ws.created_at) AS placement_at,
+          COALESCE(pkg.capacity, 1) AS qty_per_kanban
+        FROM t_work_order_storing_item_label target_wil
+        JOIN t_part_labels pl
+          ON pl.id = target_wil.label_id
+        JOIN s_parts p
+          ON p.id = pl.part_id
+        JOIN t_warehouse_stock ws
+          ON ws.wo_item_label_id IN (
+            SELECT source_wil.id
+            FROM t_work_order_storing_item_label source_wil
+            WHERE source_wil.label_id = target_wil.label_id
+          )
+        LEFT JOIN s_packages pkg
+          ON pkg.id = p.package_id
+        LEFT JOIN s_warehouse_bins b
+          ON b.id = ws.bin_id
+        LEFT JOIN t_warehouse_stock_log wsl
+          ON wsl.wh_stock_id = ws.id
+          AND wsl.is_placement = true
+        WHERE target_wil.wo_item_id = :wo_item_id
+          AND target_wil.is_scanned_out = false
+        GROUP BY
+          ws.id,
+          target_wil.id,
+          pl.id,
+          pl.label_number,
+          p.id,
+          p.part_number,
+          p.part_name,
+          b.id,
+          b.bin_code,
+          pkg.capacity,
+          ws.created_at
+        ORDER BY placement_at ASC, ws.id ASC
       `, {
         replacements: {
-          label_id: label.id
+          wo_item_id: item.id
         },
-        type: QueryTypes.SELECT,
-        transaction: t
+        type: QueryTypes.SELECT
       });
 
-      const stockRow = stockRows[0];
+      const recommended = stocks[0] || null;
 
-      if (!stockRow) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label is not currently available in warehouse stock',
-          code: 400,
-          debug: {
-            label_number,
-            label_id: label.id,
-            take_out_wo_item_id: woItem.id,
-            take_out_wo_item_label_id: takeOutItemLabel.id
-          }
-        };
-      }
+      const bins = stocks.reduce((acc, stock) => {
+        let bin = acc.find(row => row.bin_id === stock.bin_id);
 
-      const stock = {
-        id: stockRow.stock_id,
-        wo_item_label_id: stockRow.wo_item_label_id,
-        bin_id: stockRow.bin_id
-      };
+        if (!bin) {
+          bin = {
+            bin_id: stock.bin_id,
+            bin_code: stock.bin_code,
+            is_recommended_bin: recommended?.bin_id === stock.bin_id,
+            stocks: []
+          };
 
-      await takeOutItemLabel.update({
-  is_scanned_out: true
-}, {
-  transaction: t
-})
-
-console.log('INSERT OUT LOG RUNNING:', {
-  stock,
-  workOrderId: workOrder.id,
-  labelId: label.id,
-  partId: label.part_id,
-  binId: stock.bin_id
-})
-
-const checkLog = await db.sequelize.query(`
-  SELECT *
-  FROM t_warehouse_stock_log
-  WHERE wh_stock_id = :stock_id
-  ORDER BY id DESC
-  LIMIT 1
-`, {
-  replacements: {
-    stock_id: stock.id
-  },
-  type: QueryTypes.SELECT,
-  transaction: t
-})
-
-console.log('CHECK INSERT LOG:', checkLog)
-
-await db.sequelize.query(`
-
-  INSERT INTO t_warehouse_stock_log (
-    wh_stock_id,
-    wo_id,
-    wo_item_label_id,
-    label_id,
-    part_id,
-    bin_id,
-    user_id,
-    is_placement,
-    qty_per_kanban,
-    fifo_override,
-    recommended_label,
-    selected_label,
-    created_at,
-    updated_at
-  )
-  VALUES (
-    :wh_stock_id,
-    :wo_id,
-    :wo_item_label_id,
-    :label_id,
-    :part_id,
-    :bin_id,
-    :user_id,
-    false,
-    :qty_per_kanban,
-    :fifo_override,
-    :recommended_label,
-    :selected_label,
-    NOW(),
-    NOW()
-  )
-`, {
-  replacements: {
-    wh_stock_id: stock.id,
-    wo_id: workOrder.id,
-    wo_item_label_id: stock.wo_item_label_id,
-    label_id: label.id,
-    part_id: label.part_id,
-    bin_id: stock.bin_id,
-    user_id: req.user?.id || null,
-    qty_per_kanban: 1,
-    fifo_override: false,
-    recommended_label: label_number,
-    selected_label: label_number
-  },
-  transaction: t
-})
-
-await db.sequelize.query(`
-  DELETE FROM t_warehouse_stock
-  WHERE id = :stock_id
-`, {
-  replacements: {
-    stock_id: stock.id
-  },
-  type: QueryTypes.DELETE,
-  transaction: t
-})
-
-      // console.log('DELETED STOCK:', deletedStock);
-      // console.log('STOCK ID DELETED:', stock.id);
-
-      if (workOrder.wo_status_id === 2) {
-        await workOrder.update({
-          wo_status_id: 3
-        }, {
-          transaction: t
-        });
-      }
-
-      const totalLabels = await TWorkOrderStoringItemLabel.count({
-        include: [
-          {
-            model: TWorkOrderStoringItem,
-            as: 'work_order_item',
-            where: { wo_id }
-          }
-        ],
-        transaction: t
-      });
-
-      const totalScannedOut = await TWorkOrderStoringItemLabel.count({
-        where: {
-          is_scanned_out: true
-        },
-        include: [
-          {
-            model: TWorkOrderStoringItem,
-            as: 'work_order_item',
-            where: { wo_id }
-          }
-        ],
-        transaction: t
-      });
-
-      if (totalLabels > 0 && totalLabels === totalScannedOut) {
-        await workOrder.update({
-          wo_status_id: 4
-        }, {
-          transaction: t
-        });
-      }
-
-      await t.commit();
-
-      return {
-        status: true,
-        message: 'Label successfully taken out',
-        data: {
-          wo_id: workOrder.id,
-          wo_number: workOrder.wo_number,
-          label_number,
-          placement: 'OUT',
-          fifo_override: false,
-          recommended_label: label_number,
-          wo_item_label_id: takeOutItemLabel.id,
-          total_label: totalLabels,
-          total_scanned_out: totalScannedOut,
-          remaining: totalLabels - totalScannedOut
+          acc.push(bin);
         }
-      };
-    } catch (error) {
-      if (!t.finished) {
-        await t.rollback();
-      }
 
-      return config.debug
-        ? { status: false, error: error.message, code: 500 }
-        : { status: false, message: 'Internal server error', code: 500 };
+        bin.stocks.push({
+          stock_id: stock.stock_id,
+          label_number: stock.label_number,
+          part_id: stock.part_id,
+          part_number: stock.part_number,
+          part_name: stock.part_name,
+          placement_at: stock.placement_at,
+          qty_per_kanban: Number(stock.qty_per_kanban || 1),
+          is_target_part: true
+        });
+
+        return acc;
+      }, []);
+
+      result.push({
+        wo_item_id: item.id,
+        part_id: item.part_id,
+        part_number: item.part?.part_number,
+        part_name: item.part?.part_name,
+        total_kanban: item.total_kanban,
+        recommended_label: recommended,
+        bins
+      });
     }
+
+    return {
+      status: true,
+      data: result
+    };
+  } catch (error) {
+    return config.debug
+      ? { status: false, error: error.message, code: 500 }
+      : { status: false, message: 'Internal server error', code: 500 };
   }
+}
+
+async scanLabelOut(req) {
+  const t = await db.sequelize.transaction();
+
+  try {
+    const { wo_id } = req.params;
+    const data = req.body;
+
+    const schema = Joi.object({
+      label_number: Joi.string().required()
+    });
+
+    const validation = helper.validate(data, schema);
+    if (!validation.status) {
+      await t.rollback();
+      return validation;
+    }
+
+    const { label_number } = validation.value;
+
+    await this.ensureFifoLabelsAssigned(wo_id, t);
+
+    const workOrder = await TWorkOrderStoring.findByPk(wo_id, {
+      transaction: t
+    });
+
+    if (!workOrder) {
+      await t.rollback();
+      return { status: false, message: 'Work Order not found', code: 404 };
+    }
+
+    if (workOrder.wo_category !== 'Take Out') {
+      await t.rollback();
+      return { status: false, message: 'This Work Order is not for Take Out', code: 400 };
+    }
+
+    if (![2, 3].includes(workOrder.wo_status_id)) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Only Submitted or In Progress Work Order can be processed',
+        code: 400
+      };
+    }
+
+    const label = await TPartLabels.findOne({
+      where: { label_number },
+      transaction: t
+    });
+
+    if (!label) {
+      await t.rollback();
+      return { status: false, message: 'Part label not found', code: 404 };
+    }
+
+    const woItem = await TWorkOrderStoringItem.findOne({
+      where: {
+        wo_id,
+        part_id: label.part_id
+      },
+      transaction: t
+    });
+
+    if (!woItem) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Part is not requested in this Work Order',
+        code: 400
+      };
+    }
+
+    let takeOutItemLabel = await TWorkOrderStoringItemLabel.findOne({
+      where: {
+        wo_item_id: woItem.id,
+        label_id: label.id
+      },
+      transaction: t
+    });
+
+    if (!takeOutItemLabel) {
+      takeOutItemLabel = await TWorkOrderStoringItemLabel.create({
+        wo_item_id: woItem.id,
+        label_id: label.id,
+        is_scanned_in: true,
+        is_scanned_out: false
+      }, {
+        transaction: t
+      });
+    }
+
+    if (takeOutItemLabel.is_scanned_out) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Label already taken out',
+        code: 400
+      };
+    }
+
+    const stockRows = await db.sequelize.query(`
+      SELECT
+        ws.id AS stock_id,
+        ws.wo_item_label_id,
+        ws.bin_id,
+        b.bin_code
+      FROM t_warehouse_stock ws
+      JOIN t_work_order_storing_item_label source_wil
+        ON source_wil.id = ws.wo_item_label_id
+      LEFT JOIN s_warehouse_bins b
+        ON b.id = ws.bin_id
+      WHERE source_wil.label_id = :label_id
+      ORDER BY ws.id ASC
+      LIMIT 1
+      FOR UPDATE OF ws
+    `, {
+      replacements: {
+        label_id: label.id
+      },
+      type: QueryTypes.SELECT,
+      transaction: t
+    });
+
+    const activeStock = stockRows[0];
+
+    if (!activeStock) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Label is not available in warehouse stock',
+        code: 400
+      };
+    }
+
+    await db.sequelize.query(`
+      INSERT INTO t_warehouse_stock_log (
+        wh_stock_id,
+        wo_id,
+        wo_item_label_id,
+        label_id,
+        part_id,
+        bin_id,
+        user_id,
+        is_placement,
+        qty_per_kanban,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        :wh_stock_id,
+        :wo_id,
+        :wo_item_label_id,
+        :label_id,
+        :part_id,
+        :bin_id,
+        :user_id,
+        false,
+        1,
+        NOW(),
+        NOW()
+      )
+    `, {
+      replacements: {
+        wh_stock_id: activeStock.stock_id,
+        wo_id: workOrder.id,
+        wo_item_label_id: takeOutItemLabel.id,
+        label_id: label.id,
+        part_id: label.part_id,
+        bin_id: activeStock.bin_id,
+        user_id: req.user?.id || null
+      },
+      type: QueryTypes.INSERT,
+      transaction: t
+    });
+
+    await takeOutItemLabel.update({
+      is_scanned_out: true
+    }, {
+      transaction: t
+    });
+
+    await db.sequelize.query(`
+      DELETE FROM t_warehouse_stock
+      WHERE id = :stock_id
+    `, {
+      replacements: {
+        stock_id: activeStock.stock_id
+      },
+      type: QueryTypes.DELETE,
+      transaction: t
+    });
+
+    if (workOrder.wo_status_id === 2) {
+      await workOrder.update({
+        wo_status_id: 3
+      }, {
+        transaction: t
+      });
+    }
+
+    const totalLabels = await TWorkOrderStoringItemLabel.count({
+      include: [{
+        model: TWorkOrderStoringItem,
+        as: 'work_order_item',
+        where: { wo_id }
+      }],
+      transaction: t
+    });
+
+    const totalScannedOut = await TWorkOrderStoringItemLabel.count({
+      where: {
+        is_scanned_out: true
+      },
+      include: [{
+        model: TWorkOrderStoringItem,
+        as: 'work_order_item',
+        where: { wo_id }
+      }],
+      transaction: t
+    });
+
+    if (totalLabels > 0 && totalLabels === totalScannedOut) {
+      await workOrder.update({
+        wo_status_id: 4
+      }, {
+        transaction: t
+      });
+    }
+
+    await t.commit();
+
+    return {
+      status: true,
+      message: 'GPT FIXED TAKE OUT',
+      data: {
+        wo_id: workOrder.id,
+        wo_number: workOrder.wo_number,
+        label_number,
+        placement: 'OUT',
+        stock_id: activeStock.stock_id,
+        bin_id: activeStock.bin_id,
+        bin_code: activeStock.bin_code,
+        wo_item_label_id: takeOutItemLabel.id,
+        total_label: totalLabels,
+        total_scanned_out: totalScannedOut,
+        remaining: totalLabels - totalScannedOut
+      }
+    };
+  } catch (error) {
+    if (t && !t.finished) {
+      await t.rollback();
+    }
+
+    return config.debug
+      ? { status: false, error: error.message, code: 500 }
+      : { status: false, message: 'Internal server error', code: 500 };
+  }
+}
 }
 
 export default new TakeOutModule();

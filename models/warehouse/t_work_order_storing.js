@@ -18,7 +18,7 @@ export default (sequelize) => {
         as: 'user'
       });
 
-      TWorkOrderStoring.belongsTo(models.TMaterialReceiving, {
+      TWorkOrderStoring.belongsTo(models.SMaterialDeliveryOrder, {
         foreignKey: 'ref_doc_id',
         as: 'ref_doc'
       });
@@ -56,18 +56,6 @@ export default (sequelize) => {
       allowNull: false
     },
     ref_doc_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    },
-    take_out_purpose: {
-      type: DataTypes.ENUM('production', 'buffer'),
-      allowNull: true
-    },
-    production_wo_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    },
-    station_id: {
       type: DataTypes.INTEGER,
       allowNull: true
     },

@@ -18,7 +18,7 @@ export default (sequelize) => {
         as: 'user'
       });
 
-      TWorkOrderStoring.belongsTo(models.SMaterialDeliveryOrder, {
+      TWorkOrderStoring.belongsTo(models.TMaterialReceiving, {
         foreignKey: 'ref_doc_id',
         as: 'ref_doc'
       });

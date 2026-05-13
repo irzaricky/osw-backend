@@ -41,11 +41,11 @@ class PartsModule extends BaseModule {
             part.part_type_code,
             COUNT(ws.id)::int AS available_stock
           FROM t_warehouse_stock ws
-          JOIN s_warehouse_bins b ON b.id = ws.bin_id
-          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-          JOIN t_part_labels label ON label.id = wil.label_id
-          JOIN s_parts part ON part.id = label.part_id
-          WHERE b.area_id = :area_id ${whereClause}
+          JOIN s_warehouse_bins b ON b.id = ws.bin_id AND b.deleted_at IS NULL
+          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+          JOIN t_part_labels label ON label.id = wil.label_id AND label.deleted_at IS NULL
+          JOIN s_parts part ON part.id = label.part_id AND part.deleted_at IS NULL
+          WHERE ws.deleted_at IS NULL AND b.area_id = :area_id ${whereClause}
           GROUP BY part.id, part.part_number, part.part_name, part.part_type_code
           ORDER BY part.part_number ASC
         `, {

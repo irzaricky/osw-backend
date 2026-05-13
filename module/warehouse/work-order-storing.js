@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import dayjs from 'dayjs';
 import path from 'path';
 
-const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail, SPackages } = db;
+const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail, SPackages, TMaterialReceiving, TMaterialReceivingItem, SMaterialDeliveryOrder, TMaterialDeliveryOrderDetail, RefReceivingStatus } = db;
 
 class WorkOrderStoringModule extends BaseModule {
   async list(req) {
@@ -99,7 +99,7 @@ class WorkOrderStoringModule extends BaseModule {
         where,
         limit,
         offset,
-        attributes: { exclude: ['wo_status_id', 'wo_type_id', 'deleted_at'] },
+        attributes: { exclude: ['ref_doc_id', 'wo_status_id', 'wo_type_id', 'deleted_at'] },
         include,
         order: [['created_at', 'DESC']]
       });
@@ -142,6 +142,18 @@ class WorkOrderStoringModule extends BaseModule {
             attributes: ['id', 'name']
           },
           {
+            model: TMaterialReceiving,
+            as: 'ref_doc',
+            attributes: ['id'],
+            include: [
+              {
+                model: SMaterialDeliveryOrder,
+                as: 'mdo',
+                attributes: ['id', 'number']
+              }
+            ]
+          },
+          {
             model: SWarehouseAreas,
             as: 'area',
             attributes: ['id', 'name']
@@ -175,7 +187,6 @@ class WorkOrderStoringModule extends BaseModule {
       };
 
     } catch (error) {
-      await t.rollback();
       if (config.debug) {
         return {
           status: false,
@@ -198,6 +209,7 @@ class WorkOrderStoringModule extends BaseModule {
 
       const schema = Joi.object({
         wo_category: Joi.string().valid('Placement', 'Take Out').required(),
+        ref_doc_id: Joi.number().integer().allow(null),
         ref_doc_number: Joi.string().allow('', null),
         ref_doc_name: Joi.string().allow('', null),
         wo_date: Joi.date().required(),
@@ -220,22 +232,191 @@ class WorkOrderStoringModule extends BaseModule {
         return validation;
       }
 
-      const { warehouse_area_id, wo_type_id, wo_date } = validation.value;
       const value = validation.value;
-    
+
       try {
-        await helper.checkExists(SWarehouseAreas, warehouse_area_id, 'Warehouse Area', t);
-        await helper.checkExists(RefWorkOrderStoringType, wo_type_id, 'Work Order Type', t);
+        await helper.checkExists(SWarehouseAreas, value.warehouse_area_id, 'Warehouse Area', t);
+        await helper.checkExists(RefWorkOrderStoringType, value.wo_type_id, 'Work Order Type', t);
       } catch (err) {
         await t.rollback();
         return err;
       }
 
+      if (value.ref_doc_id) {
+        // Placement only
+        if (value.wo_category !== 'Placement') {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Delivery Order only available for Placement',
+            code: 400
+          };
+        }
+
+        // Raw Material only
+        const workOrderType = await RefWorkOrderStoringType.findByPk(
+          value.wo_type_id,
+          {
+            attributes: ['name'],
+            transaction: t
+          }
+        );
+
+        if (!workOrderType || workOrderType.name !== 'Raw Materials') {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Delivery Order only available for Raw Materials type',
+            code: 400
+          };
+        }
+
+        const receiving = await TMaterialReceiving.findByPk(
+          value.ref_doc_id,
+          {
+            include: [
+              {
+                model: SMaterialDeliveryOrder,
+                as: 'mdo',
+                attributes: ['id', 'number']
+              },
+              {
+                model: RefReceivingStatus,
+                as: 'status',
+                attributes: ['name']
+              }
+            ],
+            transaction: t
+          }
+        );
+
+        if (!receiving) {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Material Delivery Order not found',
+            code: 404
+          };
+        }
+
+        if (receiving.status?.name !== 'Good Receipt') {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Delivery Order must be Good Receipt',
+            code: 400
+          };
+        }
+
+        // auto fill
+        value.ref_doc_number = receiving.mdo?.number || '-';
+        value.ref_doc_name = 'Material Delivery Order';
+
+        for (const item of value.items) {
+          const receivingItem =
+            await TMaterialReceivingItem.findOne({
+              where: {
+                mr_id: value.ref_doc_id,
+              },
+              include: [
+                {
+                  model: TMaterialDeliveryOrderDetail,
+                  as: 'mdo_detail',
+                  required: true,
+                  where: {
+                    part_id: item.part_id
+                  },
+                  attributes: ['id', 'part_id', 'qty']
+                }
+              ],
+              transaction: t
+            });
+
+          if (!receivingItem) {
+            await t.rollback();
+
+            return {
+              status: false,
+              message: `Part with id ${item.part_id} not found in Delivery Order`,
+              code: 400
+            };
+          }
+
+          const usedQty = await TWorkOrderStoringItem.sum(
+            'total_kanban',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    required: true,
+                    where: {
+                      ref_doc_id: value.ref_doc_id,
+                      wo_status_id: 2,
+                      deleted_at: null
+                    }
+                  }
+                ],
+                where: {
+                  part_id: item.part_id
+                },
+                transaction: t
+              }
+            ) || 0;
+
+          const sourceQty = receivingItem.mdo_detail.qty;
+          const remainingQty = sourceQty - usedQty;
+
+          if (item.total_kanban > remainingQty) {
+            await t.rollback();
+
+            return {
+              status: false,
+              message: `Remaining qty for part ${item.part_id} is only ${remainingQty}`,
+              code: 400
+            };
+          }
+        }
+      }
+
+      // Validate stock for Take Out
+      if (value.wo_category === 'Take Out') {
+        for (const item of value.items) {
+          const stockResult = await db.sequelize.query(`
+            SELECT COUNT(ws.id)::int AS total_kanban
+            FROM t_warehouse_stock ws
+            JOIN s_warehouse_bins b ON b.id = ws.bin_id AND b.deleted_at IS NULL
+            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+            JOIN t_part_labels label ON label.id = wil.label_id AND label.deleted_at IS NULL
+            WHERE ws.deleted_at IS NULL AND b.area_id = :area_id AND label.part_id = :part_id
+          `, {
+            replacements: { area_id: value.warehouse_area_id, part_id: item.part_id },
+            type: QueryTypes.SELECT,
+            transaction: t
+          });
+
+          const availableStock = stockResult[0]?.total_kanban || 0;
+          if (item.total_kanban > availableStock) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Insufficient stock for part ${item.part_id}. Requested: ${item.total_kanban}, Available: ${availableStock}`,
+              code: 400
+            };
+          }
+        }
+      }
+
+      // Generate wo number
       const dateStr = dayjs().format('YYMMDD');
 
       const prefix =
-        wo_type_id === 1 ? 'M' :
-        wo_type_id === 2 ? 'W' : 'F';
+        value.wo_type_id === 1 ? 'M' :
+        value.wo_type_id === 2 ? 'W' : 'F';
 
       const woPrefix = `WO-${prefix}-${dateStr}-`;
 
@@ -258,34 +439,6 @@ class WorkOrderStoringModule extends BaseModule {
 
       const wo_number = `${woPrefix}${String(nextNumber).padStart(3, '0')}`;
 
-      // Validate stock for Take Out
-      if (value.wo_category === 'Take Out') {
-        for (const item of value.items) {
-          const stockResult = await db.sequelize.query(`
-            SELECT COUNT(ws.id)::int AS total_kanban
-            FROM t_warehouse_stock ws
-            JOIN s_warehouse_bins b ON b.id = ws.bin_id
-            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-            JOIN t_part_labels label ON label.id = wil.label_id
-            WHERE b.area_id = :area_id AND label.part_id = :part_id
-          `, {
-            replacements: { area_id: value.warehouse_area_id, part_id: item.part_id },
-            type: QueryTypes.SELECT,
-            transaction: t
-          });
-
-          const availableStock = stockResult[0]?.total_kanban || 0;
-          if (item.total_kanban > availableStock) {
-            await t.rollback();
-            return {
-              status: false,
-              message: `Insufficient stock for part ${item.part_id}. Requested: ${item.total_kanban}, Available: ${availableStock}`,
-              code: 400
-            };
-          }
-        }
-      }
-
       const existing = await TWorkOrderStoring.findOne({
         where: { wo_number },
         paranoid: false,
@@ -299,6 +452,7 @@ class WorkOrderStoringModule extends BaseModule {
 
         await existing.update({
           wo_category: value.wo_category,
+          ref_doc_id: value.ref_doc_id,
           ref_doc_number: value.ref_doc_number,
           ref_doc_name: value.ref_doc_name,
           wo_date: value.wo_date,
@@ -344,6 +498,7 @@ class WorkOrderStoringModule extends BaseModule {
         workOrder = await TWorkOrderStoring.create({
           wo_number,
           wo_category: value.wo_category,
+          ref_doc_id: value.ref_doc_id,
           ref_doc_number: value.ref_doc_number,
           ref_doc_name: value.ref_doc_name,
           wo_date: value.wo_date,
@@ -366,7 +521,7 @@ class WorkOrderStoringModule extends BaseModule {
         returning: true
       });
 
-      if (value.wo_status_id === 2 && value.wo_category === 'Placement') {
+      if (value.wo_status_id === 2 && value.wo_category === 'Placement' && !value.ref_doc_id) {
         const labels = [];
 
         for (const item of createdItems) {
@@ -441,6 +596,7 @@ class WorkOrderStoringModule extends BaseModule {
 
       const schema = Joi.object({
         wo_category: Joi.string().valid('Placement', 'Take Out').required(),
+        ref_doc_id: Joi.number().integer().allow(null),
         ref_doc_number: Joi.string().allow('', null),
         ref_doc_name: Joi.string().allow('', null),
         wo_date: Joi.date().required(),
@@ -493,16 +649,160 @@ class WorkOrderStoringModule extends BaseModule {
         return err;
       }
 
+      if (value.ref_doc_id) {
+        // Placement only
+        if (value.wo_category !== 'Placement') {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Delivery Order only available for Placement',
+            code: 400
+          };
+        }
+
+        // Raw Material only
+        const workOrderType = await RefWorkOrderStoringType.findByPk(
+          value.wo_type_id,
+          {
+            attributes: ['name'],
+            transaction: t
+          }
+        );
+
+        if (!workOrderType || workOrderType.name !== 'Raw Materials') {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Delivery Order only available for Raw Materials type',
+            code: 400
+          };
+        }
+
+        const receiving = await TMaterialReceiving.findByPk(
+          value.ref_doc_id,
+          {
+            include: [
+              {
+                model: SMaterialDeliveryOrder,
+                as: 'mdo',
+                attributes: ['id', 'number']
+              },
+              {
+                model: RefReceivingStatus,
+                as: 'status',
+                attributes: ['name']
+              }
+            ],
+            transaction: t
+          }
+        );
+
+        if (!receiving) {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Material Delivery Order not found',
+            code: 404
+          };
+        }
+
+        if (receiving.status?.name !== 'Good Receipt') {
+          await t.rollback();
+
+          return {
+            status: false,
+            message: 'Delivery Order must be Good Receipt',
+            code: 400
+          };
+        }
+
+        // auto fill
+        value.ref_doc_number = receiving.mdo?.number || '-';
+        value.ref_doc_name = 'Material Delivery Order';
+
+        for (const item of value.items) {
+          const receivingItem =
+            await TMaterialReceivingItem.findOne({
+              where: {
+                mr_id: value.ref_doc_id,
+              },
+              include: [
+                {
+                  model: TMaterialDeliveryOrderDetail,
+                  as: 'mdo_detail',
+                  required: true,
+                  where: {
+                    part_id: item.part_id
+                  },
+                  attributes: ['id', 'part_id', 'qty']
+                }
+              ],
+              transaction: t
+            });
+
+          if (!receivingItem) {
+            await t.rollback();
+
+            return {
+              status: false,
+              message: `Part with id ${item.part_id} not found in Delivery Order`,
+              code: 400
+            };
+          }
+
+          const usedQty = await TWorkOrderStoringItem.sum(
+            'total_kanban',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    required: true,
+                    where: {
+                      ref_doc_id: value.ref_doc_id,
+                      wo_status_id: 2,
+                      deleted_at: null,
+                      id: {
+                        [Op.ne]: id
+                      }
+                    }
+                  }
+                ],
+                where: {
+                  part_id: item.part_id
+                },
+                transaction: t
+              }
+            ) || 0;
+
+          const sourceQty = receivingItem.mdo_detail.qty;
+          const remainingQty = sourceQty - usedQty;
+
+          if (item.total_kanban > remainingQty) {
+            await t.rollback();
+
+            return {
+              status: false,
+              message: `Remaining qty for part ${item.part_id} is only ${remainingQty}`,
+              code: 400
+            };
+          }
+        }
+      }
+
       // Validate stock for Take Out
       if (value.wo_category === 'Take Out') {
         for (const item of value.items) {
           const stockResult = await db.sequelize.query(`
             SELECT COUNT(ws.id)::int AS total_kanban
             FROM t_warehouse_stock ws
-            JOIN s_warehouse_bins b ON b.id = ws.bin_id
-            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-            JOIN t_part_labels label ON label.id = wil.label_id
-            WHERE b.area_id = :area_id AND label.part_id = :part_id
+            JOIN s_warehouse_bins b ON b.id = ws.bin_id AND b.deleted_at IS NULL
+            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+            JOIN t_part_labels label ON label.id = wil.label_id AND label.deleted_at IS NULL
+            WHERE ws.deleted_at IS NULL AND b.area_id = :area_id AND label.part_id = :part_id
           `, {
             replacements: { area_id: value.warehouse_area_id, part_id: item.part_id },
             type: QueryTypes.SELECT,
@@ -523,6 +823,7 @@ class WorkOrderStoringModule extends BaseModule {
 
       await workOrder.update({
         wo_category: value.wo_category,
+        ref_doc_id: value.ref_doc_id,
         ref_doc_number: value.ref_doc_number,
         ref_doc_name: value.ref_doc_name,
         wo_date: value.wo_date,
@@ -585,7 +886,7 @@ class WorkOrderStoringModule extends BaseModule {
         });
       }
 
-      if (value.wo_status_id === 2 && value.wo_category === 'Placement') {
+      if (value.wo_status_id === 2 && value.wo_category === 'Placement' && !value.ref_doc_id) {
         const labels = [];
 
         const dateStr = dayjs(workOrder.created_at).format('YYMMDD');

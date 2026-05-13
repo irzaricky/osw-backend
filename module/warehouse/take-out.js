@@ -671,7 +671,11 @@ class TakeOutModule extends BaseModule {
         wh_stock_id: stock.id,
         user_id: req.user?.id,
         is_placement: false,
-        qty_per_kanban: 1
+        qty_per_kanban: 1,
+        fifo_override:
+          selectedLabel !== recommendedLabel,
+          recommended_label: recommendedLabel,
+          selected_label: selectedLabel
       }, {
         transaction: t
       });

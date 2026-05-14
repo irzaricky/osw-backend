@@ -33,7 +33,10 @@ router.get('/fifo-compliance', auth.sessionChecker, async (req, res) => {
   const result = await warehouseAnalyticsModule.fifoCompliance(req)
   helper.sendResponse(res, result)
 })
-
+router.get('/fifo-violation-details', auth.sessionChecker, async (req, res) => {
+  const result = await warehouseAnalyticsModule.fifoViolationDetails(req)
+  helper.sendResponse(res, result)
+})
 router.get('/aging-distribution', auth.sessionChecker, async (req, res) => {
   const result = await warehouseAnalyticsModule.agingDistribution(req)
   helper.sendResponse(res, result)

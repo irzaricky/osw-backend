@@ -506,7 +506,8 @@ async scanLabelOut(req) {
     const data = req.body;
 
     const schema = Joi.object({
-      label_number: Joi.string().required()
+      label_number: Joi.string().required(),
+      fifo_override: Joi.boolean().default(false)
     });
 
     const validation = helper.validate(data, schema);
@@ -515,7 +516,7 @@ async scanLabelOut(req) {
       return validation;
     }
 
-    const { label_number } = validation.value;
+    const { label_number, fifo_override } = validation.value;
 
     await this.ensureFifoLabelsAssigned(wo_id, t);
 
@@ -630,6 +631,35 @@ async scanLabelOut(req) {
         code: 400
       };
     }
+    const recommendedRows = await db.sequelize.query(`
+      SELECT
+        pl.id AS label_id,
+        pl.label_number,
+        COALESCE(MIN(wsl.created_at), ws.created_at) AS placement_at
+      FROM t_warehouse_stock ws
+      JOIN t_work_order_storing_item_label source_wil
+        ON source_wil.id = ws.wo_item_label_id
+      JOIN t_part_labels pl
+        ON pl.id = source_wil.label_id
+      LEFT JOIN t_warehouse_stock_log wsl
+        ON wsl.wh_stock_id = ws.id
+        AND wsl.is_placement = true
+      WHERE pl.part_id = :part_id
+      GROUP BY ws.id, pl.id, pl.label_number, ws.created_at
+      ORDER BY placement_at ASC, ws.id ASC
+      LIMIT 1
+    `, {
+      replacements: {
+        part_id: label.part_id
+      },
+      type: QueryTypes.SELECT,
+      transaction: t
+    });
+
+    const recommended = recommendedRows[0] || null;
+
+    const recommendedLabelId = recommended?.label_id || label.id;
+    const recommendedLabelNumber = recommended?.label_number || label.label_number;
 
     await db.sequelize.query(`
       INSERT INTO t_warehouse_stock_log (
@@ -640,7 +670,10 @@ async scanLabelOut(req) {
         part_id,
         bin_id,
         user_id,
+        recommended_label_id,
+        recommended_label_number,
         is_placement,
+        fifo_override,
         qty_per_kanban,
         created_at,
         updated_at
@@ -653,7 +686,10 @@ async scanLabelOut(req) {
         :part_id,
         :bin_id,
         :user_id,
+        :recommended_label_id,
+        :recommended_label_number,
         false,
+        :fifo_override,
         1,
         NOW(),
         NOW()
@@ -666,7 +702,10 @@ async scanLabelOut(req) {
         label_id: label.id,
         part_id: label.part_id,
         bin_id: activeStock.bin_id,
-        user_id: req.user?.id || null
+        user_id: req.user?.id || null,
+        recommended_label_id: recommendedLabelId,
+        recommended_label_number: recommendedLabelNumber,
+        fifo_override
       },
       type: QueryTypes.INSERT,
       transaction: t
@@ -730,7 +769,7 @@ async scanLabelOut(req) {
 
     return {
       status: true,
-      message: 'GPT FIXED TAKE OUT',
+      message: 'Label successfully taken out',
       data: {
         wo_id: workOrder.id,
         wo_number: workOrder.wo_number,

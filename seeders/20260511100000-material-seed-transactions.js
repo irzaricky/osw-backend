@@ -58,29 +58,30 @@ export default {
     // ============================================================
     // RESOLVE IDs dari data master yang sudah ada
     // ============================================================
-    const staffId     = await getUser('taufik.hidayat@company.com');     // Admin PPIC → maker
+    const staffId = await getUser('taufik.hidayat@company.com');     // Admin PPIC → maker
     const supervisorId = await getUser('rahmi.wastuti@company.com');     // Supervisor PPIC → checker/approver
 
-    const partFrameVc     = await getPart('PART-FRAME-VC');
-    const partBatt48v     = await getPart('PART-BATT-48V');
-    const partController  = await getPart('PART-CONTROLLER-48V');
-    const partBrakeSet    = await getPart('PART-BRAKE-SET');
-    const partTire26      = await getPart('PART-TIRE-26');
-    const partSpokeSs     = await getPart('PART-SPOKE-SS');
-    const partNutM12      = await getPart('PART-NUT-M12');
-    const partBearingAlt  = await getPart('PART-BEARING-608');
+    const partSeatpost = await getPart('PART-SEATPOST');
+    const partBattCase = await getPart('PART-BATT-CASE');
+    const partBms48v = await getPart('PART-BMS-48V');
+    const partCell18650 = await getPart('PART-CELL-18650');
+    const partRim26 = await getPart('PART-RIM-26');
+    const partTire26 = await getPart('PART-TIRE-26');
+    const partSpokeSs = await getPart('PART-SPOKE-SS');
+    const partNutM12 = await getPart('PART-NUT-M12');
+    const partBearingAlt = await getPart('PART-BEARING-608');
 
-    const bomVoltStallion  = await getBom('BOM - VOBKME2025 - V1');
-    const bomFrameVc       = await getBom('BOM - PART-FRAME-VC - V1');
-    const bomWheelF26      = await getBom('BOM - ASSY-WHEEL-F-26 - V1');
+    const bomVoltStallion = await getBom('BOM - VOBKME2025 - V1');
+    const bomFrameVc = await getBom('BOM - PART-FRAME-VC - V1');
+    const bomWheelF26 = await getBom('BOM - ASSY-WHEEL-F-26 - V1');
 
-    const supplierId1  = await getSupplier('S001'); // Rangka & Logam
-    const supplierId2  = await getSupplier('S002'); // Baterai & Elektronik
-    const supplierId4  = await getSupplier('S004'); // Baut & Bearing
+    const supplierId1 = await getSupplier('S001'); // Rangka & Logam
+    const supplierId2 = await getSupplier('S002'); // Baterai & Elektronik
+    const supplierId4 = await getSupplier('S004'); // Baut & Bearing
 
-    const warehouseId  = await getWarehouse('WH-MAT-01');
-    const dockId1      = await getDock('DCK-01');
-    const dockId3      = await getDock('DCK-03');
+    const warehouseId = await getWarehouse('WH-MAT-01');
+    const dockId1 = await getDock('DCK-01');
+    const dockId3 = await getDock('DCK-03');
 
     // ============================================================
     // 1. MRP
@@ -137,20 +138,20 @@ export default {
     // ============================================================
     const mrpDetailData = [
       // MRP-2026-05-001 details
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partFrameVc,    bom_id: bomFrameVc,      qty: 50,  notes: 'Kebutuhan frame untuk produksi Mei', ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partBatt48v,    bom_id: bomVoltStallion, qty: 50,  notes: 'Baterai 48V untuk Volt Stallion', ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partController,  bom_id: bomVoltStallion, qty: 50,  notes: null, ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partBrakeSet,   bom_id: bomVoltStallion, qty: 50,  notes: null, ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partTire26,     bom_id: bomWheelF26,     qty: 100, notes: 'x2 per unit', ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partSpokeSs,    bom_id: bomWheelF26,     qty: 1800, notes: '36 spoke per roda x 2 roda x 25 unit', ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partNutM12,     bom_id: bomWheelF26,     qty: 200, notes: null, ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partSeatpost, bom_id: bomFrameVc, qty: 50, notes: 'Kebutuhan seatpost', ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partBms48v, bom_id: bomVoltStallion, qty: 50, notes: 'BMS 48V untuk baterai', ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partBattCase, bom_id: bomVoltStallion, qty: 50, notes: null, ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partCell18650, bom_id: bomVoltStallion, qty: 3000, notes: '60 cell per baterai x 50', ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partTire26, bom_id: bomWheelF26, qty: 100, notes: 'x2 per unit', ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partSpokeSs, bom_id: bomWheelF26, qty: 1800, notes: '36 spoke per roda x 2 roda x 25 unit', ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-05-001'], part_id: partNutM12, bom_id: bomWheelF26, qty: 200, notes: null, ...timestamp },
 
       // MRP-2026-06-001 details
-      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partFrameVc,    bom_id: bomFrameVc,      qty: 75,  notes: 'Target produksi meningkat Juni', ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partBatt48v,    bom_id: bomVoltStallion, qty: 75,  notes: null, ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partTire26,     bom_id: bomWheelF26,     qty: 150, notes: null, ...timestamp },
-      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partBearingAlt, bom_id: null,            qty: 300, notes: 'Safety stock bearing', ...timestamp },
-    ].filter(d => d.part_id); // skip kalau part_id null (part belum ada di seed)
+      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partSeatpost, bom_id: bomFrameVc, qty: 75, notes: 'Target produksi meningkat Juni', ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partRim26, bom_id: bomWheelF26, qty: 150, notes: null, ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partTire26, bom_id: bomWheelF26, qty: 150, notes: null, ...timestamp },
+      { mrp_id: mrpMap['MRP-2026-06-001'], part_id: partBearingAlt, bom_id: null, qty: 300, notes: 'Safety stock bearing', ...timestamp },
+    ].filter(d => d.part_id);
 
     await queryInterface.bulkInsert('s_mrp_details', mrpDetailData, {});
 
@@ -228,23 +229,23 @@ export default {
     // 4. MPR DETAILS
     // ============================================================
     const mprDetailData = [
-      // MPR-2026-05-001: Frame & Baterai
-      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partFrameVc,   qty: 50,  required_date: new Date('2026-05-15'), notes: null, ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partBatt48v,   qty: 50,  required_date: new Date('2026-05-15'), notes: 'Prioritas tinggi', ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partController, qty: 50,  required_date: new Date('2026-05-15'), notes: null, ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partBrakeSet,  qty: 50,  required_date: new Date('2026-05-20'), notes: null, ...timestamp },
+      // MPR-2026-05-001: Material Baterai & Rangka
+      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partSeatpost, qty: 50, required_date: new Date('2026-05-15'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partBms48v, qty: 50, required_date: new Date('2026-05-15'), notes: 'Prioritas tinggi', ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partBattCase, qty: 50, required_date: new Date('2026-05-15'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-001'], part_id: partCell18650, qty: 3000, required_date: new Date('2026-05-20'), notes: null, ...timestamp },
 
       // MPR-2026-05-002: Komponen Roda
-      { mpr_id: mprMap['MPR-2026-05-002'], part_id: partTire26,    qty: 100, required_date: new Date('2026-05-18'), notes: null, ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-002'], part_id: partSpokeSs,   qty: 1800, required_date: new Date('2026-05-18'), notes: null, ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-002'], part_id: partNutM12,    qty: 200, required_date: new Date('2026-05-18'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-002'], part_id: partTire26, qty: 100, required_date: new Date('2026-05-18'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-002'], part_id: partSpokeSs, qty: 1800, required_date: new Date('2026-05-18'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-002'], part_id: partNutM12, qty: 200, required_date: new Date('2026-05-18'), notes: null, ...timestamp },
 
       // MPR-2026-05-003: Emergency Bearing
       { mpr_id: mprMap['MPR-2026-05-003'], part_id: partBearingAlt, qty: 100, required_date: new Date('2026-05-12'), notes: 'Urgent - line stop jika tidak ada', ...timestamp },
 
       // MPR-2026-06-001: Draft
-      { mpr_id: mprMap['MPR-2026-06-001'], part_id: partFrameVc,   qty: 75,  required_date: new Date('2026-06-15'), notes: null, ...timestamp },
-      { mpr_id: mprMap['MPR-2026-06-001'], part_id: partBatt48v,   qty: 75,  required_date: new Date('2026-06-15'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-06-001'], part_id: partSeatpost, qty: 75, required_date: new Date('2026-06-15'), notes: null, ...timestamp },
+      { mpr_id: mprMap['MPR-2026-06-001'], part_id: partRim26, qty: 150, required_date: new Date('2026-06-15'), notes: null, ...timestamp },
     ].filter(d => d.part_id);
 
     await queryInterface.bulkInsert('s_material_purchase_request_details', mprDetailData, {});
@@ -253,18 +254,18 @@ export default {
     // 5. MPR LOGS
     // ============================================================
     const mprLogData = [
-      { mpr_id: mprMap['MPR-2026-05-001'], action: 'created',  ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-001'], action: 'created', ...timestamp },
       { mpr_id: mprMap['MPR-2026-05-001'], action: 'submitted', ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-001'], action: 'approved',  ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-001'], action: 'approved', ...timestamp },
 
-      { mpr_id: mprMap['MPR-2026-05-002'], action: 'created',  ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-002'], action: 'created', ...timestamp },
       { mpr_id: mprMap['MPR-2026-05-002'], action: 'submitted', ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-002'], action: 'approved',  ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-002'], action: 'approved', ...timestamp },
 
-      { mpr_id: mprMap['MPR-2026-05-003'], action: 'created',   ...timestamp },
-      { mpr_id: mprMap['MPR-2026-05-003'], action: 'submitted',  ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-003'], action: 'created', ...timestamp },
+      { mpr_id: mprMap['MPR-2026-05-003'], action: 'submitted', ...timestamp },
 
-      { mpr_id: mprMap['MPR-2026-06-001'], action: 'created',   ...timestamp },
+      { mpr_id: mprMap['MPR-2026-06-001'], action: 'created', ...timestamp },
     ];
 
     await queryInterface.bulkInsert('s_material_purchase_request_logs', mprLogData, {});
@@ -337,18 +338,18 @@ export default {
     // 7. MPO DETAILS
     // ============================================================
     const mpoDetailData = [
-      // MPO-2026-05-001: Frame & komponen mekanik
-      { mpo_id: mpoMap['MPO-2026-05-001'], part_id: partFrameVc,   qty: 50,  price: 850000,  notes: null, ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-001'], part_id: partBrakeSet,  qty: 50,  price: 125000,  notes: null, ...timestamp },
+      // MPO-2026-05-001: Komponen mekanik
+      { mpo_id: mpoMap['MPO-2026-05-001'], part_id: partSeatpost, qty: 50, price: 160000, notes: null, ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-001'], part_id: partBattCase, qty: 50, price: 300000, notes: null, ...timestamp },
 
-      // MPO-2026-05-002: Baterai & elektronik
-      { mpo_id: mpoMap['MPO-2026-05-002'], part_id: partBatt48v,   qty: 50,  price: 2500000, notes: 'Harga belum termasuk PPN', ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-002'], part_id: partController, qty: 50, price: 450000,  notes: null, ...timestamp },
+      // MPO-2026-05-002: Baterai Cell & Elektronik
+      { mpo_id: mpoMap['MPO-2026-05-002'], part_id: partBms48v, qty: 50, price: 450000, notes: 'Harga belum termasuk PPN', ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-002'], part_id: partCell18650, qty: 3000, price: 55000, notes: null, ...timestamp },
 
       // MPO-2026-05-003: Roda & bearing
-      { mpo_id: mpoMap['MPO-2026-05-003'], part_id: partTire26,    qty: 100, price: 185000,  notes: null, ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-003'], part_id: partSpokeSs,   qty: 1800, price: 1500,   notes: null, ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-003'], part_id: partNutM12,    qty: 200, price: 500,     notes: null, ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-003'], part_id: partTire26, qty: 100, price: 185000, notes: null, ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-003'], part_id: partSpokeSs, qty: 1800, price: 3500, notes: null, ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-003'], part_id: partNutM12, qty: 200, price: 4000, notes: null, ...timestamp },
     ].filter(d => d.part_id);
 
     await queryInterface.bulkInsert('s_material_purchase_order_details', mpoDetailData, {});
@@ -357,14 +358,14 @@ export default {
     // 8. MPO LOGS
     // ============================================================
     const mpoLogData = [
-      { mpo_id: mpoMap['MPO-2026-05-001'], action: 'created',   ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-001'], action: 'submitted',  ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-001'], action: 'approved',   ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-001'], action: 'created', ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-001'], action: 'submitted', ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-001'], action: 'approved', ...timestamp },
 
-      { mpo_id: mpoMap['MPO-2026-05-002'], action: 'created',   ...timestamp },
-      { mpo_id: mpoMap['MPO-2026-05-002'], action: 'submitted',  ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-002'], action: 'created', ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-002'], action: 'submitted', ...timestamp },
 
-      { mpo_id: mpoMap['MPO-2026-05-003'], action: 'created',   ...timestamp },
+      { mpo_id: mpoMap['MPO-2026-05-003'], action: 'created', ...timestamp },
     ];
 
     await queryInterface.bulkInsert('s_material_purchase_order_logs', mpoLogData, {});
@@ -420,11 +421,11 @@ export default {
     // ============================================================
     const mdoDetailData = [
       // MDO-2026-05-001
-      { mdo_id: mdoMap['MDO-2026-05-001'], part_id: partFrameVc,  qty: 50,  notes: null, ...timestamp },
-      { mdo_id: mdoMap['MDO-2026-05-001'], part_id: partBrakeSet, qty: 50,  notes: null, ...timestamp },
+      { mdo_id: mdoMap['MDO-2026-05-001'], part_id: partSeatpost, qty: 50, notes: null, ...timestamp },
+      { mdo_id: mdoMap['MDO-2026-05-001'], part_id: partBattCase, qty: 25, notes: null, ...timestamp },
 
       // MDO-2026-05-002
-      { mdo_id: mdoMap['MDO-2026-05-002'], part_id: partFrameVc,  qty: 25,  notes: 'Sisa batch pertama', ...timestamp },
+      { mdo_id: mdoMap['MDO-2026-05-002'], part_id: partBattCase, qty: 25, notes: 'Sisa batch pertama', ...timestamp },
     ].filter(d => d.part_id);
 
     await queryInterface.bulkInsert('s_material_delivery_order_details', mdoDetailData, {});

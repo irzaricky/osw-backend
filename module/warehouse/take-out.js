@@ -171,7 +171,7 @@ class TakeOutModule extends BaseModule {
           {
             model: TWorkOrderStoringItem,
             as: 'items',
-            attributes: ['id'],
+            attributes: ['id', 'total_kanban'],
             include: [
               {
                 model: TWorkOrderStoringItemLabel,
@@ -189,7 +189,7 @@ class TakeOutModule extends BaseModule {
         let totalScannedOut = 0;
 
         wo.items.forEach(item => {
-          totalLabel += item.item_labels.length;
+          totalLabel += Number(item.total_kanban || 0);
           totalScannedOut += item.item_labels.filter(label => label.is_scanned_out).length;
         });
 
@@ -289,9 +289,9 @@ class TakeOutModule extends BaseModule {
       }
 
       const items = await Promise.all(workOrder.items.map(async item => {
-        const totalLabel = item.item_labels.length;
+        const totalLabel = Number(item.total_kanban || 0);
         const totalScannedOut = item.item_labels.filter(label => label.is_scanned_out).length;
-        const remaining = totalLabel - totalScannedOut;
+        const remaining = Math.max(totalLabel - totalScannedOut, 0);
 
         const packageData = item.part?.package_id
           ? await SPackages.findByPk(item.part.package_id, {
@@ -736,14 +736,13 @@ async scanLabelOut(req) {
       });
     }
 
-    const totalLabels = await TWorkOrderStoringItemLabel.count({
-      include: [{
-        model: TWorkOrderStoringItem,
-        as: 'work_order_item',
-        where: { wo_id }
-      }],
-      transaction: t
-    });
+    const totalTargetKanban = await TWorkOrderStoringItem.sum(
+  'total_kanban',
+  {
+    where: { wo_id },
+    transaction: t
+  }
+);
 
     const totalScannedOut = await TWorkOrderStoringItemLabel.count({
       where: {
@@ -757,7 +756,9 @@ async scanLabelOut(req) {
       transaction: t
     });
 
-    if (totalLabels > 0 && totalLabels === totalScannedOut) {
+    if (
+      Number(totalScannedOut) >= Number(totalTargetKanban)
+    ) {
       await workOrder.update({
         wo_status_id: 4
       }, {
@@ -779,9 +780,12 @@ async scanLabelOut(req) {
         bin_id: activeStock.bin_id,
         bin_code: activeStock.bin_code,
         wo_item_label_id: takeOutItemLabel.id,
-        total_label: totalLabels,
+        total_label: totalTargetKanban,
         total_scanned_out: totalScannedOut,
-        remaining: totalLabels - totalScannedOut
+        remaining: Math.max(
+          Number(totalTargetKanban) - Number(totalScannedOut),
+          0
+        )
       }
     };
   } catch (error) {

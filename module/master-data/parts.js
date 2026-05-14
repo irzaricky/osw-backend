@@ -16,10 +16,69 @@ class PartsModule extends BaseModule {
       const partTypeCode = (params.part_type_code || '').trim()
       const wo_category = (params.wo_category || '').trim()
       const area_id = params.area_id ? parseInt(params.area_id) : null
+      const ref_doc_id = params.ref_doc_id ? parseInt(params.ref_doc_id) : null
 
       let rows
 
-      if (wo_category === 'take_out' && area_id) {
+      if (ref_doc_id) {
+        const replacements = { ref_doc_id }
+
+        rows = await db.sequelize.query(`
+          SELECT
+            part.id,
+            part.part_number,
+            part.part_name,
+            part.part_type_code,
+            mdo_detail.qty::int AS source_qty,
+            COALESCE(SUM(wo_item.total_kanban), 0)::int AS used_qty,
+            (mdo_detail.qty - COALESCE(SUM(wo_item.total_kanban), 0))::int AS remaining_qty
+
+          FROM t_material_receiving_item mri
+
+          JOIN s_material_delivery_order_details mdo_detail
+            ON mdo_detail.id = mri.mdo_detail_id
+            AND mdo_detail.deleted_at IS NULL
+
+          JOIN s_parts part
+            ON part.id = mdo_detail.part_id
+            AND part.deleted_at IS NULL
+
+          LEFT JOIN t_work_order_storing_item wo_item
+            ON wo_item.part_id = part.id
+            AND wo_item.deleted_at IS NULL
+
+          LEFT JOIN t_work_order_storing wo
+            ON wo.id = wo_item.wo_id
+            AND wo.deleted_at IS NULL
+            AND wo.ref_doc_id = :ref_doc_id
+            AND wo.wo_status_id = 2
+
+          WHERE
+            mri.deleted_at IS NULL
+            AND mri.mr_id = :ref_doc_id
+
+          GROUP BY
+            part.id,
+            part.part_number,
+            part.part_name,
+            part.part_type_code,
+            mdo_detail.qty
+
+          HAVING (mdo_detail.qty - COALESCE(SUM(wo_item.total_kanban), 0)) > 0
+          ORDER BY part.part_number ASC
+        `, {
+          replacements,
+          type: QueryTypes.SELECT
+        })
+
+        rows = rows.map(row => ({
+          id: row.id,
+          part_number: row.part_number,
+          part_name: row.part_name,
+          part_type_code: row.part_type_code,
+          remaining_qty: row.remaining_qty
+        }))
+      } else if (wo_category === 'take_out' && area_id) {
         let whereClause = ''
         const replacements = { area_id }
 

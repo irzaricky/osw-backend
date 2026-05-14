@@ -10,7 +10,8 @@ export default (sequelize) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // define association here
+      SMaterialPurchaseOrder.belongsTo(models.SSuppliers, { foreignKey: 'supplier_id', as: 'supplier' });
+      SMaterialPurchaseOrder.hasMany(models.SMaterialDeliveryOrder, { foreignKey: 'mpo_id', as: 'material_delivery_orders' });
     }
   }
   SMaterialPurchaseOrder.init({
@@ -28,6 +29,11 @@ export default (sequelize) => {
   }, {
     sequelize,
     modelName: 'SMaterialPurchaseOrder',
+    tableName: 's_material_purchase_orders',
+    underscored: true,
+    timestamps: true,
+    paranoid: true,
+    deletedAt: 'deleted_at'
   });
   return SMaterialPurchaseOrder;
 };

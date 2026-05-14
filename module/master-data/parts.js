@@ -6,7 +6,7 @@ import BaseModule from '../../class/base.module.js'
 import ExcelJS from 'exceljs'
 import Joi from 'joi'
 
-const { SParts, RefPartTypes, SSuppliers, sequelize } = db
+const { SParts, RefPartTypes, SSuppliers, sequelize, TWorkOrderStoring, TWorkOrderStoringItem } = db
 
 class PartsModule extends BaseModule {
   async dropdown(req, res) {
@@ -29,29 +29,24 @@ class PartsModule extends BaseModule {
             part.part_number,
             part.part_name,
             part.part_type_code,
-            mdo_detail.qty::int AS source_qty,
-            COALESCE(SUM(wo_item.total_kanban), 0)::int AS used_qty,
-            (mdo_detail.qty - COALESCE(SUM(wo_item.total_kanban), 0))::int AS remaining_qty
+
+            COUNT(DISTINCT mril.id)::int AS source_qty
 
           FROM t_material_receiving_item mri
 
-          JOIN s_material_delivery_order_details mdo_detail
-            ON mdo_detail.id = mri.mdo_detail_id
-            AND mdo_detail.deleted_at IS NULL
+          JOIN t_material_receiving_item_label mril
+            ON mril.mr_item_id = mri.id
+            AND mril.deleted_at IS NULL
+            AND mril.is_quantity = true
+            AND mril.is_quality = true
+
+          JOIN t_part_labels label
+            ON label.id = mril.label_id
+            AND label.deleted_at IS NULL
 
           JOIN s_parts part
-            ON part.id = mdo_detail.part_id
+            ON part.id = label.part_id
             AND part.deleted_at IS NULL
-
-          LEFT JOIN t_work_order_storing_item wo_item
-            ON wo_item.part_id = part.id
-            AND wo_item.deleted_at IS NULL
-
-          LEFT JOIN t_work_order_storing wo
-            ON wo.id = wo_item.wo_id
-            AND wo.deleted_at IS NULL
-            AND wo.ref_doc_id = :ref_doc_id
-            AND wo.wo_status_id = 2
 
           WHERE
             mri.deleted_at IS NULL
@@ -61,23 +56,53 @@ class PartsModule extends BaseModule {
             part.id,
             part.part_number,
             part.part_name,
-            part.part_type_code,
-            mdo_detail.qty
+            part.part_type_code
 
-          HAVING (mdo_detail.qty - COALESCE(SUM(wo_item.total_kanban), 0)) > 0
           ORDER BY part.part_number ASC
         `, {
           replacements,
           type: QueryTypes.SELECT
         })
 
-        rows = rows.map(row => ({
-          id: row.id,
-          part_number: row.part_number,
-          part_name: row.part_name,
-          part_type_code: row.part_type_code,
-          remaining_qty: row.remaining_qty
-        }))
+        const formatted = []
+
+        for (const row of rows) {
+          const usedQty =
+            await TWorkOrderStoringItem.sum(
+              'total_kanban',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    attributes: [],
+                    required: true,
+                    where: {
+                      ref_doc_id,
+                      wo_status_id: 2
+                    }
+                  }
+                ],
+                where: {
+                  part_id: row.id
+                }
+              }
+            ) || 0
+
+          const remainingQty = row.source_qty - usedQty
+
+          if (remainingQty <= 0) continue
+
+          formatted.push({
+            id: row.id,
+            part_number: row.part_number,
+            part_name: row.part_name,
+            part_type_code: row.part_type_code,
+            remaining_qty: remainingQty
+          })
+        }
+
+        rows = formatted
       } else if (wo_category === 'take_out' && area_id) {
         let whereClause = ''
         const replacements = { area_id }

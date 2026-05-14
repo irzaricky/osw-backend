@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import dayjs from 'dayjs';
 import path from 'path';
 
-const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail, SPackages, TMaterialReceiving, TMaterialReceivingItem, SMaterialDeliveryOrder, TMaterialDeliveryOrderDetail, RefReceivingStatus } = db;
+const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail, SPackages, TMaterialReceiving, TMaterialReceivingItem, TMaterialReceivingItemLabel, SMaterialDeliveryOrder, TMaterialDeliveryOrderDetail, RefReceivingStatus } = db;
 
 class WorkOrderStoringModule extends BaseModule {
   async list(req) {
@@ -317,34 +317,32 @@ class WorkOrderStoringModule extends BaseModule {
         value.ref_doc_name = 'Material Delivery Order';
 
         for (const item of value.items) {
-          const receivingItem =
-            await TMaterialReceivingItem.findOne({
-              where: {
-                mr_id: value.ref_doc_id,
-              },
+          const validLabelCount =
+            await TMaterialReceivingItemLabel.count({
               include: [
                 {
-                  model: TMaterialDeliveryOrderDetail,
-                  as: 'mdo_detail',
+                  model: TMaterialReceivingItem,
+                  as: 'material_receiving_item',
+                  required: true,
+                  where: {
+                    mr_id: value.ref_doc_id
+                  }
+                },
+                {
+                  model: TPartLabels,
+                  as: 'label',
                   required: true,
                   where: {
                     part_id: item.part_id
-                  },
-                  attributes: ['id', 'part_id', 'qty']
+                  }
                 }
               ],
+              where: {
+                is_quantity: true,
+                is_quality: true
+              },
               transaction: t
             });
-
-          if (!receivingItem) {
-            await t.rollback();
-
-            return {
-              status: false,
-              message: `Part with id ${item.part_id} not found in Delivery Order`,
-              code: 400
-            };
-          }
 
           const usedQty = await TWorkOrderStoringItem.sum(
             'total_kanban',
@@ -353,11 +351,11 @@ class WorkOrderStoringModule extends BaseModule {
                   {
                     model: TWorkOrderStoring,
                     as: 'work_order',
+                    attributes: [],
                     required: true,
                     where: {
                       ref_doc_id: value.ref_doc_id,
-                      wo_status_id: 2,
-                      deleted_at: null
+                      wo_status_id: 2
                     }
                   }
                 ],
@@ -368,8 +366,7 @@ class WorkOrderStoringModule extends BaseModule {
               }
             ) || 0;
 
-          const sourceQty = receivingItem.mdo_detail.qty;
-          const remainingQty = sourceQty - usedQty;
+          const remainingQty = validLabelCount - usedQty;
 
           if (item.total_kanban > remainingQty) {
             await t.rollback();
@@ -724,34 +721,32 @@ class WorkOrderStoringModule extends BaseModule {
         value.ref_doc_name = 'Material Delivery Order';
 
         for (const item of value.items) {
-          const receivingItem =
-            await TMaterialReceivingItem.findOne({
-              where: {
-                mr_id: value.ref_doc_id,
-              },
+          const validLabelCount =
+            await TMaterialReceivingItemLabel.count({
               include: [
                 {
-                  model: TMaterialDeliveryOrderDetail,
-                  as: 'mdo_detail',
+                  model: TMaterialReceivingItem,
+                  as: 'material_receiving_item',
+                  required: true,
+                  where: {
+                    mr_id: value.ref_doc_id
+                  }
+                },
+                {
+                  model: TPartLabels,
+                  as: 'label',
                   required: true,
                   where: {
                     part_id: item.part_id
-                  },
-                  attributes: ['id', 'part_id', 'qty']
+                  }
                 }
               ],
+              where: {
+                is_quantity: true,
+                is_quality: true
+              },
               transaction: t
             });
-
-          if (!receivingItem) {
-            await t.rollback();
-
-            return {
-              status: false,
-              message: `Part with id ${item.part_id} not found in Delivery Order`,
-              code: 400
-            };
-          }
 
           const usedQty = await TWorkOrderStoringItem.sum(
             'total_kanban',
@@ -760,14 +755,11 @@ class WorkOrderStoringModule extends BaseModule {
                   {
                     model: TWorkOrderStoring,
                     as: 'work_order',
+                    attributes: [],
                     required: true,
                     where: {
                       ref_doc_id: value.ref_doc_id,
-                      wo_status_id: 2,
-                      deleted_at: null,
-                      id: {
-                        [Op.ne]: id
-                      }
+                      wo_status_id: 2
                     }
                   }
                 ],
@@ -778,9 +770,8 @@ class WorkOrderStoringModule extends BaseModule {
               }
             ) || 0;
 
-          const sourceQty = receivingItem.mdo_detail.qty;
-          const remainingQty = sourceQty - usedQty;
-
+          const remainingQty = validLabelCount - usedQty;
+          
           if (item.total_kanban > remainingQty) {
             await t.rollback();
 
@@ -1246,7 +1237,14 @@ class WorkOrderStoringModule extends BaseModule {
           {
             margin: [6, 6, 6, 6],
             ...labelItems[i],
-            height: 220
+            height: 220,
+            border: [true, true, true, true],
+            borderColor: [
+              '#000000',
+              '#000000',
+              '#000000',
+              '#000000'
+            ]
           },
           labelItems[i + 1]
             ? {
@@ -1265,7 +1263,8 @@ class WorkOrderStoringModule extends BaseModule {
           {
             table: {
               widths: ['50%', '50%'],
-              body: tableBody
+              body: tableBody,
+              dontBreakRows: true
             },
             layout: {
               hLineWidth: (i, node) => 1,

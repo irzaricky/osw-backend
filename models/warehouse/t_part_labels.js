@@ -8,9 +8,14 @@ export default (sequelize) => {
         as: 'part'
       });
 
-      TPartLabels.hasMany(models.TWorkOrderStoringItemLabel, {
+      TPartLabels.hasOne(models.TWorkOrderStoringItemLabel, {
         foreignKey: 'label_id',
         as: 'work_order_item_label'
+      });
+
+      TPartLabels.hasOne(models.TMaterialReceivingItemLabel, {
+        foreignKey: 'label_id',
+        as: 'material_receiving_item_label'
       });
     }
   }

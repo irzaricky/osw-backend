@@ -303,10 +303,10 @@ class WarehouseAreaModule extends BaseModule {
             wa.name,
             wh.name AS warehouse_name
           FROM s_warehouse_areas wa
-          JOIN s_warehouses wh ON wh.id = wa.warehouse_id
-          JOIN s_warehouse_bins b ON b.area_id = wa.id
-          JOIN t_warehouse_stock ws ON ws.bin_id = b.id
-          WHERE wh.category_id = :category_id
+          JOIN s_warehouses wh ON wh.id = wa.warehouse_id AND wh.deleted_at IS NULL
+          JOIN s_warehouse_bins b ON b.area_id = wa.id AND b.deleted_at IS NULL
+          JOIN t_warehouse_stock ws ON ws.bin_id = b.id AND ws.deleted_at IS NULL
+          WHERE wa.deleted_at IS NULL AND wh.category_id = :category_id
           ORDER BY wa.name ASC
         `, {
           replacements: { category_id },

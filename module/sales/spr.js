@@ -30,7 +30,7 @@ class SPRModule extends BaseModule {
   async getDropdownStatuses(req) {
     return {
       status: true,
-      data: ['Draft', 'Submitted', 'Waiting Supervisor', 'Waiting PPIC', 'Approved', 'Rejected']
+      data: ['Draft', 'Submitted', 'Waiting Review PPIC', 'Approved', 'Rejected']
     };
   }
 
@@ -400,7 +400,7 @@ class SPRModule extends BaseModule {
         return { status: false, message: 'SPR is not in Submitted status', code: 400 };
       }
 
-      const nextStatus = status === 'Approved' ? 'Waiting Supervisor' : 'Rejected';
+      const nextStatus = status === 'Approved' ? 'Waiting Review PPIC' : 'Rejected';
       const action = status === 'Approved' ? 'Sales Order Approved' : 'Sales Order Rejected';
 
       await spr.update({
@@ -433,9 +433,9 @@ class SPRModule extends BaseModule {
         return { status: false, message: 'SPR not found', code: 404 };
       }
 
-      if (spr.status !== 'Waiting Supervisor' && spr.status !== 'Waiting PPIC') {
+      if (spr.status !== 'Waiting Review PPIC') {
         await t.rollback();
-        return { status: false, message: 'SPR is not in Waiting Supervisor or Waiting PPIC status', code: 400 };
+        return { status: false, message: 'SPR is not in Waiting Review PPIC status', code: 400 };
       }
 
       const nextStatus = status === 'Approved' ? 'Approved' : 'Rejected';
@@ -512,7 +512,7 @@ class SPRModule extends BaseModule {
 
       // Build WHERE for SPR header
       const sprWhere = {
-        status: 'Waiting PPIC',
+        status: 'Waiting Review PPIC',
         required_date: { [Op.between]: [monthStart, monthEnd] }
       };
 
@@ -638,7 +638,7 @@ class SPRModule extends BaseModule {
       // Find all pending PPIC SPRs in that month
       const sprs = await SSalesPurchaseRequests.findAll({
         where: {
-          status:        'Waiting PPIC',
+          status:        'Waiting Review PPIC',
           required_date: { [Op.between]: [monthStart, monthEnd] }
         },
         transaction: t
@@ -648,7 +648,7 @@ class SPRModule extends BaseModule {
         await t.rollback();
         return {
           status: false,
-          message: `No SPRs found with status 'Waiting PPIC' for month ${month}`,
+          message: `No SPRs found with status 'Waiting Review PPIC' for month ${month}`,
           code: 404
         };
       }

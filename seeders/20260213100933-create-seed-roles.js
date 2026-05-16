@@ -24,8 +24,9 @@ export default {
       { name: 'Admin PPIC', division_id: 3 },
       { name: 'Staff PPIC', division_id: 3 },
       { name: 'Supervisor PPIC', division_id: 3 },
-      { name: 'Admin Production', division_id: 4 },
-      { name: 'Purchasing Manager', division_id: 4 },
+      { name: 'Admin Material', division_id: 4 },
+      { name: 'Staff Material', division_id: 4 },
+      { name: 'Supervisor Material', division_id: 4 },
       { name: 'Driver', division_id: null }
     ].map(role => ({
       ...role,

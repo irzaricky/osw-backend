@@ -213,16 +213,29 @@ class TransactionActivityModule extends BaseModule {
         bin.bin_code AS qr_bin
 
       FROM t_warehouse_stock_log wsl
-      LEFT JOIN t_warehouse_stock ws ON ws.id = wsl.wh_stock_id
-      LEFT JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-      LEFT JOIN t_part_labels label ON label.id = wil.label_id
-      LEFT JOIN s_parts part ON part.id = label.part_id
-      LEFT JOIN s_packages pkg ON pkg.id = part.package_id
-      LEFT JOIN t_work_order_storing_item woi ON woi.id = wil.wo_item_id
-      LEFT JOIN t_work_order_storing wo ON wo.id = woi.wo_id
-      LEFT JOIN ref_work_order_storing_type wot ON wot.id = wo.wo_type_id
-      LEFT JOIN s_warehouse_areas wa ON wa.id = wo.warehouse_area_id
-      LEFT JOIN s_warehouse_bins bin ON bin.id = ws.bin_id
+     LEFT JOIN t_work_order_storing wo
+  ON wo.id = wsl.wo_id
+
+LEFT JOIN t_work_order_storing_item_label wil
+  ON wil.id = wsl.wo_item_label_id
+
+LEFT JOIN t_part_labels label
+  ON label.id = wsl.label_id
+
+LEFT JOIN s_parts part
+  ON part.id = wsl.part_id
+
+LEFT JOIN s_packages pkg
+  ON pkg.id = part.package_id
+
+LEFT JOIN ref_work_order_storing_type wot
+  ON wot.id = wo.wo_type_id
+
+LEFT JOIN s_warehouse_areas wa
+  ON wa.id = wo.warehouse_area_id
+
+LEFT JOIN s_warehouse_bins bin
+  ON bin.id = wsl.bin_id
       LEFT JOIN s_users usr ON usr.id = wsl.user_id
 
       ${whereClause}
@@ -237,15 +250,29 @@ class TransactionActivityModule extends BaseModule {
     const countResult = await db.sequelize.query(`
       SELECT COUNT(*)::int AS count
       FROM t_warehouse_stock_log wsl
-      LEFT JOIN t_warehouse_stock ws ON ws.id = wsl.wh_stock_id
-      LEFT JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-      LEFT JOIN t_part_labels label ON label.id = wil.label_id
-      LEFT JOIN s_parts part ON part.id = label.part_id
-      LEFT JOIN t_work_order_storing_item woi ON woi.id = wil.wo_item_id
-      LEFT JOIN t_work_order_storing wo ON wo.id = woi.wo_id
-      LEFT JOIN ref_work_order_storing_type wot ON wot.id = wo.wo_type_id
-      LEFT JOIN s_warehouse_areas wa ON wa.id = wo.warehouse_area_id
-      LEFT JOIN s_warehouse_bins bin ON bin.id = ws.bin_id
+      LEFT JOIN t_work_order_storing wo
+  ON wo.id = wsl.wo_id
+
+LEFT JOIN t_work_order_storing_item_label wil
+  ON wil.id = wsl.wo_item_label_id
+
+LEFT JOIN t_part_labels label
+  ON label.id = wsl.label_id
+
+LEFT JOIN s_parts part
+  ON part.id = wsl.part_id
+
+LEFT JOIN s_packages pkg
+  ON pkg.id = part.package_id
+
+LEFT JOIN ref_work_order_storing_type wot
+  ON wot.id = wo.wo_type_id
+
+LEFT JOIN s_warehouse_areas wa
+  ON wa.id = wo.warehouse_area_id
+
+LEFT JOIN s_warehouse_bins bin
+  ON bin.id = wsl.bin_id
       LEFT JOIN s_users usr ON usr.id = wsl.user_id
 
       ${whereClause}

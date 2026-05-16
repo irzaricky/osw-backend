@@ -6,7 +6,7 @@ import BaseModule from '../../class/base.module.js'
 import ExcelJS from 'exceljs'
 import Joi from 'joi'
 
-const { SParts, RefPartTypes, SSuppliers, sequelize } = db
+const { SParts, RefPartTypes, SSuppliers, sequelize, TWorkOrderStoring, TWorkOrderStoringItem } = db
 
 class PartsModule extends BaseModule {
   async dropdown(req, res) {
@@ -16,10 +16,94 @@ class PartsModule extends BaseModule {
       const partTypeCode = (params.part_type_code || '').trim()
       const wo_category = (params.wo_category || '').trim()
       const area_id = params.area_id ? parseInt(params.area_id) : null
+      const ref_doc_id = params.ref_doc_id ? parseInt(params.ref_doc_id) : null
 
       let rows
 
-      if (wo_category === 'take_out' && area_id) {
+      if (ref_doc_id) {
+        const replacements = { ref_doc_id }
+
+        rows = await db.sequelize.query(`
+          SELECT
+            part.id,
+            part.part_number,
+            part.part_name,
+            part.part_type_code,
+
+            COUNT(DISTINCT mril.id)::int AS source_qty
+
+          FROM t_material_receiving_item mri
+
+          JOIN t_material_receiving_item_label mril
+            ON mril.mr_item_id = mri.id
+            AND mril.deleted_at IS NULL
+            AND mril.is_quantity = true
+            AND mril.is_quality = true
+
+          JOIN t_part_labels label
+            ON label.id = mril.label_id
+            AND label.deleted_at IS NULL
+
+          JOIN s_parts part
+            ON part.id = label.part_id
+            AND part.deleted_at IS NULL
+
+          WHERE
+            mri.deleted_at IS NULL
+            AND mri.mr_id = :ref_doc_id
+
+          GROUP BY
+            part.id,
+            part.part_number,
+            part.part_name,
+            part.part_type_code
+
+          ORDER BY part.part_number ASC
+        `, {
+          replacements,
+          type: QueryTypes.SELECT
+        })
+
+        const formatted = []
+
+        for (const row of rows) {
+          const usedQty =
+            await TWorkOrderStoringItem.sum(
+              'total_kanban',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    attributes: [],
+                    required: true,
+                    where: {
+                      ref_doc_id,
+                      wo_status_id: 2
+                    }
+                  }
+                ],
+                where: {
+                  part_id: row.id
+                }
+              }
+            ) || 0
+
+          const remainingQty = row.source_qty - usedQty
+
+          if (remainingQty <= 0) continue
+
+          formatted.push({
+            id: row.id,
+            part_number: row.part_number,
+            part_name: row.part_name,
+            part_type_code: row.part_type_code,
+            remaining_qty: remainingQty
+          })
+        }
+
+        rows = formatted
+      } else if (wo_category === 'take_out' && area_id) {
         let whereClause = ''
         const replacements = { area_id }
 
@@ -41,11 +125,11 @@ class PartsModule extends BaseModule {
             part.part_type_code,
             COUNT(ws.id)::int AS available_stock
           FROM t_warehouse_stock ws
-          JOIN s_warehouse_bins b ON b.id = ws.bin_id
-          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
-          JOIN t_part_labels label ON label.id = wil.label_id
-          JOIN s_parts part ON part.id = label.part_id
-          WHERE b.area_id = :area_id ${whereClause}
+          JOIN s_warehouse_bins b ON b.id = ws.bin_id AND b.deleted_at IS NULL
+          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+          JOIN t_part_labels label ON label.id = wil.label_id AND label.deleted_at IS NULL
+          JOIN s_parts part ON part.id = label.part_id AND part.deleted_at IS NULL
+          WHERE ws.deleted_at IS NULL AND b.area_id = :area_id ${whereClause}
           GROUP BY part.id, part.part_number, part.part_name, part.part_type_code
           ORDER BY part.part_number ASC
         `, {

@@ -64,12 +64,12 @@ export default {
 
     // Reset sequences for Postgres
     if (queryInterface.sequelize.options.dialect === 'postgres') {
-        await queryInterface.sequelize.query("SELECT setval('ref_work_order_storing_type_id_seq', (SELECT MAX(id) FROM ref_work_order_storing_type));");
-        await queryInterface.sequelize.query("SELECT setval('ref_work_order_storing_status_id_seq', (SELECT MAX(id) FROM ref_work_order_storing_status));");
-        await queryInterface.sequelize.query("SELECT setval('t_work_order_storing_id_seq', (SELECT MAX(id) FROM t_work_order_storing));");
-        await queryInterface.sequelize.query("SELECT setval('t_work_order_storing_item_id_seq', (SELECT MAX(id) FROM t_work_order_storing_item));");
-        await queryInterface.sequelize.query("SELECT setval('t_part_labels_id_seq', (SELECT MAX(id) FROM t_part_labels));");
-        await queryInterface.sequelize.query("SELECT setval('t_work_order_storing_item_label_id_seq', (SELECT MAX(id) FROM t_work_order_storing_item_label));");
+      await queryInterface.sequelize.query("SELECT setval('ref_work_order_storing_type_id_seq', (SELECT MAX(id) FROM ref_work_order_storing_type));");
+      await queryInterface.sequelize.query("SELECT setval('ref_work_order_storing_status_id_seq', (SELECT MAX(id) FROM ref_work_order_storing_status));");
+      await queryInterface.sequelize.query("SELECT setval('t_work_order_storing_id_seq', (SELECT MAX(id) FROM t_work_order_storing));");
+      await queryInterface.sequelize.query("SELECT setval('t_work_order_storing_item_id_seq', (SELECT MAX(id) FROM t_work_order_storing_item));");
+      await queryInterface.sequelize.query("SELECT setval('t_part_labels_id_seq', (SELECT MAX(id) FROM t_part_labels));");
+      await queryInterface.sequelize.query("SELECT setval('t_work_order_storing_item_label_id_seq', (SELECT MAX(id) FROM t_work_order_storing_item_label));");
     }
   },
 

@@ -4,6 +4,7 @@ export default (sequelize) => {
   class SDefects extends Model {
     static associate(models) {
       SDefects.belongsTo(models.RefDefectCategories, { foreignKey: 'defect_category_id', as: 'category' });
+      SDefects.hasMany(models.TNgTicketQuality, { foreignKey: 'defect_id', as: 'ng_ticket_qualities' });
     }
   }
 

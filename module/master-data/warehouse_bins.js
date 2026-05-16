@@ -134,7 +134,26 @@ class WarehouseBinsModule extends BaseModule {
 
       const oldData = JSON.parse(JSON.stringify(bin));
 
-      await bin.update(req.body, { transaction: t });
+      const schema = Joi.object({
+      bin_code: Joi.string().max(50),
+      area_id: Joi.number().integer(),
+      row_index: Joi.number().integer(),
+      col_index: Joi.number().integer(),
+      is_dedicated: Joi.boolean(),
+      dedicated_part_number: Joi.string().allow(null, ''),
+      capacity: Joi.number().integer()
+    });
+
+    const validation = helper.validate(req.body, schema);
+
+    if (!validation.status) {
+      await t.rollback();
+      return validation;
+    }
+
+    const data = validation.value;
+
+    await bin.update(data, { transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'master-data',

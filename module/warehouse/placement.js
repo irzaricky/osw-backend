@@ -433,257 +433,308 @@ async detail(req) {
   }
 
   async getAvailableBins(req) {
-    try {
-      const { wo_id } = req.params;
-      const params = req.query;
+  try {
+    const { wo_id } = req.params;
+    const params = req.query;
 
-      const workOrder = await TWorkOrderStoring.findByPk(wo_id);
+    const workOrder = await TWorkOrderStoring.findByPk(wo_id);
 
-      if (!workOrder) {
-        return {
-          status: false,
-          message: 'Work Order not found',
-          code: 404
-        };
-      }
-
-      const where = {
-        area_id: workOrder.warehouse_area_id
-      };
-
-      if (params.search) {
-        where.bin_code = {
-          [Op.iLike]: `%${params.search}%`
-        };
-      }
-
-      const bins = await SWarehouseBins.findAll({
-        where,
-        order: [['bin_code', 'ASC']]
-      });
-
-      const result = [];
-
-      for (const bin of bins) {
-        const usedCapacity = await TWarehouseStock.count({
-          where: {
-            bin_id: bin.id
-          }
-        });
-
-        const capacity = bin.capacity || 0;
-        const remainingCapacity = capacity > 0 ? capacity - usedCapacity : null;
-
-        result.push({
-          id: bin.id,
-          bin_code: bin.bin_code,
-          area_id: bin.area_id,
-          capacity,
-          used_capacity: usedCapacity,
-          remaining_capacity: remainingCapacity,
-          is_dedicated: bin.is_dedicated,
-          dedicated_part_number: bin.dedicated_part_number,
-          status: usedCapacity === 0 ? 'Empty' : remainingCapacity <= 0 ? 'Full' : 'Available'
-        });
-      }
-
-      return {
-        status: true,
-        data: result
-      };
-
-    } catch (error) {
-      if (config.debug) {
-        return {
-          status: false,
-          error: error.message,
-          code: 500
-        };
-      }
-
+    if (!workOrder) {
       return {
         status: false,
-        message: 'Internal server error',
-        code: 500
+        message: 'Work Order not found',
+        code: 404
       };
     }
-  }
 
-  async placeBin(req) {
-    const t = await db.sequelize.transaction();
+    const where = {
+      area_id: workOrder.warehouse_area_id
+    };
 
-    try {
-      const { wo_id } = req.params;
-      const data = req.body;
+    if (params.search) {
+      where.bin_code = {
+        [Op.iLike]: `%${params.search}%`
+      };
+    }
 
-      const schema = Joi.object({
-        label_number: Joi.string().required(),
-        bin_code: Joi.string().required(),
-        qty_per_kanban: Joi.number().min(1).default(1)
-      });
+    const bins = await SWarehouseBins.findAll({
+      where,
+      order: [['bin_code', 'ASC']]
+    });
 
-      const validation = helper.validate(data, schema);
-      if (!validation.status) {
-        await t.rollback();
-        return validation;
-      }
+    const result = [];
 
-      const { label_number, bin_code, qty_per_kanban } = validation.value;
-
-      const workOrder = await TWorkOrderStoring.findByPk(wo_id, {
-        transaction: t
-      });
-
-      if (!workOrder) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Work Order not found',
-          code: 404
-        };
-      }
-
-      if (workOrder.wo_category !== 'Placement') {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'This Work Order is not for Placement',
-          code: 400
-        };
-      }
-
-      if (![2, 3].includes(workOrder.wo_status_id)) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Only Submitted or In Progress Work Order can be processed',
-          code: 400
-        };
-      }
-
-      const label = await TPartLabels.findOne({
-        where: { label_number },
-        transaction: t
-      });
-
-      if (!label) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Part label not found',
-          code: 404
-        };
-      }
-
-      const itemLabel = await TWorkOrderStoringItemLabel.findOne({
-        where: { label_id: label.id },
-        include: [
-          {
-            model: TWorkOrderStoringItem,
-            as: 'work_order_item',
-            where: { wo_id },
-            include: [
-              {
-                model: SParts,
-                as: 'part',
-                attributes: ['id', 'part_number', 'part_name', 'part_category']
-              }
-            ]
-          }
-        ],
-        transaction: t
-      });
-
-      if (!itemLabel) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label is not registered in this Work Order',
-          code: 400
-        };
-      }
-
-      if (itemLabel.is_scanned_in) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label already placed',
-          code: 400
-        };
-      }
-
-      const existingStock = await TWarehouseStock.findOne({
-        where: {
-          wo_item_label_id: itemLabel.id
-        },
-        transaction: t
-      });
-
-      if (existingStock) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Label already exists in warehouse stock',
-          code: 400
-        };
-      }
-
-      const bin = await SWarehouseBins.findOne({
-        where: { bin_code },
-        transaction: t
-      });
-
-      if (!bin) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Warehouse bin not found',
-          code: 404
-        };
-      }
-
-      if (bin.area_id !== workOrder.warehouse_area_id) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Bin does not belong to this Work Order warehouse area',
-          code: 400
-        };
-      }
-
-      const partNumber = itemLabel.work_order_item?.part?.part_number;
-
-      if (bin.is_dedicated && bin.dedicated_part_number && bin.dedicated_part_number !== partNumber) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'This bin is dedicated for another part number',
-          code: 400
-        };
-      }
-
+    for (const bin of bins) {
       const usedCapacity = await TWarehouseStock.count({
         where: {
           bin_id: bin.id
-        },
-        transaction: t
+        }
       });
 
-      if (bin.capacity && usedCapacity >= bin.capacity) {
-        await t.rollback();
-        return {
-          status: false,
-          message: 'Warehouse bin capacity is full',
-          code: 400
-        };
+      const capacity = Number(bin.capacity || 0);
+
+      const remainingCapacity =
+        capacity > 0
+          ? Math.max(capacity - usedCapacity, 0)
+          : 0;
+
+      let status = 'Available';
+      let bin_type = 'FREE';
+
+      if (bin.is_dedicated && bin.dedicated_part_number) {
+        bin_type = 'DEDICATED';
       }
 
-      const stock = await TWarehouseStock.create({
-        wo_item_label_id: itemLabel.id,
-        bin_id: bin.id
-      }, { transaction: t });
+      if (capacity <= 0) {
+        status = 'Unconfigured';
+      } else if (usedCapacity >= capacity) {
+        status = 'Full';
+      } else if (usedCapacity === 0) {
+        status = bin_type === 'FREE' ? 'Free' : 'Available';
+      }
 
-     await db.sequelize.query(`
+      result.push({
+        id: bin.id,
+        bin_code: bin.bin_code,
+        area_id: bin.area_id,
+        capacity,
+        used_capacity: usedCapacity,
+        remaining_capacity: remainingCapacity,
+        is_dedicated: bin.is_dedicated,
+        dedicated_part_number: bin.dedicated_part_number,
+        bin_type,
+        status
+      });
+    }
+
+    return {
+      status: true,
+      data: result
+    };
+
+  } catch (error) {
+    if (config.debug) {
+      return {
+        status: false,
+        error: error.message,
+        code: 500
+      };
+    }
+
+    return {
+      status: false,
+      message: 'Internal server error',
+      code: 500
+    };
+  }
+}
+
+  async placeBin(req) {
+  const t = await db.sequelize.transaction();
+
+  try {
+    const { wo_id } = req.params;
+    const data = req.body;
+
+    const schema = Joi.object({
+      label_number: Joi.string().required(),
+      bin_code: Joi.string().required(),
+      qty_per_kanban: Joi.number().min(1).default(1)
+    });
+
+    const validation = helper.validate(data, schema);
+    if (!validation.status) {
+      await t.rollback();
+      return validation;
+    }
+
+    const { label_number, bin_code, qty_per_kanban } = validation.value;
+
+    const workOrder = await TWorkOrderStoring.findByPk(wo_id, {
+      transaction: t
+    });
+
+    if (!workOrder) {
+      await t.rollback();
+      return { status: false, message: 'Work Order not found', code: 404 };
+    }
+
+    if (workOrder.wo_category !== 'Placement') {
+      await t.rollback();
+      return { status: false, message: 'This Work Order is not for Placement', code: 400 };
+    }
+
+    if (![2, 3].includes(workOrder.wo_status_id)) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Only Submitted or In Progress Work Order can be processed',
+        code: 400
+      };
+    }
+
+    const label = await TPartLabels.findOne({
+      where: { label_number },
+      transaction: t
+    });
+
+    if (!label) {
+      await t.rollback();
+      return { status: false, message: 'Part label not found', code: 404 };
+    }
+
+    const itemLabel = await TWorkOrderStoringItemLabel.findOne({
+      where: { label_id: label.id },
+      include: [
+        {
+          model: TWorkOrderStoringItem,
+          as: 'work_order_item',
+          where: { wo_id },
+          include: [
+            {
+              model: SParts,
+              as: 'part',
+              attributes: ['id', 'part_number', 'part_name', 'part_category']
+            }
+          ]
+        }
+      ],
+      transaction: t
+    });
+
+    if (!itemLabel) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Label is not registered in this Work Order',
+        code: 400
+      };
+    }
+
+    if (itemLabel.is_scanned_in) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Label already placed',
+        code: 400
+      };
+    }
+
+    const existingStock = await TWarehouseStock.findOne({
+      where: {
+        wo_item_label_id: itemLabel.id
+      },
+      transaction: t
+    });
+
+    if (existingStock) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Label already exists in warehouse stock',
+        code: 400
+      };
+    }
+
+    const bin = await SWarehouseBins.findOne({
+      where: { bin_code },
+      transaction: t
+    });
+
+    if (!bin) {
+      await t.rollback();
+      return { status: false, message: 'Warehouse bin not found', code: 404 };
+    }
+
+    if (bin.area_id !== workOrder.warehouse_area_id) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Bin does not belong to this Work Order warehouse area',
+        code: 400
+      };
+    }
+
+    if (!bin.capacity || Number(bin.capacity) <= 0) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'This bin has no safe capacity configured',
+        code: 400
+      };
+    }
+
+    const part = await SParts.findByPk(label.part_id, {
+  attributes: ['id', 'part_number', 'part_name', 'part_category'],
+  transaction: t
+});
+
+if (!part) {
+  await t.rollback();
+  return {
+    status: false,
+    message: 'Part not found',
+    code: 404
+  };
+}
+
+const selectedPart =
+  itemLabel.work_order_item?.part?.dataValues ||
+  itemLabel.work_order_item?.part ||
+  itemLabel.work_order_item?.dataValues?.part;
+
+const partNumber = String(
+  selectedPart?.part_number ||
+  itemLabel.work_order_item?.part_number ||
+  ''
+).trim();
+
+
+
+console.log('PLACEMENT BIN CHECK:', {
+  label_number,
+  bin_code,
+  selectedPart,
+  partNumber
+});
+
+if (
+  bin.is_dedicated &&
+  bin.dedicated_part_number &&
+  bin.dedicated_part_number !== partNumber
+) {
+  await t.rollback();
+  return {
+    status: false,
+    message: `This bin is dedicated to ${bin.dedicated_part_number}`,
+    code: 400
+  };
+}
+
+    const usedCapacity = await TWarehouseStock.count({
+      where: {
+        bin_id: bin.id
+      },
+      transaction: t
+    });
+
+    if (bin.capacity && usedCapacity >= bin.capacity) {
+      await t.rollback();
+      return {
+        status: false,
+        message: 'Warehouse bin capacity is full',
+        code: 400
+      };
+    }
+
+    const stock = await TWarehouseStock.create({
+      wo_item_label_id: itemLabel.id,
+      bin_id: bin.id
+    }, {
+      transaction: t
+    });
+
+    await db.sequelize.query(`
       INSERT INTO t_warehouse_stock_log (
         wh_stock_id,
         wo_id,
@@ -724,87 +775,86 @@ async detail(req) {
       transaction: t
     });
 
-      await itemLabel.update({
-        is_scanned_in: true
-      }, { transaction: t });
+    await itemLabel.update({
+      is_scanned_in: true
+    }, {
+      transaction: t
+    });
 
-      await itemLabel.work_order_item.update({
-        is_scanned_in: true
-      }, { transaction: t });
+    await itemLabel.work_order_item.update({
+      is_scanned_in: true
+    }, {
+      transaction: t
+    });
 
-      if (workOrder.wo_status_id === 2) {
-        await workOrder.update({
-          wo_status_id: 3
-        }, { transaction: t });
-      }
-
-      const totalLabels = await TWorkOrderStoringItemLabel.count({
-        include: [
-          {
-            model: TWorkOrderStoringItem,
-            as: 'work_order_item',
-            where: { wo_id }
-          }
-        ],
+    if (workOrder.wo_status_id === 2) {
+      await workOrder.update({
+        wo_status_id: 3
+      }, {
         transaction: t
       });
-
-      const totalScanned = await TWorkOrderStoringItemLabel.count({
-        where: {
-          is_scanned_in: true
-        },
-        include: [
-          {
-            model: TWorkOrderStoringItem,
-            as: 'work_order_item',
-            where: { wo_id }
-          }
-        ],
-        transaction: t
-      });
-
-      if (totalLabels > 0 && totalLabels === totalScanned) {
-        await workOrder.update({
-          wo_status_id: 4
-        }, { transaction: t });
-      }
-
-      await t.commit();
-
-      return {
-        status: true,
-        message: 'Label successfully placed',
-        data: {
-          wo_id: workOrder.id,
-          wo_number: workOrder.wo_number,
-          label_number,
-          bin_code,
-          placement: 'IN',
-          qty_per_kanban,
-          total_label: totalLabels,
-          total_scanned: totalScanned,
-          remaining: totalLabels - totalScanned
-        }
-      };
-
-    } catch (error) {
-      await t.rollback();
-
-      if (config.debug) {
-        return {
-          status: false,
-          error: error.message,
-          code: 500
-        };
-      }
-
-      return {
-        status: false,
-        message: 'Internal server error',
-        code: 500
-      };
     }
+
+    const totalLabels = await TWorkOrderStoringItemLabel.count({
+      include: [
+        {
+          model: TWorkOrderStoringItem,
+          as: 'work_order_item',
+          where: { wo_id }
+        }
+      ],
+      transaction: t
+    });
+
+    const totalScanned = await TWorkOrderStoringItemLabel.count({
+      where: {
+        is_scanned_in: true
+      },
+      include: [
+        {
+          model: TWorkOrderStoringItem,
+          as: 'work_order_item',
+          where: { wo_id }
+        }
+      ],
+      transaction: t
+    });
+
+    if (totalLabels > 0 && totalLabels === totalScanned) {
+      await workOrder.update({
+        wo_status_id: 4
+      }, {
+        transaction: t
+      });
+    }
+
+    await t.commit();
+
+    return {
+      status: true,
+      message: 'Label successfully placed',
+      data: {
+        wo_id: workOrder.id,
+        wo_number: workOrder.wo_number,
+        label_number,
+        bin_code,
+        placement: 'IN',
+        qty_per_kanban,
+        total_label: totalLabels,
+        total_scanned: totalScanned,
+        remaining: totalLabels - totalScanned
+      }
+    };
+  } catch (error) {
+    if (t && !t.finished) {
+      await t.rollback();
+    }
+
+    return config.debug
+      ? { status: false, error: error.message, code: 500 }
+      : { status: false, message: 'Internal server error', code: 500 };
   }
+}
 }
 
 export default new PlacementModule();

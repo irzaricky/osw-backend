@@ -7,17 +7,37 @@ import Joi from 'joi';
 import dayjs from 'dayjs';
 
 const {
-  SSalesPurchaseOrders, SSalesPurchaseOrderDetails, 
-  SSalesPurchaseRequests, SSalesPurchaseRequestDetails,
+  SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
+  SSalesPurchaseRequests, SSalesPurchaseRequestDetails, SSalesForecasts,
   SDeliveryOrders, SDeliveryOrderDetails, SDeliveryPlanDetails,
   SDeliveryPlans,
   SParts, SCustomers, SUsers, SUserDetail
 } = db;
 
 class SPOModule extends BaseModule {
-  
+
+  async getDropdownStatuses(req) {
+    return {
+      status: true,
+      data: ['Draft', 'Submitted', 'Locked', 'Processing', 'Completed']
+    };
+  }
+
+  async getDropdownCustomers(req) {
+    try {
+      const customers = await SCustomers.findAll({
+        attributes: ['id', 'name', 'customer_code'],
+        order: [['name', 'ASC']]
+      });
+      return { status: true, data: customers };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
   // Get all Approved SPRs that haven't been generated into an SPO
-  async getApprovedSprs(req) {
+  async listSPR(req) {
     try {
       // Find SPRs with status 'Approved'
       // that are not referenced in SSalesPurchaseOrders
@@ -30,6 +50,11 @@ class SPOModule extends BaseModule {
         },
         include: [
           {
+            model: SSalesForecasts,
+            as: 'forecast',
+            attributes: ['customer_id']
+          },
+          {
             model: SSalesPurchaseRequestDetails,
             as: 'details',
             include: [{ model: SParts, as: 'part', attributes: ['part_number', 'part_name'] }]
@@ -39,6 +64,66 @@ class SPOModule extends BaseModule {
       });
 
       return { status: true, data: sprs };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async list(req) {
+    try {
+      const params = req.query;
+      const { start_date, end_date, status, search } = params;
+      const { limit, page, offset } = helper.getPagination(params);
+
+      const where = {};
+
+      if (start_date && end_date) {
+        where.spo_date = { [Op.between]: [start_date, end_date] };
+      }
+
+      if (status) {
+        where.status = status;
+      }
+
+      if (search) {
+        where[Op.or] = [
+          { spo_number: { [Op.like]: `%${search}%` } },
+          { shipping_address: { [Op.like]: `%${search}%` } }
+        ];
+      }
+
+      const include = [
+        {
+          model: SCustomers,
+          as: 'customer',
+          attributes: ['id', 'name', 'customer_code']
+        },
+        {
+          model: SSalesPurchaseRequests,
+          as: 'spr',
+          attributes: ['id', 'spr_number']
+        },
+        {
+          model: SUsers,
+          as: 'creator',
+          attributes: ['id', 'email'],
+          include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
+        }
+      ];
+
+      const { count, rows } = await SSalesPurchaseOrders.findAndCountAll({
+        where,
+        include,
+        limit,
+        offset,
+        order: [['created_at', 'DESC']]
+      });
+
+      return {
+        status: true,
+        data: helper.getPaginationData(rows, count, page, limit)
+      };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
@@ -164,6 +249,155 @@ class SPOModule extends BaseModule {
     }
   }
 
+  async detail(req) {
+    try {
+      const { id } = req.params;
+
+      const spo = await SSalesPurchaseOrders.findByPk(id, {
+        include: [
+          {
+            model: SSalesPurchaseOrderDetails,
+            as: 'details',
+            include: [{ model: SParts, as: 'part', attributes: ['part_number', 'part_name'] }]
+          },
+          {
+            model: SCustomers,
+            as: 'customer',
+            attributes: ['id', 'name', 'customer_code']
+          },
+          {
+            model: SSalesPurchaseRequests,
+            as: 'spr',
+            attributes: ['id', 'spr_number']
+          },
+          {
+            model: SUsers,
+            as: 'creator',
+            attributes: ['id', 'email'],
+            include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
+          }
+        ]
+      });
+
+      if (!spo) return { status: false, message: 'SPO not found', code: 404 };
+
+      return { status: true, data: spo };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async update(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const data = req.body;
+      const currentUser = req.user;
+
+      const spo = await SSalesPurchaseOrders.findByPk(id, { transaction: t });
+      if (!spo) {
+        await t.rollback();
+        return { status: false, message: 'SPO not found', code: 404 };
+      }
+
+      if (spo.status !== 'Draft') {
+        await t.rollback();
+        return { status: false, message: 'Only Draft SPO can be updated', code: 400 };
+      }
+
+      const detailSchema = Joi.object({
+        part_id: Joi.number().integer().required(),
+        ordered_qty: Joi.number().integer().min(1).required()
+      });
+
+      const schema = Joi.object({
+        customer_id: Joi.number().integer().optional(),
+        shipping_address: Joi.string().optional(),
+        delivery_due_date: Joi.date().iso().optional(),
+        details: Joi.array().items(detailSchema).optional()
+      });
+
+      const validation = helper.validate(data, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return validation;
+      }
+
+      const updates = validation.value;
+      const oldData = JSON.parse(JSON.stringify(spo));
+
+      await spo.update(updates, { transaction: t });
+
+      if (updates.details) {
+        await SSalesPurchaseOrderDetails.destroy({ where: { spo_id: spo.id }, transaction: t });
+        const detailRecords = updates.details.map(d => ({
+          spo_id: spo.id,
+          part_id: d.part_id,
+          ordered_qty: d.ordered_qty,
+          sent_qty: 0,
+          status: 'Open'
+        }));
+        await SSalesPurchaseOrderDetails.bulkCreate(detailRecords, { transaction: t });
+      }
+
+      await this.logActivity(req, {
+        moduleCode: 'sales',
+        activityCode: 'UPDATE_SPO',
+        resourceId: spo.id,
+        oldData,
+        newData: spo,
+        description: `Updated SPO ${spo.spo_number}`,
+        transaction: t
+      });
+
+      await t.commit();
+      return { status: true, message: 'SPO updated successfully' };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async delete(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { id } = req.params;
+
+      const spo = await SSalesPurchaseOrders.findByPk(id, { transaction: t });
+      if (!spo) {
+        await t.rollback();
+        return { status: false, message: 'SPO not found', code: 404 };
+      }
+
+      if (spo.status !== 'Draft') {
+        await t.rollback();
+        return { status: false, message: 'Only Draft SPO can be deleted', code: 400 };
+      }
+
+      const oldData = JSON.parse(JSON.stringify(spo));
+
+      await spo.destroy({ transaction: t });
+
+      await this.logActivity(req, {
+        moduleCode: 'sales',
+        activityCode: 'DELETE_SPO',
+        resourceId: id,
+        oldData,
+        description: `Deleted SPO ${spo.spo_number}`,
+        transaction: t
+      });
+
+      await t.commit();
+      return { status: true, message: 'SPO deleted successfully' };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
   // Update Status logic (Draft -> Submitted -> Locked / Rejected)
   async updateStatus(req) {
     const t = await db.sequelize.transaction();
@@ -178,33 +412,33 @@ class SPOModule extends BaseModule {
         return { status: false, message: 'SPO not found', code: 404 };
       }
 
-      const validStatuses = ['Submitted', 'Locked', 'Rejected'];
+      const validStatuses = ['Submitted', 'Locked', 'Processing', 'Completed'];
       if (!validStatuses.includes(status)) {
         await t.rollback();
         return { status: false, message: 'Invalid status transition requested', code: 400 };
       }
 
       // Logic transitions
-      if (status === 'Submitted' && spo.status !== 'Draft' && spo.status !== 'Rejected') {
+      if (status === 'Submitted' && spo.status !== 'Draft') {
         await t.rollback();
-        return { status: false, message: 'Only Draft or Rejected SPO can be submitted', code: 400 };
+        return { status: false, message: 'Only Draft SPO can be submitted', code: 400 };
       }
 
-      if ((status === 'Locked' || status === 'Rejected') && spo.status !== 'Submitted') {
+      if (status === 'Locked' && spo.status !== 'Submitted') {
         await t.rollback();
-        return { status: false, message: 'Only Submitted SPO can be Locked or Rejected by Supervisor', code: 400 };
+        return { status: false, message: 'Only Submitted SPO can be Locked by Supervisor', code: 400 };
       }
 
-      if (status === 'Rejected' && !remarks) {
+      if ((status === 'Processing' || status === 'Completed') && !['Locked', 'Processing'].includes(spo.status)) {
         await t.rollback();
-        return { status: false, message: 'Remarks are required when rejecting an SPO', code: 400 };
+        return { status: false, message: 'Only Locked or Processing SPO can be updated to Processing/Completed', code: 400 };
       }
 
       const oldData = JSON.parse(JSON.stringify(spo));
 
       await spo.update({
         status,
-        remarks: status === 'Rejected' ? remarks : (remarks || spo.remarks)
+        remarks: remarks || spo.remarks
       }, { transaction: t });
 
       await this.logActivity(req, {
@@ -247,7 +481,7 @@ class SPOModule extends BaseModule {
       // SPO Details -> Delivery Plan Details -> Delivery Order Details -> Delivery Orders
       // Or simply: SDeliveryPlanDetails has spo_detail_id.
       // SDeliveryOrderDetails has delivery_plan_detail_id.
-      
+
       const sdoDetails = await SDeliveryOrderDetails.findAll({
         include: [
           {

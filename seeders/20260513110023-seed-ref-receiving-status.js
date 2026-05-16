@@ -3,7 +3,7 @@ export default {
     const timestamp = { created_at: new Date(), updated_at: new Date() };
 
     const status = [
-      { id: 1, name: 'Delivered', ...timestamp },
+      { id: 1, name: 'Arrived', ...timestamp },
       { id: 2, name: 'Quantity Checking', ...timestamp },
       { id: 3, name: 'Quality Checking', ...timestamp },
       { id: 4, name: 'Waiting GR Approval', ...timestamp },

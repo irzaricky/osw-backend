@@ -11,7 +11,9 @@ export default (sequelize) => {
      */
     static associate(models) {
       SMaterialDeliveryOrder.belongsTo(models.SMaterialPurchaseOrder, { foreignKey: 'mpo_id', as: 'mpo' });
+      SMaterialDeliveryOrder.belongsTo(models.SDocks, { foreignKey: 'dock_id', as: 'dock' });
       SMaterialDeliveryOrder.hasOne(models.TMaterialReceiving, { foreignKey: 'mdo_id', as: 'material_receiving' });
+      SMaterialDeliveryOrder.hasMany(models.TMaterialDeliveryOrderDetail, { foreignKey: 'mdo_id', as: 'mdo_details' });
     }
   }
   SMaterialDeliveryOrder.init({

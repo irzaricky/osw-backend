@@ -1297,7 +1297,7 @@ class WorkOrderStoringModule extends BaseModule {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        `inline; filename=label-${part.part_number}.pdf`
+        `inline; filename=wo-label-${part.part_number}.pdf`
       );
 
       pdfDoc.pipe(res);
@@ -1344,14 +1344,14 @@ class WorkOrderStoringModule extends BaseModule {
 
   async getDropdownWorkOrderStoringStatus() {
     try {
-      const types = await RefWorkOrderStoringStatus.findAll({
+      const statuses = await RefWorkOrderStoringStatus.findAll({
         attributes: ['id', 'name'],
         order: [['id', 'ASC']]
       });
 
       return {
         status: true,
-        data: types
+        data: statuses
       };
     } catch (error) {
       if (config.debug) {

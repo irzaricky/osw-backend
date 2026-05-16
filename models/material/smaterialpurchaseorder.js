@@ -11,6 +11,7 @@ export default (sequelize) => {
      */
     static associate(models) {
       SMaterialPurchaseOrder.belongsTo(models.SSuppliers, { foreignKey: 'supplier_id', as: 'supplier' });
+      SMaterialPurchaseOrder.belongsTo(models.SWarehouses, { foreignKey: 'warehouse_id', as: 'warehouse' });
       SMaterialPurchaseOrder.hasMany(models.SMaterialDeliveryOrder, { foreignKey: 'mpo_id', as: 'material_delivery_orders' });
     }
   }

@@ -422,6 +422,7 @@ const havingClause = having.length
             b.id AS bin_id,
             b.bin_code,
             wa.name AS warehouse_area,
+            usr.email AS placed_by,
 
             COALESCE(pkg.capacity, 0) AS qty_per_kanban,
 
@@ -434,6 +435,11 @@ const havingClause = having.length
         LEFT JOIN s_packages pkg ON pkg.id = part.package_id
         LEFT JOIN s_warehouse_bins b ON b.id = ws.bin_id
         LEFT JOIN s_warehouse_areas wa ON wa.id = b.area_id
+        LEFT JOIN t_warehouse_stock_log place_log
+          ON place_log.wh_stock_id = ws.id
+          AND place_log.is_placement = true
+        LEFT JOIN s_users usr
+          ON usr.id = place_log.user_id
 
         WHERE part.part_number = :part_number
 
@@ -628,6 +634,7 @@ const finalWhereClause = finalWhere.length
             label.label_number,
             part.part_number,
             part.part_name,
+            usr.email AS placed_by,
 
             COALESCE(pkg.capacity, 0) AS qty_per_kanban,
 
@@ -638,6 +645,11 @@ const finalWhereClause = finalWhere.length
         JOIN t_part_labels label ON label.id = wil.label_id
         JOIN s_parts part ON part.id = label.part_id
         LEFT JOIN s_packages pkg ON pkg.id = part.package_id
+        LEFT JOIN t_warehouse_stock_log place_log
+          ON place_log.wh_stock_id = ws.id
+          AND place_log.is_placement = true
+        LEFT JOIN s_users usr
+          ON usr.id = place_log.user_id
 
         WHERE ws.bin_id = :bin_id
 

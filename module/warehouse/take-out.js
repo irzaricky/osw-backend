@@ -660,6 +660,8 @@ async scanLabelOut(req) {
 
     const recommendedLabelId = recommended?.label_id || label.id;
     const recommendedLabelNumber = recommended?.label_number || label.label_number;
+    const isFifoViolation =
+      Number(label.id) !== Number(recommendedLabelId);
 
     await db.sequelize.query(`
       INSERT INTO t_warehouse_stock_log (
@@ -705,7 +707,7 @@ async scanLabelOut(req) {
         user_id: req.user?.id || null,
         recommended_label_id: recommendedLabelId,
         recommended_label_number: recommendedLabelNumber,
-        fifo_override
+        fifo_override: Boolean(fifo_override || isFifoViolation)
       },
       type: QueryTypes.INSERT,
       transaction: t

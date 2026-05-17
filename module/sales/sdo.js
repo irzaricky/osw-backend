@@ -24,8 +24,8 @@ class SDOModule extends BaseModule {
   async getDropdownVehicles(req) {
     try {
       const data = await SVehicles.findAll({
-        attributes: ['id', 'license_plate', 'vehicle_type_id'],
-        order: [['license_plate', 'ASC']]
+        attributes: ['id', ['plate_number', 'license_plate'], 'vehicle_type_id'],
+        order: [['plate_number', 'ASC']]
       });
       return { status: true, data };
     } catch (error) {
@@ -67,7 +67,7 @@ class SDOModule extends BaseModule {
 
       const include = [
         { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
-        { model: SVehicles, as: 'vehicle', attributes: ['id', 'license_plate'] },
+        { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
         { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
         { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date'] },
         {
@@ -95,7 +95,7 @@ class SDOModule extends BaseModule {
       const sdo = await SDeliveryOrders.findByPk(id, {
         include: [
           { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
-          { model: SVehicles, as: 'vehicle', attributes: ['id', 'license_plate'] },
+          { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
           { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
           { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'destination'] },
           {
@@ -383,7 +383,7 @@ class SDOModule extends BaseModule {
       const sdo = await SDeliveryOrders.findByPk(id, {
         include: [
           { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
-          { model: SVehicles, as: 'vehicle', attributes: ['id', 'license_plate'] },
+          { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
           { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
           { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'destination'] },
           {

@@ -16,7 +16,7 @@ class SDPModule extends BaseModule {
   async getDropdownWarehouses(req) {
     try {
       const data = await SWarehouses.findAll({
-        attributes: ['id', 'name', 'code'],
+        attributes: ['id', 'name', ['warehouse_code', 'code']],
         order: [['name', 'ASC']]
       });
       return { status: true, data };
@@ -118,7 +118,7 @@ class SDPModule extends BaseModule {
       }
 
       const include = [
-        { model: SWarehouses, as: 'warehouse', attributes: ['id', 'name', 'code'] },
+        { model: SWarehouses, as: 'warehouse', attributes: ['id', 'name', ['warehouse_code', 'code']] },
         { model: SDocks, as: 'dock', attributes: ['id', 'name'] },
         {
           model: SUsers, as: 'creator', attributes: ['id', 'email'],
@@ -144,7 +144,7 @@ class SDPModule extends BaseModule {
       const { id } = req.params;
       const sdp = await SDeliveryPlans.findByPk(id, {
         include: [
-          { model: SWarehouses, as: 'warehouse', attributes: ['id', 'name', 'code'] },
+          { model: SWarehouses, as: 'warehouse', attributes: ['id', 'name', ['warehouse_code', 'code']] },
           { model: SDocks, as: 'dock', attributes: ['id', 'name'] },
           {
             model: SUsers, as: 'creator', attributes: ['id', 'email'],

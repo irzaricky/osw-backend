@@ -165,7 +165,10 @@ class SPOModule extends BaseModule {
         customer_id: Joi.number().integer().required(),
         shipping_address: Joi.string().required(),
         spo_date: Joi.date().iso().required(),
-        delivery_due_date: Joi.date().iso().required()
+        delivery_due_date: Joi.date().iso().less(Joi.ref('spo_date')).required().messages({
+          'date.less': 'Delivery due date must be before SPO date',
+          'any.required': 'Delivery due date is required'
+        })
       });
 
       const validation = helper.validate(data, schema);
@@ -325,6 +328,17 @@ class SPOModule extends BaseModule {
       }
 
       const updates = validation.value;
+
+      // Validate delivery_due_date is strictly before the existing spo_date
+      if (updates.delivery_due_date) {
+        const spoDate = dayjs(spo.spo_date);
+        const dueDate = dayjs(updates.delivery_due_date);
+        if (!dueDate.isBefore(spoDate, 'day')) {
+          await t.rollback();
+          return { status: false, message: 'Delivery due date must be before SPO date', code: 400 };
+        }
+      }
+
       const oldData = JSON.parse(JSON.stringify(spo));
 
       await spo.update(updates, { transaction: t });

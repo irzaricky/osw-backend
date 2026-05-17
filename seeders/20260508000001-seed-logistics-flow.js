@@ -1,5 +1,7 @@
 export default {
   async up(queryInterface, Sequelize) {
+    const timestamp = { created_at: new Date('2026-05-17T07:00:00Z'), updated_at: new Date('2026-05-17T07:00:00Z') };
+
     // =========================
     // SALES PURCHASE ORDERS
     // =========================
@@ -11,12 +13,11 @@ export default {
         customer_id: ((i - 1) % 6) + 1,
         spr_id: null,
         shipping_address: `Alamat Customer ${i}`,
-        spo_date: new Date(),
-        delivery_due_date: new Date(Date.now() + i * 86400000),
+        spo_date: new Date('2026-05-17T08:00:00Z'),
+        delivery_due_date: new Date(new Date('2026-05-17T08:00:00Z').getTime() + i * 86400000),
         status: 'Approved',
         created_by: 1,
-        created_at: new Date(),
-        updated_at: new Date(),
+        ...timestamp
       });
     }
 
@@ -39,10 +40,9 @@ export default {
         part_id: i,
         ordered_qty: 100 + i * 10,
         sent_qty: 20 + i * 5,
-        last_shipment_date: new Date(),
+        last_shipment_date: new Date('2026-05-17T11:00:00Z'),
         status: 'Open',
-        created_at: new Date(),
-        updated_at: new Date(),
+        ...timestamp
       });
     }
 
@@ -58,18 +58,18 @@ export default {
     const deliveryPlanData = [];
 
     for (let i = 1; i <= 10; i++) {
+      const scheduledTime = new Date('2026-05-17').getTime() + (i % 3) * 86400000;
       deliveryPlanData.push({
         dp_number: `DP-2026-${String(i).padStart(4, '0')}`,
-        scheduled_date: new Date(),
+        scheduled_date: new Date(scheduledTime),
         time_start: '08:00:00',
         time_end: '10:00:00',
         warehouse_id: ((i - 1) % 3) + 1,
         dock_id: ((i - 1) % 3) + 1,
-        destination: `Destination ${i}`,
+        destination: `Destination Address ${i}`,
         status: 'Scheduled',
         created_by: 1,
-        created_at: new Date(),
-        updated_at: new Date(),
+        ...timestamp
       });
     }
 
@@ -89,8 +89,7 @@ export default {
         delivery_plan_id: i,
         spo_detail_id: i,
         planned_qty: 50 + i * 5,
-        created_at: new Date(),
-        updated_at: new Date(),
+        ...timestamp
       });
     }
 
@@ -106,20 +105,23 @@ export default {
     const deliveryOrderData = [];
 
     for (let i = 1; i <= 10; i++) {
+      const shipmentTime = new Date('2026-05-17').getTime() + (i % 3) * 86400000;
+      const deliveryStatus = i <= 7 ? 'Delivered' : 'In Transit';
+      const receivedAt = deliveryStatus === 'Delivered' ? new Date(shipmentTime + 4 * 3600000) : null;
+
       deliveryOrderData.push({
         do_number: `DO-2026-${String(i).padStart(4, '0')}`,
         delivery_plan_id: i,
         customer_id: ((i - 1) % 6) + 1,
         vehicle_id: ((i - 1) % 5) + 1,
         driver_id: ((i - 1) % 5) + 1,
-        shipment_date: new Date(),
-        delivery_status: 'Delivered',
-        proof_of_delivery: null,
+        shipment_date: new Date(shipmentTime),
+        delivery_status: deliveryStatus,
+        proof_of_delivery: deliveryStatus === 'Delivered' ? `/uploads/pod-dummy-${i}.jpg` : null,
         notes: `Pengiriman batch ${i}`,
         created_by: 1,
-        created_at: new Date(),
-        updated_at: new Date(),
-        received_at: null,
+        received_at: receivedAt,
+        ...timestamp
       });
     }
 
@@ -139,10 +141,9 @@ export default {
         delivery_order_id: i,
         delivery_plan_detail_id: i,
         sent_qty: 40 + i * 5,
-        received_qty: null,
+        received_qty: i <= 7 ? 40 + i * 5 : null,
         notes: `Detail shipment ${i}`,
-        created_at: new Date(),
-        updated_at: new Date(),
+        ...timestamp
       });
     }
 

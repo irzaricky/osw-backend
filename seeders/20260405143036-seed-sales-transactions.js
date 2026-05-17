@@ -3,7 +3,11 @@ export default {
   async up(queryInterface, Sequelize) {
     const timestamp = { created_at: new Date(), updated_at: new Date() };
 
-    //Forecast Data
+    // Seasonal Demand Curve Reference Models
+    const baseQty = [80, 120, 150, 95, 110, 130, 85, 140, 160, 115, 105, 125];
+    const seasonalFactors = [1.0, 0.9, 1.1, 1.2, 1.3, 1.25, 1.1, 0.95, 1.0, 1.15, 1.2, 1.4];
+
+    // Forecast Data (Fixed Reference May 2026 context)
     const forecasts = [
       {
         forecast_number: 'FC-YR-2026-001',
@@ -16,7 +20,7 @@ export default {
         status: 'Approved',
         created_by: 1,
         approved_by: 1,
-        approved_at: new Date(),
+        approved_at: new Date('2026-04-28T09:00:00Z'),
         ...timestamp
       },
       {
@@ -30,7 +34,7 @@ export default {
         status: 'Approved',
         created_by: 1,
         approved_by: 1,
-        approved_at: new Date(),
+        approved_at: new Date('2026-04-28T10:00:00Z'),
         ...timestamp
       },
       {
@@ -44,71 +48,76 @@ export default {
         status: 'Approved',
         created_by: 1,
         approved_by: 1,
-        approved_at: new Date(),
+        approved_at: new Date('2026-04-28T11:00:00Z'),
         ...timestamp
       }
     ];
     await queryInterface.bulkInsert('s_sales_forecasts', forecasts, { ignoreDuplicates: true });
 
-    let detailIdCounter = 1;
     const forecastDetails = [];
 
     // Details for Forecast 1 (Yearly)
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
     for (let part_id = 1; part_id <= 12; part_id++) {
-      for (const month of months) {
+      months.forEach((month, mIdx) => {
+        const base = baseQty[(part_id - 1) % baseQty.length];
+        const factor = seasonalFactors[mIdx];
+        const monthNum = String(mIdx + 1).padStart(2, '0');
         forecastDetails.push({
           forecast_id: 1,
           forecast_detail_number: `FC-Y-26-P${part_id}-${month}`,
           part_id: part_id,
+          period_date: `2026-${monthNum}-01`,
           qty_status: 'Temporary',
-          forecast_qty: Math.floor(Math.random() * 101),
+          forecast_qty: Math.round(base * factor),
           ...timestamp
         });
-      }
+      });
     }
-
 
     // Details for Forecast 2 (Half-Year)
     const forecast_2 = [
-      { name: 'Jan', date: '2026-01-01' },
-      { name: 'Feb', date: '2026-02-01' },
-      { name: 'Mar', date: '2026-03-01' },
-      { name: 'Apr', date: '2026-04-01' },
-      { name: 'Mei', date: '2026-05-01' },
-      { name: 'Jun', date: '2026-06-01' }
+      { name: 'Jan', date: '2026-01-01', idx: 0 },
+      { name: 'Feb', date: '2026-02-01', idx: 1 },
+      { name: 'Mar', date: '2026-03-01', idx: 2 },
+      { name: 'Apr', date: '2026-04-01', idx: 3 },
+      { name: 'Mei', date: '2026-05-01', idx: 4 },
+      { name: 'Jun', date: '2026-06-01', idx: 5 }
     ];
     for (let part_id = 1; part_id <= 12; part_id++) {
       for (const m of forecast_2) {
+        const base = baseQty[(part_id - 1) % baseQty.length];
+        const factor = seasonalFactors[m.idx];
         forecastDetails.push({
           forecast_id: 2,
           forecast_detail_number: `FC-HY-26S1-P${part_id}-${m.name}`,
           part_id: part_id,
           period_date: m.date,
           qty_status: 'Temporary',
-          forecast_qty: Math.floor(Math.random() * 101),
+          forecast_qty: Math.round(base * factor),
           ...timestamp
         });
       }
     }
 
-
-    // Details for Forecast 3
+    // Details for Forecast 3 (4-Month Rolling)
     const forecast_3 = [
-      { name: 'Mei', date: '2026-05-01', status: 'Fix' },
-      { name: 'Jun', date: '2026-06-01', status: 'Temporary' },
-      { name: 'Jul', date: '2026-07-01', status: 'Temporary' },
-      { name: 'Agu', date: '2026-08-01', status: 'Temporary' }
+      { name: 'Mei', date: '2026-05-01', status: 'Fix', idx: 4 },
+      { name: 'Jun', date: '2026-06-01', status: 'Temporary', idx: 5 },
+      { name: 'Jul', date: '2026-07-01', status: 'Temporary', idx: 6 },
+      { name: 'Agu', date: '2026-08-01', status: 'Temporary', idx: 7 }
     ];
     for (let part_id = 1; part_id <= 12; part_id++) {
       for (const m of forecast_3) {
+        const base = baseQty[(part_id - 1) % baseQty.length];
+        const factor = seasonalFactors[m.idx];
         forecastDetails.push({
           forecast_id: 3,
           forecast_detail_number: `FCM-2605-P${part_id}-${m.name}`,
           part_id: part_id,
           period_date: m.date,
           qty_status: m.status,
-          forecast_qty: Math.floor(Math.random() * 101),
+          forecast_qty: Math.round(base * factor),
           ...timestamp
         });
       }
@@ -116,16 +125,16 @@ export default {
 
     await queryInterface.bulkInsert('s_sales_forecast_details', forecastDetails, { ignoreDuplicates: true });
 
-    // SPR Data (Generated from Forecast 3)
+    // SPR Data (Generated from Forecast 3 - Fixed May 2026 Timeline)
     const sprs = [
       {
         spr_number: 'SPR-2026-05-101',
         spr_name: 'Request for May Fix Forecast Demand',
         source: 'Automatic',
         forecast_id: 3,
-        request_date: new Date(),
-        required_date: new Date(new Date().setDate(new Date().getDate() + 14)),
-        confirmed_date: new Date(),
+        request_date: new Date('2026-05-01T08:00:00Z'),
+        required_date: new Date('2026-05-15T08:00:00Z'),
+        confirmed_date: new Date('2026-05-02T10:00:00Z'),
         description: 'Generated automatically from FC-R4-2026-05-001 for Fix Period',
         status: 'Approved',
         remarks: 'Stock verified, proceed.',
@@ -146,15 +155,15 @@ export default {
       }));
     await queryInterface.bulkInsert('s_sales_purchase_request_details', sprDetails, { ignoreDuplicates: true });
 
-    // SPO Data (Generated from SPR)
+    // SPO Data (Generated from SPR - Fixed May 2026 Timeline)
     const spos = [
       {
         spo_number: 'SPO-2026-06-200',
         customer_id: 1,
         spr_id: 1,
         shipping_address: 'Jalan jalan alun alun utara solo',
-        spo_date: new Date(),
-        delivery_due_date: new Date(new Date().setDate(new Date().getDate() + 20)),
+        spo_date: new Date('2026-05-03T09:00:00Z'),
+        delivery_due_date: new Date('2026-05-23T09:00:00Z'),
         status: 'Processing',
         created_by: 1,
         ...timestamp
@@ -169,7 +178,7 @@ export default {
         part_id: spr.part_id,
         ordered_qty: spr.qty,
         sent_qty: isClosed ? spr.qty : Math.floor(spr.qty / 2),
-        last_shipment_date: new Date(),
+        last_shipment_date: new Date('2026-05-17T11:00:00Z'),
         status: isClosed ? 'Closed' : 'Partial',
         ...timestamp
       };
@@ -178,17 +187,16 @@ export default {
 
     // Delivery Plans & Orders Data ---
     let dpIdCounter = 1;
-    let dpDetailIdCounter = 1;
     let doIdCounter = 1;
 
     const deliveryPlans = [];
     const deliveryPlanDetails = [];
     const deliveryOrders = [];
 
-    // Skenario 1: Completed Delivery (Parts 1-4)
+    // Scenario 1: Completed Delivery (Parts 1-4)
     deliveryPlans.push({
       dp_number: `DP-2026-06-00${dpIdCounter}`,
-      scheduled_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      scheduled_date: new Date('2026-05-17'),
       time_start: '08:00:00',
       time_end: '12:00:00',
       warehouse_id: 1,
@@ -215,21 +223,22 @@ export default {
       customer_id: 1,
       vehicle_id: 1,
       driver_id: 1,
-      shipment_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      shipment_date: new Date('2026-05-17'),
       delivery_status: 'Delivered',
       proof_of_delivery: '/uploads/dummy-1.jpg',
       notes: 'Diterima dengan baik oleh Bapak Budi',
       created_by: 1,
+      received_at: new Date('2026-05-17T15:30:00Z'),
       ...timestamp
     });
 
     dpIdCounter++;
     doIdCounter++;
 
-    // Skenario 2: In Transit (Parts 5-8)
+    // Scenario 2: In Transit (Parts 5-8)
     deliveryPlans.push({
       dp_number: `DP-2026-06-00${dpIdCounter}`,
-      scheduled_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      scheduled_date: new Date('2026-05-18'),
       time_start: '13:00:00',
       time_end: '17:00:00',
       warehouse_id: 1,
@@ -256,21 +265,22 @@ export default {
       customer_id: 1,
       vehicle_id: 1,
       driver_id: 1,
-      shipment_date: new Date(new Date().setDate(new Date().getDate() + 2)),
+      shipment_date: new Date('2026-05-18'),
       delivery_status: 'In Transit',
       proof_of_delivery: null,
       notes: null,
       created_by: 1,
+      received_at: null,
       ...timestamp
     });
 
     dpIdCounter++;
     doIdCounter++;
 
-    // Skenario 3: Scheduled (Parts 9-12)
+    // Scenario 3: Scheduled (Parts 9-12)
     deliveryPlans.push({
       dp_number: `DP-2026-06-00${dpIdCounter}`,
-      scheduled_date: new Date(new Date().setDate(new Date().getDate() + 3)),
+      scheduled_date: new Date('2026-05-19'),
       time_start: '08:00:00',
       time_end: '12:00:00',
       warehouse_id: 1,
@@ -290,10 +300,10 @@ export default {
         ...timestamp
       });
     });
+
     await queryInterface.bulkInsert('s_delivery_plans', deliveryPlans, { ignoreDuplicates: true });
     await queryInterface.bulkInsert('s_delivery_plan_details', deliveryPlanDetails, { ignoreDuplicates: true });
     await queryInterface.bulkInsert('s_delivery_orders', deliveryOrders, { ignoreDuplicates: true });
-
   },
 
   async down(queryInterface, Sequelize) {

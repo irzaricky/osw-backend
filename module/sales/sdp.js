@@ -111,7 +111,7 @@ class SDPModule extends BaseModule {
             model: SSalesPurchaseOrders,
             as: 'order',
             where: whereOrder,
-            attributes: ['id', 'spo_number', 'customer_id', 'delivery_due_date'],
+            attributes: ['id', 'spo_number', 'customer_id', 'delivery_due_date', 'shipping_address'],
             include: [{ model: SCustomers, as: 'customer', attributes: ['id', 'name'] }]
           },
           {

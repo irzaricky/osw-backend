@@ -3,6 +3,7 @@ import { config } from '../../config/app.config.js';
 import { Op } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
+import PdfPrinter from 'pdfmake/src/printer.js';
 import Joi from 'joi';
 import dayjs from 'dayjs';
 import path from 'path';
@@ -264,6 +265,15 @@ class SDOModule extends BaseModule {
         return { status: false, message: 'Only "In Transit" Delivery Orders can be confirmed as Delivered', code: 400 };
       }
 
+      // Parse details if it is stringified JSON (from multipart/form-data)
+      if (typeof req.body.details === 'string') {
+        try {
+          req.body.details = JSON.parse(req.body.details);
+        } catch (e) {
+          // ignore
+        }
+      }
+
       // Validate and parse details from body
       const detailSchema = Joi.object({
         delivery_order_detail_id: Joi.number().integer().required(),
@@ -361,6 +371,252 @@ class SDOModule extends BaseModule {
       await t.rollback();
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  // ─── GENERATE SURAT JALAN PDF (Print Delivery Order) ─────────────────────
+
+  async printSuratJalan(req, res) {
+    try {
+      const { id } = req.params;
+
+      const sdo = await SDeliveryOrders.findByPk(id, {
+        include: [
+          { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
+          { model: SVehicles, as: 'vehicle', attributes: ['id', 'license_plate'] },
+          { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
+          { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'destination'] },
+          {
+            model: SUsers, as: 'creator', attributes: ['id', 'email'],
+            include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
+          },
+          {
+            model: SDeliveryOrderDetails, as: 'details',
+            include: [
+              {
+                model: SDeliveryPlanDetails, as: 'planDetail',
+                include: [
+                  {
+                    model: SSalesPurchaseOrderDetails, as: 'spoDetail',
+                    include: [
+                      { model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name'] }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!sdo) {
+        return res.status(404).json({
+          status: false,
+          message: 'Delivery Order not found'
+        });
+      }
+
+      const printedAt = dayjs().format('DD/MM/YYYY HH:mm:ss');
+
+      const fonts = {
+        Roboto: {
+          normal: path.resolve('fonts/Roboto-Regular.ttf'),
+          bold: path.resolve('fonts/Roboto-Medium.ttf'),
+          bolditalics: path.resolve('fonts/Roboto-MediumItalic.ttf')
+        }
+      };
+
+      const printer = new PdfPrinter(fonts);
+
+      // Build items table body
+      const tableBody = [
+        [
+          { text: 'No.', style: 'tableHeader', alignment: 'center' },
+          { text: 'Part Number', style: 'tableHeader' },
+          { text: 'Part Name', style: 'tableHeader' },
+          { text: 'Sent Qty', style: 'tableHeader', alignment: 'right' },
+          { text: 'Received Qty', style: 'tableHeader', alignment: 'center' },
+          { text: 'Notes', style: 'tableHeader' }
+        ]
+      ];
+
+      if (sdo.details && sdo.details.length > 0) {
+        sdo.details.forEach((item, index) => {
+          const part = item.planDetail?.spoDetail?.part;
+          tableBody.push([
+            { text: String(index + 1), alignment: 'center', style: 'tableCell' },
+            { text: part?.part_number || '-', style: 'tableCellHighlight' },
+            { text: part?.part_name || '-', style: 'tableCell' },
+            { text: `${item.sent_qty} pcs`, alignment: 'right', style: 'tableCellHighlight' },
+            { text: '', alignment: 'center', style: 'tableCell' }, // Left blank for physical signing/recording
+            { text: item.notes || '', style: 'tableCell' }
+          ]);
+        });
+      } else {
+        tableBody.push([
+          { text: 'No items found in this Delivery Order', colSpan: 6, alignment: 'center', style: 'tableCell' },
+          {}, {}, {}, {}, {}
+        ]);
+      }
+
+      const docDefinition = {
+        pageSize: 'A4',
+        pageMargins: [36, 36, 36, 36],
+        content: [
+          // Header company details
+          {
+            columns: [
+              {
+                width: '*',
+                stack: [
+                  { text: 'PT. OWS LOGISTICS & DISTRIBUTION', style: 'companyName' },
+                  { text: 'Kawasan Industri Cikarang Blok B-12, Bekasi, Jawa Barat', style: 'companyAddress' },
+                  { text: 'Phone: (021) 8900-1234 | Email: dispatch@ows.co.id', style: 'companyAddress' }
+                ]
+              },
+              {
+                width: 'auto',
+                stack: [
+                  { text: 'SURAT JALAN', style: 'docTitle', alignment: 'right' },
+                  { text: 'DELIVERY ORDER', style: 'docSubTitle', alignment: 'right' }
+                ]
+              }
+            ],
+            margin: [0, 0, 0, 15]
+          },
+          // Divider Line
+          {
+            canvas: [{ type: 'line', x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 1.5, lineColor: '#1a237e' }],
+            margin: [0, 0, 0, 15]
+          },
+          // Metadata grid
+          {
+            columns: [
+              {
+                width: '50%',
+                table: {
+                  widths: ['35%', '*'],
+                  body: [
+                    [{ text: 'DO Number', style: 'metaLabel' }, { text: `: ${sdo.do_number}`, style: 'metaValueBold' }],
+                    [{ text: 'Date', style: 'metaLabel' }, { text: `: ${dayjs(sdo.shipment_date).format('DD MMMM YYYY')}`, style: 'metaValue' }],
+                    [{ text: 'Plan Ref', style: 'metaLabel' }, { text: `: ${sdo.deliveryPlan?.dp_number || '-'}`, style: 'metaValue' }],
+                    [{ text: 'Driver', style: 'metaLabel' }, { text: `: ${sdo.driver?.full_name || '-'}`, style: 'metaValue' }],
+                    [{ text: 'Vehicle Plate', style: 'metaLabel' }, { text: `: ${sdo.vehicle?.license_plate || '-'}`, style: 'metaValueBold' }]
+                  ]
+                },
+                layout: 'noBorders'
+              },
+              {
+                width: '50%',
+                table: {
+                  widths: ['30%', '*'],
+                  body: [
+                    [{ text: 'Deliver To', style: 'metaLabel' }, { text: `: ${sdo.customer?.name || '-'}`, style: 'metaValueBold' }],
+                    [{ text: 'Cust Code', style: 'metaLabel' }, { text: `: ${sdo.customer?.customer_code || '-'}`, style: 'metaValue' }],
+                    [{ text: 'Address', style: 'metaLabel' }, { text: `: ${sdo.deliveryPlan?.destination || '-'}`, style: 'metaValue' }]
+                  ]
+                },
+                layout: 'noBorders'
+              }
+            ],
+            margin: [0, 0, 0, 20]
+          },
+          // Table Title
+          { text: 'SHIPMENT ITEMS LIST', style: 'sectionTitle', margin: [0, 0, 0, 8] },
+          // Items Table
+          {
+            table: {
+              headerRows: 1,
+              widths: ['7%', '20%', '35%', '13%', '13%', '12%'],
+              body: tableBody
+            },
+            layout: {
+              hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.5,
+              vLineWidth: () => 0,
+              hLineColor: (i, node) => (i === 0 || i === node.table.body.length) ? '#1a237e' : '#e0e0e0',
+              paddingTop: () => 6,
+              paddingBottom: () => 6,
+              paddingLeft: () => 8,
+              paddingRight: () => 8
+            },
+            margin: [0, 0, 0, 30]
+          },
+          // Signatures block
+          {
+            columns: [
+              {
+                width: '33%',
+                stack: [
+                  { text: 'Prepared By,', style: 'sigLabel', alignment: 'center' },
+                  { text: '', margin: [0, 35, 0, 0] },
+                  { text: '( Logistics Staff )', style: 'sigName', alignment: 'center' }
+                ]
+              },
+              {
+                width: '34%',
+                stack: [
+                  { text: 'Driver,', style: 'sigLabel', alignment: 'center' },
+                  { text: '', margin: [0, 35, 0, 0] },
+                  { text: `( ${sdo.driver?.full_name || '___________'} )`, style: 'sigName', alignment: 'center' }
+                ]
+              },
+              {
+                width: '33%',
+                stack: [
+                  { text: 'Received By,', style: 'sigLabel', alignment: 'center' },
+                  { text: '', margin: [0, 35, 0, 0] },
+                  { text: '( Customer Representative )', style: 'sigName', alignment: 'center' }
+                ]
+              }
+            ]
+          }
+        ],
+        footer: (currentPage, pageCount) => {
+          return {
+            columns: [
+              { text: `Printed: ${printedAt} | Powered by OSW v1.0`, style: 'footerLeft', margin: [36, 0, 0, 0] },
+              { text: `Page ${currentPage} of ${pageCount}`, style: 'footerRight', alignment: 'right', margin: [0, 0, 36, 0] }
+            ],
+            style: 'footer'
+          };
+        },
+        styles: {
+          companyName: { fontSize: 13, bold: true, color: '#1a237e' },
+          companyAddress: { fontSize: 8, color: '#616161', margin: [0, 2, 0, 0] },
+          docTitle: { fontSize: 18, bold: true, color: '#1a237e' },
+          docSubTitle: { fontSize: 10, bold: true, color: '#757575', margin: [0, 2, 0, 0] },
+          metaLabel: { fontSize: 9, bold: true, color: '#424242' },
+          metaValue: { fontSize: 9, color: '#212121' },
+          metaValueBold: { fontSize: 9, bold: true, color: '#1a237e' },
+          sectionTitle: { fontSize: 10, bold: true, color: '#1a237e', tracking: 1 },
+          tableHeader: { fontSize: 9, bold: true, color: '#ffffff', fillColor: '#1a237e', margin: [0, 2, 0, 2] },
+          tableCell: { fontSize: 9, color: '#212121' },
+          tableCellHighlight: { fontSize: 9, bold: true, color: '#1a237e' },
+          sigLabel: { fontSize: 9, bold: true, color: '#424242' },
+          sigName: { fontSize: 9, bold: true, color: '#212121' },
+          footer: { fontSize: 7, color: '#9e9e9e' }
+        },
+        defaultStyle: {
+          font: 'Roboto'
+        }
+      };
+
+      const pdfDoc = printer.createPdfKitDocument(docDefinition);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename=Surat-Jalan-${sdo.do_number}.pdf`
+      );
+
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    } catch (error) {
+      console.error('Error generating Surat Jalan PDF:', error);
+      res.status(500).json({
+        status: false,
+        message: 'Internal server error while generating PDF'
+      });
     }
   }
 }

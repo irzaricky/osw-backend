@@ -30,4 +30,9 @@ router.put('/:id/status', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, await sdo.updateStatus(req));
 });
 
+// ── Print official DO PDF (Surat Jalan)
+router.get('/:id/pdf', session.sessionChecker, async (req, res) => {
+  return sdo.printSuratJalan(req, res);
+});
+
 export default router;

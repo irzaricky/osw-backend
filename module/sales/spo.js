@@ -515,7 +515,7 @@ class SPOModule extends BaseModule {
             model: SDeliveryOrders,
             as: 'deliveryOrder',
             required: true,
-            attributes: ['id', 'do_number', 'do_date', 'status', 'received_at']
+            attributes: ['id', 'do_number', 'shipment_date', 'delivery_status', 'received_at']
           }
         ]
       });
@@ -532,8 +532,8 @@ class SPOModule extends BaseModule {
           history[doId] = {
             id: doId,
             do_number: d.deliveryOrder.do_number,
-            do_date: d.deliveryOrder.do_date,
-            status: d.deliveryOrder.status,
+            do_date: d.deliveryOrder.shipment_date,
+            status: d.deliveryOrder.delivery_status,
             received_at: d.deliveryOrder.received_at,
             items: []
           };

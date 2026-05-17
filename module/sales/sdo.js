@@ -1,6 +1,6 @@
 import db from '../../models/index.js';
 import { config } from '../../config/app.config.js';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import PdfPrinter from 'pdfmake/src/printer.js';
@@ -212,7 +212,7 @@ class SDOModule extends BaseModule {
         vehicle_id,
         driver_id,
         shipment_date: dayjs().format('YYYY-MM-DD'),
-        delivery_status: 'In Transit',
+        delivery_status: 'Draft',
         created_by: currentUser.id
       }, { transaction: t });
 
@@ -253,16 +253,46 @@ class SDOModule extends BaseModule {
     const t = await db.sequelize.transaction();
     try {
       const { id } = req.params;
+      const currentUser = req.user;
 
       const sdo = await SDeliveryOrders.findByPk(id, {
-        include: [{ model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number'] }],
+        include: [
+          { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'warehouse_id'] },
+          {
+            model: SDeliveryOrderDetails,
+            as: 'details',
+            include: [
+              {
+                model: SDeliveryPlanDetails,
+                as: 'planDetail',
+                include: [
+                  {
+                    model: SSalesPurchaseOrderDetails,
+                    as: 'spoDetail',
+                    include: [{ model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name', 'package_id'] }]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
         transaction: t
       });
-      if (!sdo) { await t.rollback(); return { status: false, message: 'Delivery Order not found', code: 404 }; }
 
-      if (sdo.delivery_status !== 'In Transit') {
+      if (!sdo) {
         await t.rollback();
-        return { status: false, message: 'Only "In Transit" Delivery Orders can be confirmed as Delivered', code: 400 };
+        return { status: false, message: 'Delivery Order not found', code: 404 };
+      }
+
+      if (sdo.delivery_status !== 'Shipped') {
+        await t.rollback();
+        return { status: false, message: 'Only "Shipped" Delivery Orders can be confirmed as Delivered', code: 400 };
+      }
+
+      // Enforce Proof of Delivery (POD) file is uploaded
+      if (!req.files || !req.files.proof_of_delivery) {
+        await t.rollback();
+        return { status: false, message: 'Proof of Delivery (POD) file is required', code: 400 };
       }
 
       // Parse details if it is stringified JSON (from multipart/form-data)
@@ -287,32 +317,29 @@ class SDOModule extends BaseModule {
       });
 
       const validation = helper.validate(req.body, schema);
-      if (!validation.status) { await t.rollback(); return validation; }
+      if (!validation.status) {
+        await t.rollback();
+        return validation;
+      }
 
       const { notes, details } = validation.value;
 
       // Handle proof_of_delivery file upload
-      let proofUrl = null;
-      if (req.files && req.files.proof_of_delivery) {
-        const file = req.files.proof_of_delivery;
-        const ext = path.extname(file.name);
-        const fileName = `${sdo.do_number.replace(/\//g, '-')}_${Date.now()}${ext}`;
-        const uploadDir = path.join(__dirname, '../../public/uploads/pod');
+      const file = req.files.proof_of_delivery;
+      const ext = path.extname(file.name);
+      const fileName = `${sdo.do_number.replace(/\//g, '-')}_${Date.now()}${ext}`;
+      const uploadDir = path.join(__dirname, '../../public/uploads/pod');
 
-        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-        const uploadPath = path.join(uploadDir, fileName);
-        await file.mv(uploadPath);
+      const uploadPath = path.join(uploadDir, fileName);
+      await file.mv(uploadPath);
 
-        proofUrl = `/uploads/pod/${fileName}`;
-      }
+      const proofUrl = `/uploads/pod/${fileName}`;
 
-      // Update each detail's received_qty and notes
+      // Update each detail's received_qty and notes, validating bounds
       for (const item of details) {
-        const doDetail = await SDeliveryOrderDetails.findOne({
-          where: { id: item.delivery_order_detail_id, delivery_order_id: sdo.id },
-          transaction: t
-        });
+        const doDetail = sdo.details.find(d => d.id === item.delivery_order_detail_id);
 
         if (!doDetail) {
           await t.rollback();
@@ -323,19 +350,125 @@ class SDOModule extends BaseModule {
           };
         }
 
+        // Validate received_qty <= sent_qty
+        if (item.received_qty > doDetail.sent_qty) {
+          await t.rollback();
+          return {
+            status: false,
+            message: `Received quantity (${item.received_qty}) cannot exceed sent quantity (${doDetail.sent_qty}) for detail ID ${item.delivery_order_detail_id}`,
+            code: 400
+          };
+        }
+
         await doDetail.update({
           received_qty: item.received_qty,
           notes: item.notes ?? doDetail.notes
         }, { transaction: t });
+
+        // AUTOMATED FIFO STOCK DEDUCTION
+        const part = doDetail.planDetail?.spoDetail?.part;
+        if (!part) continue;
+
+        const packageData = part.package_id
+          ? await db.SPackages.findByPk(part.package_id, { attributes: ['id', 'capacity'], transaction: t })
+          : null;
+        const capacity = packageData?.capacity || 1;
+        const requiredKanbans = Math.ceil(doDetail.sent_qty / capacity);
+
+        // Find available stock for the part in the Finish Good warehouse of origin
+        const fifoStocks = await db.sequelize.query(`
+          SELECT
+            ws.id AS stock_id,
+            ws.wo_item_label_id,
+            ws.bin_id,
+            pl.id AS label_id,
+            pl.label_number
+          FROM t_warehouse_stock ws
+          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id
+          JOIN t_part_labels pl ON pl.id = wil.label_id
+          JOIN s_warehouse_bins b ON b.id = ws.bin_id
+          JOIN s_warehouse_areas a ON a.id = b.area_id
+          WHERE pl.part_id = :part_id
+            AND a.warehouse_id = :warehouse_id
+          ORDER BY ws.created_at ASC, ws.id ASC
+          LIMIT :limit
+          FOR UPDATE
+        `, {
+          replacements: {
+            part_id: part.id,
+            warehouse_id: sdo.deliveryPlan.warehouse_id,
+            limit: requiredKanbans
+          },
+          type: QueryTypes.SELECT,
+          transaction: t
+        });
+
+        if (fifoStocks.length < requiredKanbans) {
+          await t.rollback();
+          return {
+            status: false,
+            message: `Insufficient stock in Finished Goods warehouse for part "${part.part_number}". Required: ${requiredKanbans} kanbans (${doDetail.sent_qty} pcs), available: ${fifoStocks.length} kanbans.`,
+            code: 400
+          };
+        }
+
+        // Deduct target stock records and write audit log
+        for (const row of fifoStocks) {
+          await db.sequelize.query(`
+            DELETE FROM t_warehouse_stock
+            WHERE id = :stock_id
+          `, {
+            replacements: { stock_id: row.stock_id },
+            type: QueryTypes.DELETE,
+            transaction: t
+          });
+
+          await db.sequelize.query(`
+            INSERT INTO t_warehouse_stock_log (
+              wh_stock_id,
+              user_id,
+              is_placement,
+              qty_per_kanban,
+              old_data,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              :wh_stock_id,
+              :user_id,
+              false,
+              :qty_per_kanban,
+              :old_data,
+              NOW(),
+              NOW()
+            )
+          `, {
+            replacements: {
+              wh_stock_id: row.stock_id,
+              user_id: currentUser.id || null,
+              qty_per_kanban: capacity,
+              old_data: JSON.stringify({
+                reason: 'SDO Shipment Delivered',
+                sdo_number: sdo.do_number,
+                part_number: part.part_number,
+                qty: doDetail.sent_qty,
+                bin_id: row.bin_id,
+                label_number: row.label_number
+              })
+            },
+            type: QueryTypes.INSERT,
+            transaction: t
+          });
+        }
       }
 
       const oldData = JSON.parse(JSON.stringify(sdo));
 
-      // Update SDO header
+      // Update SDO header to Delivered
       await sdo.update({
         delivery_status: 'Delivered',
         notes: notes ?? sdo.notes,
-        proof_of_delivery: proofUrl ?? sdo.proof_of_delivery,
+        proof_of_delivery: proofUrl,
         received_at: new Date()
       }, { transaction: t });
 
@@ -414,6 +547,10 @@ class SDOModule extends BaseModule {
           status: false,
           message: 'Delivery Order not found'
         });
+      }
+
+      if (sdo.delivery_status === 'Draft') {
+        await sdo.update({ delivery_status: 'Shipped' });
       }
 
       const printedAt = dayjs().format('DD/MM/YYYY HH:mm:ss');

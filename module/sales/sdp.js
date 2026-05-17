@@ -10,7 +10,7 @@ const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
   SWarehouses, SDocks, SCustomers, SParts, SUsers, SUserDetail,
-  SWarehouseAreas
+  SWarehouseAreas, RefWarehouseCategories
 } = db;
 
 class SDPModule extends BaseModule {
@@ -18,6 +18,12 @@ class SDPModule extends BaseModule {
     try {
       const data = await SWarehouses.findAll({
         attributes: ['id', 'name', ['warehouse_code', 'code']],
+        include: [{
+          model: RefWarehouseCategories,
+          as: 'category',
+          attributes: ['id', 'name'],
+          where: { name: 'Finish Good' }
+        }],
         order: [['name', 'ASC']]
       });
       return { status: true, data };
@@ -32,7 +38,18 @@ class SDPModule extends BaseModule {
       const include = [{
         model: SWarehouseAreas,
         as: 'area',
-        attributes: ['id', 'warehouse_id']
+        attributes: ['id', 'warehouse_id'],
+        include: [{
+          model: SWarehouses,
+          as: 'warehouse',
+          attributes: ['id', 'name'],
+          include: [{
+            model: RefWarehouseCategories,
+            as: 'category',
+            attributes: ['id', 'name'],
+            where: { name: 'Finish Good' }
+          }]
+        }]
       }];
       
       const where = {};
@@ -47,7 +64,9 @@ class SDPModule extends BaseModule {
         order: [['name', 'ASC']]
       });
       
-      const data = docks.map(d => ({
+      const filteredDocks = docks.filter(d => d.area?.warehouse?.category);
+      
+      const data = filteredDocks.map(d => ({
         id: d.id,
         name: d.name,
         area_id: d.area_id,

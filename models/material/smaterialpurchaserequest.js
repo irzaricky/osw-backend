@@ -26,6 +26,11 @@ export default (sequelize) => {
   }, {
     sequelize,
     modelName: 'SMaterialPurchaseRequest',
+    tableName: 's_material_purchase_requests',
+    underscored: true,
+    timestamps: true,
+    paranoid: true,
+    deletedAt: 'deleted_at'
   });
   return SMaterialPurchaseRequest;
 };

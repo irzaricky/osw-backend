@@ -22,6 +22,11 @@ export default (sequelize) => {
   }, {
     sequelize,
     modelName: 'SMrpDetail',
+    tableName: 's_mrp_details',
+    underscored: true,
+    timestamps: true,
+    paranoid: true,
+    deletedAt: 'deleted_at'
   });
   return SMrpDetail;
 };

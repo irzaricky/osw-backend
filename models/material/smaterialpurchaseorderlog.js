@@ -19,6 +19,11 @@ export default (sequelize) => {
   }, {
     sequelize,
     modelName: 'SMaterialPurchaseOrderLog',
+    tableName: 's_material_purchase_order_logs',
+    underscored: true,
+    timestamps: true,
+    paranoid: true,
+    deletedAt: 'deleted_at'
   });
   return SMaterialPurchaseOrderLog;
 };

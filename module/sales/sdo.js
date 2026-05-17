@@ -17,7 +17,8 @@ const {
   SDeliveryOrders, SDeliveryOrderDetails,
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
-  SVehicles, SCustomers, SParts, SUsers, SUserDetail
+  SVehicles, SCustomers, SParts, SUsers, SUserDetail,
+  SPackages, RefVehicleType, SRoles
 } = db;
 
 class SDOModule extends BaseModule {
@@ -25,6 +26,11 @@ class SDOModule extends BaseModule {
     try {
       const data = await SVehicles.findAll({
         attributes: ['id', ['plate_number', 'license_plate'], 'vehicle_type_id'],
+        include: [{
+          model: RefVehicleType,
+          as: 'vehicle_type',
+          attributes: ['id', 'name', 'load_capacity']
+        }],
         order: [['plate_number', 'ASC']]
       });
       return { status: true, data };
@@ -38,7 +44,19 @@ class SDOModule extends BaseModule {
     try {
       const data = await SUserDetail.findAll({
         attributes: ['user_id', 'full_name', 'employee_number'],
-        include: [{ model: SUsers, as: 'user', attributes: ['id', 'email'] }],
+        include: [{
+          model: SUsers,
+          as: 'user',
+          attributes: ['id', 'email'],
+          required: true,
+          include: [{
+            model: SRoles,
+            as: 'role',
+            attributes: ['id', 'name'],
+            where: { name: { [Op.iLike]: 'Driver' } },
+            required: true
+          }]
+        }],
         order: [['full_name', 'ASC']]
       });
       return { status: true, data };
@@ -160,7 +178,7 @@ class SDOModule extends BaseModule {
 
       const { delivery_plan_id, vehicle_id, driver_id } = validation.value;
 
-      // Load SDP with all details + SPO chain to get customer_id
+      // Load SDP with all details + SPO chain + parts + package
       const sdp = await SDeliveryPlans.findByPk(delivery_plan_id, {
         include: [
           {
@@ -168,7 +186,13 @@ class SDOModule extends BaseModule {
             include: [
               {
                 model: SSalesPurchaseOrderDetails, as: 'spoDetail',
-                include: [{ model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'customer_id'] }]
+                include: [
+                  { model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'customer_id'] },
+                  {
+                    model: SParts, as: 'part',
+                    include: [{ model: SPackages, as: 'package' }]
+                  }
+                ]
               }
             ]
           }
@@ -188,13 +212,87 @@ class SDOModule extends BaseModule {
         return { status: false, message: 'Delivery Plan has no detail items', code: 400 };
       }
 
-      // Check vehicle exists
-      const vehicle = await SVehicles.findByPk(vehicle_id, { transaction: t });
+      // Check vehicle exists and load type details
+      const vehicle = await SVehicles.findByPk(vehicle_id, {
+        include: [{ model: RefVehicleType, as: 'vehicle_type', attributes: ['id', 'name', 'load_capacity'] }],
+        transaction: t
+      });
       if (!vehicle) { await t.rollback(); return { status: false, message: 'Vehicle not found', code: 404 }; }
 
-      // Check driver exists (driver_id references s_users_details.user_id)
-      const driver = await SUserDetail.findOne({ where: { user_id: driver_id }, transaction: t });
+      // Check driver exists and verify Driver role
+      const driver = await SUserDetail.findOne({
+        where: { user_id: driver_id },
+        include: [{
+          model: SUsers,
+          as: 'user',
+          include: [{ model: SRoles, as: 'role', attributes: ['id', 'name'] }]
+        }],
+        transaction: t
+      });
       if (!driver) { await t.rollback(); return { status: false, message: 'Driver not found', code: 404 }; }
+
+      const roleName = driver.user?.role?.name;
+      if (!roleName || roleName.toLowerCase() !== 'driver') {
+        await t.rollback();
+        return { status: false, message: 'The selected user is not registered as a Driver', code: 400 };
+      }
+
+      // Guard against overlapping driver or vehicle schedules
+      const existingConflict = await SDeliveryOrders.findOne({
+        include: [{
+          model: SDeliveryPlans,
+          as: 'deliveryPlan',
+          required: true,
+          where: {
+            scheduled_date: sdp.scheduled_date,
+            time_start: { [Op.lt]: sdp.time_end },
+            time_end: { [Op.gt]: sdp.time_start }
+          }
+        }],
+        where: {
+          [Op.or]: [
+            { vehicle_id },
+            { driver_id }
+          ]
+        },
+        transaction: t
+      });
+
+      if (existingConflict) {
+        const isVehicleConflict = existingConflict.vehicle_id === vehicle_id;
+        const conflictTarget = isVehicleConflict ? 'Vehicle' : 'Driver';
+        await t.rollback();
+        return {
+          status: false,
+          message: `${conflictTarget} is already allocated to another shipping schedule at this time slot (${existingConflict.deliveryPlan.time_start} - ${existingConflict.deliveryPlan.time_end})`,
+          code: 409
+        };
+      }
+
+      // Calculate and validate total package load factor
+      let totalSdpLoad = 0;
+      for (const planDetail of sdp.details) {
+        const part = planDetail.spoDetail?.part;
+        const pkg = part?.package;
+        if (pkg) {
+          const capacity = pkg.capacity || 1;
+          const loadFactor = pkg.load !== null ? pkg.load : 1.0;
+          const numPackages = Math.ceil(planDetail.planned_qty / capacity);
+          totalSdpLoad += numPackages * loadFactor;
+        } else {
+          totalSdpLoad += planDetail.planned_qty;
+        }
+      }
+
+      const maxCapacity = vehicle.vehicle_type ? vehicle.vehicle_type.load_capacity : 50;
+      if (totalSdpLoad > maxCapacity) {
+        await t.rollback();
+        return {
+          status: false,
+          message: `Total package load (${totalSdpLoad.toFixed(1)} units) exceeds the selected vehicle's maximum load capacity (${maxCapacity} units)`,
+          code: 400
+        };
+      }
 
       // Extract customer_id from the first detail's SPO
       const customer_id = sdp.details[0]?.spoDetail?.order?.customer_id;
@@ -212,7 +310,7 @@ class SDOModule extends BaseModule {
         vehicle_id,
         driver_id,
         shipment_date: dayjs().format('YYYY-MM-DD'),
-        delivery_status: 'Draft',
+        delivery_status: 'In Transit',
         created_by: currentUser.id
       }, { transaction: t });
 
@@ -284,9 +382,9 @@ class SDOModule extends BaseModule {
         return { status: false, message: 'Delivery Order not found', code: 404 };
       }
 
-      if (sdo.delivery_status !== 'Shipped') {
+      if (sdo.delivery_status !== 'In Transit') {
         await t.rollback();
-        return { status: false, message: 'Only "Shipped" Delivery Orders can be confirmed as Delivered', code: 400 };
+        return { status: false, message: 'Only "In Transit" Delivery Orders can be confirmed as Delivered', code: 400 };
       }
 
       // Enforce Proof of Delivery (POD) file is uploaded
@@ -549,8 +647,12 @@ class SDOModule extends BaseModule {
         });
       }
 
-      if (sdo.delivery_status === 'Draft') {
-        await sdo.update({ delivery_status: 'Shipped' });
+      // Update parent SDP status to Shipped when printed
+      if (sdo.delivery_plan_id) {
+        await SDeliveryPlans.update(
+          { status: 'Shipped' },
+          { where: { id: sdo.delivery_plan_id } }
+        );
       }
 
       const printedAt = dayjs().format('DD/MM/YYYY HH:mm:ss');

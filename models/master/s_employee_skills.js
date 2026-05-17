@@ -17,6 +17,12 @@ export default (sequelize) => {
 
   SEmployeeSkill.init(
     {
+      id: {
+        type: DataTypes.INTEGER,
+        autoIncrement: true,
+        primaryKey: true,
+      },
+
       member_id: {
         type: DataTypes.INTEGER,
         allowNull: false,

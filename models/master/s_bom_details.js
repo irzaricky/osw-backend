@@ -81,6 +81,10 @@ export default (sequelize) => {
         type: DataTypes.INTEGER,
         allowNull: true,
       },
+      type: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
       notes: {
         type: DataTypes.TEXT,
         allowNull: true,

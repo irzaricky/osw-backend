@@ -194,7 +194,11 @@ class SDPModule extends BaseModule {
               {
                 model: SSalesPurchaseOrderDetails, as: 'spoDetail',
                 include: [
-                  { model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name'] },
+                  {
+                    model: SParts, as: 'part',
+                    attributes: ['id', 'part_number', 'part_name', 'package_id'],
+                    include: [{ model: SPackages, as: 'package' }]
+                  },
                   { model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'spo_number'] }
                 ]
               }
@@ -292,13 +296,26 @@ class SDPModule extends BaseModule {
       // Validate planned_qty per SPO detail
       for (const item of details) {
         const spoDetail = await SSalesPurchaseOrderDetails.findByPk(item.spo_detail_id, {
-          include: [{ model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'status'] }],
+          include: [{ model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'status', 'delivery_due_date'] }],
           transaction: t
         });
 
         if (!spoDetail) {
           await t.rollback();
           return { status: false, message: `SPO Detail ID ${item.spo_detail_id} not found`, code: 404 };
+        }
+
+        if (spoDetail.order?.delivery_due_date) {
+          const due = dayjs(spoDetail.order.delivery_due_date).format('YYYY-MM-DD');
+          const sched = dayjs(scheduled_date).format('YYYY-MM-DD');
+          if (sched > due) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Scheduled shipment date (${sched}) cannot be later than SPO Delivery Due Date (${due})`,
+              code: 400
+            };
+          }
         }
 
         if (!['Locked', 'Processing'].includes(spoDetail.order?.status)) {
@@ -440,6 +457,71 @@ class SDPModule extends BaseModule {
           message: `Dock conflict with plan ${conflict.dp_number} (${conflict.time_start} – ${conflict.time_end})`,
           code: 409
         };
+      }
+
+      // Validate scheduled date against SPO due dates and check remaining quantities
+      const detailsToValidate = updates.details || await SDeliveryPlanDetails.findAll({
+        where: { delivery_plan_id: sdp.id },
+        transaction: t
+      });
+
+      for (const item of detailsToValidate) {
+        const spoDetail = await SSalesPurchaseOrderDetails.findByPk(item.spo_detail_id, {
+          include: [{ model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'status', 'delivery_due_date'] }],
+          transaction: t
+        });
+
+        if (!spoDetail) {
+          await t.rollback();
+          return { status: false, message: `SPO Detail ID ${item.spo_detail_id} not found`, code: 404 };
+        }
+
+        if (spoDetail.order?.delivery_due_date) {
+          const due = dayjs(spoDetail.order.delivery_due_date).format('YYYY-MM-DD');
+          const sched = dayjs(newDate).format('YYYY-MM-DD');
+          if (sched > due) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Scheduled shipment date (${sched}) cannot be later than SPO Delivery Due Date (${due})`,
+              code: 400
+            };
+          }
+        }
+
+        if (updates.details) {
+          if (!['Locked', 'Processing'].includes(spoDetail.order?.status)) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `SPO Detail ID ${item.spo_detail_id} belongs to an SPO that is not ready for delivery (status: ${spoDetail.order?.status})`,
+              code: 400
+            };
+          }
+
+          const [aggRow] = await db.sequelize.query(`
+            SELECT COALESCE(SUM(dpd.planned_qty), 0) AS total
+            FROM s_delivery_plan_details dpd
+            INNER JOIN s_delivery_plans dp ON dp.id = dpd.delivery_plan_id AND dp.deleted_at IS NULL
+            WHERE dpd.spo_detail_id = :spoDetailId AND dpd.deleted_at IS NULL AND dpd.delivery_plan_id != :planId
+          `, {
+            replacements: { spoDetailId: item.spo_detail_id, planId: sdp.id },
+            type: db.sequelize.QueryTypes.SELECT,
+            transaction: t
+          });
+
+          const totalPlanned = parseInt(aggRow.total) || 0;
+          const remaining = spoDetail.ordered_qty - totalPlanned;
+
+          if (item.planned_qty > remaining) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Planned qty (${item.planned_qty}) exceeds remaining qty (${remaining}) for SPO Detail ID ${item.spo_detail_id}`,
+              code: 400
+            };
+          }
+        }
       }
 
       await sdp.update(updates, { transaction: t });

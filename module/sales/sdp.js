@@ -9,7 +9,8 @@ import dayjs from 'dayjs';
 const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
-  SWarehouses, SDocks, SCustomers, SParts, SUsers, SUserDetail
+  SWarehouses, SDocks, SCustomers, SParts, SUsers, SUserDetail,
+  SWarehouseAreas
 } = db;
 
 class SDPModule extends BaseModule {
@@ -28,13 +29,31 @@ class SDPModule extends BaseModule {
 
   async getDropdownDocks(req) {
     try {
+      const include = [{
+        model: SWarehouseAreas,
+        as: 'area',
+        attributes: ['id', 'warehouse_id']
+      }];
+      
       const where = {};
-      if (req.query.warehouse_id) where.warehouse_id = req.query.warehouse_id;
-      const data = await SDocks.findAll({
+      if (req.query.warehouse_id) {
+        where['$area.warehouse_id$'] = req.query.warehouse_id;
+      }
+      
+      const docks = await SDocks.findAll({
+        include,
         where,
-        attributes: ['id', 'name', 'warehouse_id'],
+        attributes: ['id', 'name', 'area_id'],
         order: [['name', 'ASC']]
       });
+      
+      const data = docks.map(d => ({
+        id: d.id,
+        name: d.name,
+        area_id: d.area_id,
+        warehouse_id: d.area?.warehouse_id || null
+      }));
+      
       return { status: true, data };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };

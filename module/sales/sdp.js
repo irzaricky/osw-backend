@@ -10,7 +10,7 @@ const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
   SWarehouses, SDocks, SCustomers, SParts, SUsers, SUserDetail,
-  SWarehouseAreas, RefWarehouseCategories
+  SWarehouseAreas, RefWarehouseCategories, SPackages
 } = db;
 
 class SDPModule extends BaseModule {

@@ -87,7 +87,7 @@ class SDOModule extends BaseModule {
         { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
         { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
         { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
-        { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date'] },
+        { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'time_end'] },
         {
           model: SUsers, as: 'creator', attributes: ['id', 'email'],
           include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
@@ -98,6 +98,28 @@ class SDOModule extends BaseModule {
         where, include, limit, offset,
         order: [['created_at', 'DESC']],
         distinct: true
+      });
+
+      const now = dayjs();
+      rows.forEach(row => {
+        let status = 'On Time';
+        if (row.deliveryPlan) {
+          const deadlineStr = `${row.deliveryPlan.scheduled_date}T${row.deliveryPlan.time_end}`;
+          const deadline = dayjs(deadlineStr);
+          if (row.delivery_status === 'Delivered') {
+            const received = row.received_at ? dayjs(row.received_at) : null;
+            if (received && received.isAfter(deadline)) {
+              status = 'Delayed';
+            }
+          } else {
+            if (now.isAfter(deadline)) {
+              status = 'Delayed';
+            } else if (now.isAfter(deadline.subtract(2, 'hour'))) {
+              status = 'Near Expiry';
+            }
+          }
+        }
+        row.dataValues.sla_status = status;
       });
 
       return { status: true, data: helper.getPaginationData(rows, count, page, limit) };
@@ -115,7 +137,7 @@ class SDOModule extends BaseModule {
           { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
           { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
           { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
-          { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'destination'] },
+          { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'destination', 'time_end'] },
           {
             model: SUsers, as: 'creator', attributes: ['id', 'email'],
             include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
@@ -138,6 +160,27 @@ class SDOModule extends BaseModule {
       });
 
       if (!sdo) return { status: false, message: 'Delivery Order not found', code: 404 };
+
+      let status = 'On Time';
+      if (sdo.deliveryPlan) {
+        const deadlineStr = `${sdo.deliveryPlan.scheduled_date}T${sdo.deliveryPlan.time_end}`;
+        const deadline = dayjs(deadlineStr);
+        if (sdo.delivery_status === 'Delivered') {
+          const received = sdo.received_at ? dayjs(sdo.received_at) : null;
+          if (received && received.isAfter(deadline)) {
+            status = 'Delayed';
+          }
+        } else {
+          const now = dayjs();
+          if (now.isAfter(deadline)) {
+            status = 'Delayed';
+          } else if (now.isAfter(deadline.subtract(2, 'hour'))) {
+            status = 'Near Expiry';
+          }
+        }
+      }
+      sdo.dataValues.sla_status = status;
+
       return { status: true, data: sdo };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };

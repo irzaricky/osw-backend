@@ -182,7 +182,7 @@ class PartsModule extends BaseModule {
         rows = await SParts.findAll({
           where,
           attributes: ['id', 'part_number', 'part_name', 'part_type_code'],
-          includes: [
+          include: [
             {
               model: SUom,
               as: 'uom',

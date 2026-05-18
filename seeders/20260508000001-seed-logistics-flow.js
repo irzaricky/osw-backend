@@ -2,6 +2,20 @@ export default {
   async up(queryInterface, Sequelize) {
     const timestamp = { created_at: new Date('2026-05-17T07:00:00Z'), updated_at: new Date('2026-05-17T07:00:00Z') };
 
+    // Reset auto-increment sequences for tables to start cleanly from 1
+    try {
+      await queryInterface.sequelize.query(`
+        ALTER SEQUENCE s_sales_purchase_orders_id_seq RESTART WITH 1;
+        ALTER SEQUENCE s_sales_purchase_order_details_id_seq RESTART WITH 1;
+        ALTER SEQUENCE s_delivery_plans_id_seq RESTART WITH 1;
+        ALTER SEQUENCE s_delivery_plan_details_id_seq RESTART WITH 1;
+        ALTER SEQUENCE s_delivery_orders_id_seq RESTART WITH 1;
+        ALTER SEQUENCE s_delivery_order_details_id_seq RESTART WITH 1;
+      `);
+    } catch (e) {
+      // Ignore if not postgresql or sequences do not exist yet
+    }
+
     // =========================
     // SALES PURCHASE ORDERS
     // =========================

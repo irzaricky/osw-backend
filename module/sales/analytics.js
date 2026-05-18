@@ -340,6 +340,11 @@ class AnalyticsModule extends BaseModule {
 
       worksheet.columns = columns;
 
+      // Set headers on Row 5 explicitly
+      columns.forEach((col, index) => {
+        headerRow.getCell(index + 1).value = col.header;
+      });
+
       // Style header columns explicitly
       for (let col = 1; col <= 10; col++) {
         const cell = headerRow.getCell(col);

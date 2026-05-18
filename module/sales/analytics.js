@@ -135,6 +135,13 @@ class AnalyticsModule extends BaseModule {
         dockUtilization[dockId].plan_count += 1;
       }
 
+      const daysCount = Math.max(dayjs(endDateStr).diff(dayjs(startDateStr), 'day') + 1, 1);
+      for (const id in dockUtilization) {
+        const total = dockUtilization[id].total_hours;
+        dockUtilization[id].avg_daily_hours = helper.round(total / daysCount, 2);
+        dockUtilization[id].total_hours = helper.round(total, 2);
+      }
+
       const summary = {
         date_range: {
           start: startDateStr,

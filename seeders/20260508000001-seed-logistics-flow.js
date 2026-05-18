@@ -2,15 +2,15 @@ export default {
   async up(queryInterface, Sequelize) {
     const timestamp = { created_at: new Date('2026-05-17T07:00:00Z'), updated_at: new Date('2026-05-17T07:00:00Z') };
 
-    // Reset auto-increment sequences for tables to start cleanly from 1
+    // Synchronize auto-increment sequences with existing max table IDs in PostgreSQL
     try {
       await queryInterface.sequelize.query(`
-        ALTER SEQUENCE s_sales_purchase_orders_id_seq RESTART WITH 1;
-        ALTER SEQUENCE s_sales_purchase_order_details_id_seq RESTART WITH 1;
-        ALTER SEQUENCE s_delivery_plans_id_seq RESTART WITH 1;
-        ALTER SEQUENCE s_delivery_plan_details_id_seq RESTART WITH 1;
-        ALTER SEQUENCE s_delivery_orders_id_seq RESTART WITH 1;
-        ALTER SEQUENCE s_delivery_order_details_id_seq RESTART WITH 1;
+        SELECT setval('s_sales_purchase_orders_id_seq', COALESCE((SELECT MAX(id) FROM s_sales_purchase_orders), 1), true);
+        SELECT setval('s_sales_purchase_order_details_id_seq', COALESCE((SELECT MAX(id) FROM s_sales_purchase_order_details), 1), true);
+        SELECT setval('s_delivery_plans_id_seq', COALESCE((SELECT MAX(id) FROM s_delivery_plans), 1), true);
+        SELECT setval('s_delivery_plan_details_id_seq', COALESCE((SELECT MAX(id) FROM s_delivery_plan_details), 1), true);
+        SELECT setval('s_delivery_orders_id_seq', COALESCE((SELECT MAX(id) FROM s_delivery_orders), 1), true);
+        SELECT setval('s_delivery_order_details_id_seq', COALESCE((SELECT MAX(id) FROM s_delivery_order_details), 1), true);
       `);
     } catch (e) {
       // Ignore if not postgresql or sequences do not exist yet
@@ -60,10 +60,12 @@ export default {
       });
     }
 
-    await queryInterface.bulkInsert(
+    const insertedSPODetails = await queryInterface.bulkInsert(
       's_sales_purchase_order_details',
       spoDetailData,
-      {}
+      {
+        returning: true,
+      }
     );
 
     // =========================
@@ -101,10 +103,12 @@ export default {
       });
     }
 
-    await queryInterface.bulkInsert(
+    const insertedPlans = await queryInterface.bulkInsert(
       's_delivery_plans',
       deliveryPlanData,
-      {}
+      {
+        returning: true,
+      }
     );
 
     // =========================
@@ -114,17 +118,19 @@ export default {
 
     for (let i = 1; i <= 10; i++) {
       deliveryPlanDetailData.push({
-        delivery_plan_id: i,
-        spo_detail_id: i,
+        delivery_plan_id: insertedPlans[i - 1].id,
+        spo_detail_id: insertedSPODetails[i - 1].id,
         planned_qty: 50 + i * 5,
         ...timestamp
       });
     }
 
-    await queryInterface.bulkInsert(
+    const insertedPlanDetails = await queryInterface.bulkInsert(
       's_delivery_plan_details',
       deliveryPlanDetailData,
-      {}
+      {
+        returning: true,
+      }
     );
 
     // =========================
@@ -139,7 +145,7 @@ export default {
 
       deliveryOrderData.push({
         do_number: `DO-2026-${String(i).padStart(4, '0')}`,
-        delivery_plan_id: i,
+        delivery_plan_id: insertedPlans[i - 1].id,
         customer_id: ((i - 1) % 6) + 1,
         vehicle_id: ((i - 1) % 5) + 1,
         driver_id: ((i - 1) % 5) + 1,
@@ -153,10 +159,12 @@ export default {
       });
     }
 
-    await queryInterface.bulkInsert(
+    const insertedOrders = await queryInterface.bulkInsert(
       's_delivery_orders',
       deliveryOrderData,
-      {}
+      {
+        returning: true,
+      }
     );
 
     // =========================
@@ -166,8 +174,8 @@ export default {
 
     for (let i = 1; i <= 10; i++) {
       deliveryOrderDetailData.push({
-        delivery_order_id: i,
-        delivery_plan_detail_id: i,
+        delivery_order_id: insertedOrders[i - 1].id,
+        delivery_plan_detail_id: insertedPlanDetails[i - 1].id,
         sent_qty: 40 + i * 5,
         received_qty: i <= 7 ? 40 + i * 5 : null,
         notes: `Detail shipment ${i}`,

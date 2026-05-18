@@ -56,16 +56,30 @@ export default {
     // DELIVERY PLANS
     // =========================
     const deliveryPlanData = [];
+    const dockTimeSlots = {};
 
     for (let i = 1; i <= 10; i++) {
-      const scheduledTime = new Date('2026-05-17').getTime() + (i % 3) * 86400000;
+      const dayOffset = i % 3;
+      const dockId = ((i - 1) % 3) + 1;
+      const scheduledTime = new Date('2026-05-17').getTime() + dayOffset * 86400000;
+
+      if (dockTimeSlots[`${dockId}-${dayOffset}`] === undefined) {
+        dockTimeSlots[`${dockId}-${dayOffset}`] = 8; // start from 08:00
+      }
+      const startHour = dockTimeSlots[`${dockId}-${dayOffset}`];
+      const endHour = startHour + 2; // each plan is 2 hours slot
+      dockTimeSlots[`${dockId}-${dayOffset}`] = endHour;
+
+      const timeStartStr = `${String(startHour).padStart(2, '0')}:00:00`;
+      const timeEndStr = `${String(endHour).padStart(2, '0')}:00:00`;
+
       deliveryPlanData.push({
         dp_number: `DP-2026-${String(i).padStart(4, '0')}`,
         scheduled_date: new Date(scheduledTime),
-        time_start: '08:00:00',
-        time_end: '10:00:00',
+        time_start: timeStartStr,
+        time_end: timeEndStr,
         warehouse_id: ((i - 1) % 3) + 1,
-        dock_id: ((i - 1) % 3) + 1,
+        dock_id: dockId,
         destination: `Destination Address ${i}`,
         status: 'Scheduled',
         created_by: 1,

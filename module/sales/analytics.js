@@ -128,11 +128,20 @@ class AnalyticsModule extends BaseModule {
             id: dockId,
             name: dockName,
             total_hours: 0,
-            plan_count: 0
+            plan_count: 0,
+            plans: []
           };
         }
         dockUtilization[dockId].total_hours += hours;
         dockUtilization[dockId].plan_count += 1;
+        dockUtilization[dockId].plans.push({
+          id: p.id,
+          dp_number: p.dp_number,
+          scheduled_date: p.scheduled_date,
+          time_start: p.time_start,
+          time_end: p.time_end,
+          hours: hours
+        });
       }
 
       const daysCount = Math.max(dayjs(endDateStr).diff(dayjs(startDateStr), 'day') + 1, 1);

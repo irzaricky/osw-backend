@@ -602,6 +602,52 @@ class BomModule extends BaseModule {
   // ── Approval Workflow ───────────────────────────────────────────────────────
   // Submit → (Approve | Reject) → (Activate | Deactivate)
 
+  async returnToDraft(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+      const bom = await SBoms.findOne({
+        where: { id, deleted_at: null },
+        include: [{ model: RefBomDocumentStatus, as: 'doc_status', attributes: ['id', 'code'] }],
+        transaction: t,
+      });
+
+      if (!bom) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
+      }
+
+      if (bom.doc_status?.code !== 'REJECTED' && bom.doc_status?.code !== 'PENDING_APPROVAL') {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 400, error: 'Only Rejected BOMs can be returned to Draft' });
+      }
+
+      const draftStatus = await RefBomDocumentStatus.findOne({
+        where: { code: 'DRAFT', deleted_at: null },
+        transaction: t,
+      });
+
+      const oldData = bom.toJSON();
+      await bom.update({ doc_status_id: draftStatus.id, reject_reason: null }, { transaction: t });
+      await this.logActivity(req, {
+        moduleCode: 'bom', activityCode: 'RETURN_DRAFT',
+        resourceId: bom.id, oldData, newData: bom,
+        description: `Returned BOM ${bom.bom_number} to Draft`, transaction: t,
+      });
+
+      await t.commit();
+      return helper.sendResponse(res, {
+        status: true, code: 200,
+        message: 'BOM returned to Draft',
+        data: { id: bom.id, bom_number: bom.bom_number },
+      });
+    } catch (error) {
+      await t.rollback();
+      console.log('[BomModule][returnDraft]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
+
   async submit(req, res) {
     const t = await sequelize.transaction();
     try {

@@ -84,6 +84,12 @@ router.delete('/:id/details/:detail_id', auth.sessionChecker, async (req, res) =
 
 // ── Approval Workflow ─────────────────────────────────────────────────────────
 
+/* POST /bom/:id/return-to-draft
+  *  Return a Pending Approval BOM back to Draft for further edits */
+router.post('/:id/return-to-draft', auth.sessionChecker, async (req, res) => {
+  await bomModule.returnToDraft(req, res);
+});
+
 /** POST /bom/:id/submit
  *  Submit BOM for approval (Draft / Rejected → Pending Approval) */
 router.post('/:id/submit', auth.sessionChecker, async (req, res) => {

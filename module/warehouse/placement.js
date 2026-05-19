@@ -184,7 +184,7 @@ async detail(req) {
             {
               model: SParts,
               as: 'part',
-              attributes: ['id', 'part_number', 'part_name', 'part_category', 'package_id']
+              attributes: ['id', 'part_number', 'part_name', 'package_id']
             },
             {
               model: TWorkOrderStoringItemLabel,

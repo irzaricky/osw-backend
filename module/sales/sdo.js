@@ -83,6 +83,11 @@ class SDOModule extends BaseModule {
         ];
       }
 
+      // Secure listing: If user is a driver, only show their own assigned SDOs
+      if (req.user && req.user.role && req.user.role.toLowerCase() === 'driver') {
+        where.driver_id = req.user.id;
+      }
+
       const include = [
         { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
         { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
@@ -160,6 +165,13 @@ class SDOModule extends BaseModule {
       });
 
       if (!sdo) return { status: false, message: 'Delivery Order not found', code: 404 };
+
+      // Secure access: If user is a driver, only allow access if they are assigned to this SDO
+      if (req.user && req.user.role && req.user.role.toLowerCase() === 'driver') {
+        if (sdo.driver_id !== req.user.id) {
+          return { status: false, message: 'Forbidden: You are not assigned to this Delivery Order', code: 403 };
+        }
+      }
 
       let status = 'On Time';
       if (sdo.deliveryPlan) {
@@ -425,6 +437,14 @@ class SDOModule extends BaseModule {
         return { status: false, message: 'Delivery Order not found', code: 404 };
       }
 
+      // Secure update status: If user is a driver, they must be the assigned driver for this SDO
+      if (currentUser && currentUser.role && currentUser.role.toLowerCase() === 'driver') {
+        if (sdo.driver_id !== currentUser.id) {
+          await t.rollback();
+          return { status: false, message: 'Forbidden: You are not assigned to this Delivery Order', code: 403 };
+        }
+      }
+
       if (sdo.delivery_status !== 'In Transit') {
         await t.rollback();
         return { status: false, message: 'Only "In Transit" Delivery Orders can be confirmed as Delivered', code: 400 };
@@ -506,6 +526,7 @@ class SDOModule extends BaseModule {
           notes: item.notes ?? doDetail.notes
         }, { transaction: t });
 
+        /*
         // AUTOMATED FIFO STOCK DEDUCTION
         const part = doDetail.planDetail?.spoDetail?.part;
         if (!part) continue;
@@ -601,6 +622,7 @@ class SDOModule extends BaseModule {
             transaction: t
           });
         }
+        */
       }
 
       const oldData = JSON.parse(JSON.stringify(sdo));

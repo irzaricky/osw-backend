@@ -31,10 +31,10 @@ services:
       SITE_URL: https://be-osw.splatza.my.id/
       APP_DEBUG: true
       PORT: 3001
-      DB_HOST: db-postgres
-      DB_USER: postgres
-      DB_PASS: password
-      DB_NAME: osw_backend
+      DB_HOST: aws-1-ap-south-1.pooler.supabase.com
+      DB_USER: postgres.mhpdegcuzodlkmpbkpgu
+      DB_PASS: xa47xgJXuqbleOzT
+      DB_NAME: postgres
       DB_PORT: 5432
       FRONTEND_URL: https://fe-osw.splatza.my.id/
     networks:

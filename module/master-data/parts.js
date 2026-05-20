@@ -131,8 +131,7 @@ class PartsModule extends BaseModule {
             part.part_number,
             part.part_name,
             part.part_type_code,
-            COUNT(ws.id)::int AS available_stock
-
+            COUNT(ws.id)::int AS available_stock,
             uom.id   AS uom_id,
             uom.code AS uom_code,
             uom.name AS uom_name

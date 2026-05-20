@@ -269,6 +269,30 @@ class WarehouseAreaModule extends BaseModule {
 
       const oldData = JSON.parse(JSON.stringify(area))
 
+
+      const usedStock = await db.sequelize.query(`
+        SELECT COUNT(ws.id)::int AS total
+        FROM t_warehouse_stock ws
+        JOIN s_warehouse_bins b
+          ON b.id = ws.bin_id
+        WHERE b.area_id = :area_id
+          AND ws.deleted_at IS NULL
+          AND b.deleted_at IS NULL
+      `, {
+        replacements: { area_id: id },
+        type: QueryTypes.SELECT,
+        transaction: t
+      })
+
+      if (usedStock[0]?.total > 0) {
+        await t.rollback()
+        return {
+          status: false,
+          message: 'Warehouse area cannot be deleted because it is already used by active stock',
+          code: 400
+        }
+      }
+
       await area.destroy({ transaction: t })
 
       await this.logActivity(req, {

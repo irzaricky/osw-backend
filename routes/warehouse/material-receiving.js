@@ -53,15 +53,51 @@ router.post('/quantity-checking/scan', auth.sessionChecker, async (req, res) => 
   helper.sendResponse(res, result);
 });
 
-// patch mark quantity incomplete / NG
+// patch mark quantity incomplete
 router.patch('/quantity-checking/incomplete/:mr_item_label_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
   const result = await materialReceivingModule.markQuantityIncomplete(req);
+  helper.sendResponse(res, result);
+});
+
+// patch edit quantity incomplete
+router.patch('/quantity-checking/incomplete/:mr_item_label_id/edit', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await materialReceivingModule.editQuantityIncomplete(req);
   helper.sendResponse(res, result);
 });
 
 // post submit quantity checking
 router.post('/quantity-checking/submit/:mdo_detail_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
   const result = await materialReceivingModule.submitQuantityChecking(req);
+  helper.sendResponse(res, result);
+});
+
+// get detail quality checking
+router.get('/quality-checking/:mdo_detail_id', auth.sessionChecker, async (req, res) => {
+  const result = await materialReceivingModule.qualityCheckingDetail(req);
+  helper.sendResponse(res, result);
+});
+
+// post scan quality checking
+router.post('/quality-checking/scan', auth.sessionChecker, async (req, res) => {
+  const result = await materialReceivingModule.scanQualityLabel(req);
+  helper.sendResponse(res, result);
+});
+
+// patch mark quality defect
+router.patch('/quality-checking/defect/:mr_item_label_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await materialReceivingModule.markQualityDefect(req);
+  helper.sendResponse(res, result);
+});
+
+// patch edit quality defect
+router.patch('/quality-checking/defect/:mr_item_label_id/edit', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await materialReceivingModule.editQualityDefect(req);
+  helper.sendResponse(res, result);
+});
+
+// post submit quality checking
+router.post('/quality-checking/submit/:mdo_detail_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await materialReceivingModule.submitQualityChecking(req);
   helper.sendResponse(res, result);
 });
 

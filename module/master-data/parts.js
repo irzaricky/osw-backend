@@ -131,8 +131,7 @@ class PartsModule extends BaseModule {
             part.part_number,
             part.part_name,
             part.part_type_code,
-            COUNT(ws.id)::int AS available_stock
-
+            COUNT(ws.id)::int AS available_stock,
             uom.id   AS uom_id,
             uom.code AS uom_code,
             uom.name AS uom_name
@@ -285,7 +284,6 @@ class PartsModule extends BaseModule {
 
       const search = params.search || ''
       const part_type_code = params.part_type_code || null
-      const part_category_id = params.part_category_id || null
       const supplier_id = params.supplier_id || null
 
       const where = { deleted_at: null }
@@ -301,10 +299,6 @@ class PartsModule extends BaseModule {
         where.part_type_code = part_type_code
       }
 
-      if (part_category_id) {
-        where.part_category_id = part_category_id
-      }
-
       if (supplier_id) {
         where.supplier_id = supplier_id
       }
@@ -314,11 +308,6 @@ class PartsModule extends BaseModule {
           model: RefPartTypes,
           as: 'type',
           attributes: ['code', 'name']
-        },
-        {
-          model: RefPartCategory,
-          as: 'category',
-          attributes: ['id', 'code', 'name']
         },
         {
           model: SSuppliers,
@@ -369,7 +358,7 @@ class PartsModule extends BaseModule {
         part_number:      Joi.string().max(100).required(),
         part_name:        Joi.string().max(255).required(),
         part_type_code:   Joi.string().max(50).required(),
-        part_category_id: Joi.number().integer().required(),
+        part_category: Joi.string().max(50).optional().allow('', null),
         supplier_id:      Joi.number().integer().optional().allow(null),
         uom_id:           Joi.number().integer().required(),
         package_id:       Joi.number().integer().optional().allow(null),
@@ -390,7 +379,7 @@ class PartsModule extends BaseModule {
       }
 
       const {
-        part_number, part_name, part_type_code, part_category_id,
+        part_number, part_name, part_type_code, part_category,
         supplier_id, uom_id, package_id, price, safety_stock,
         lead_time_days, model_name, model_code, generation, color, color_code
       } = validation.value
@@ -421,15 +410,6 @@ class PartsModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 400, message: 'Part type not found' })
       }
 
-      const existingCategory = await RefPartCategory.findOne({
-        where: { id: part_category_id, deleted_at: null },
-        transaction: t
-      })
-      if (!existingCategory) {
-        await t.rollback()
-        return helper.sendResponse(res, { status: false, code: 400, message: 'Part category not found' })
-      }
-
       const existingUom = await SUom.findOne({
         where: { id: uom_id, deleted_at: null },
         transaction: t
@@ -448,7 +428,7 @@ class PartsModule extends BaseModule {
       }
 
       const partData = {
-        part_number, part_name, part_type_code, part_category_id,
+        part_number, part_name, part_type_code, part_category,
         supplier_id: supplier_id || null,
         uom_id, package_id: package_id || null,
         price: price || null,
@@ -519,7 +499,7 @@ class PartsModule extends BaseModule {
         part_number:      Joi.string().max(100).required(),
         part_name:        Joi.string().max(255).required(),
         part_type_code:   Joi.string().max(50).required(),
-        part_category_id: Joi.number().integer().required(),
+        part_category: Joi.string().max(50).optional().allow('', null),
         supplier_id:      Joi.number().integer().optional().allow(null),
         uom_id:           Joi.number().integer().required(),
         package_id:       Joi.number().integer().optional().allow(null),
@@ -540,7 +520,7 @@ class PartsModule extends BaseModule {
       }
 
       const {
-        part_number, part_name, part_type_code, part_category_id,
+        part_number, part_name, part_type_code, part_category,
         supplier_id, uom_id, package_id, price, safety_stock,
         lead_time_days, model_name, model_code, generation, color, color_code
       } = validation.value
@@ -575,15 +555,6 @@ class PartsModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, message: 'Part type not found' })
       }
 
-      const existingCategory = await RefPartCategory.findOne({
-        where: { id: part_category_id, deleted_at: null },
-        transaction: t
-      })
-      if (!existingCategory) {
-        await t.rollback()
-        return helper.sendResponse(res, { status: false, code: 404, message: 'Part category not found' })
-      }
-
       const existingUom = await SUom.findOne({
         where: { id: uom_id, deleted_at: null },
         transaction: t
@@ -605,7 +576,7 @@ class PartsModule extends BaseModule {
 
       await part.update(
         {
-          part_number, part_name, part_type_code, part_category_id,
+          part_number, part_name, part_type_code, part_category,
           supplier_id: supplier_id || null,
           uom_id, package_id: package_id || null,
           price: price || null,
@@ -695,7 +666,6 @@ class PartsModule extends BaseModule {
       const params = req.query || {}
       const search = params.search || ''
       const part_type_code = params.part_type_code || null
-      const part_category_id = params.part_category_id || null
       const supplier_id = params.supplier_id || null
 
       const where = { deleted_at: null }
@@ -707,7 +677,6 @@ class PartsModule extends BaseModule {
         ]
       }
       if (part_type_code) where.part_type_code = part_type_code
-      if (part_category_id) where.part_category_id = part_category_id
       if (supplier_id) where.supplier_id = supplier_id
 
       const parts = await SParts.findAll({
@@ -715,7 +684,6 @@ class PartsModule extends BaseModule {
         include: [
           { model: SSuppliers,       as: 'supplier',      attributes: ['name'] },
           { model: RefPartTypes,     as: 'type',     attributes: ['name'] },
-          { model: RefPartCategory,as: 'category', attributes: ['name'] },
           { model: SUom,            as: 'uom',           attributes: ['code', 'name'] },
           { model: SPackages,        as: 'package',       attributes: ['package_code', 'name'] }
         ],
@@ -750,7 +718,7 @@ class PartsModule extends BaseModule {
           part_number:    part.part_number,
           part_name:      part.part_name,
           part_type:      part.part_type?.name || '',
-          part_category:  part.part_category?.name || '',
+          part_category:  part.part_category,
           supplier:       part.supplier?.name || '',
           uom:            part.uom?.code || '',
           package:        part.package ? `${part.package.name} (${part.package.package_code})` : '',
@@ -832,7 +800,7 @@ class PartsModule extends BaseModule {
         const part_number    = row.getCell(1).value?.toString().trim() ?? null
         const part_name      = row.getCell(2).value?.toString().trim() ?? null
         const part_type_name = row.getCell(3).value?.toString().trim() ?? null
-        const category_name  = row.getCell(4).value?.toString().trim() ?? null
+        const part_category  = row.getCell(4).value?.toString().trim() ?? null
         const supplier_name  = row.getCell(5).value?.toString().trim() ?? null
         const uom_code       = row.getCell(6).value?.toString().trim() ?? null
         const package_code   = row.getCell(7).value?.toString().trim() ?? null
@@ -856,15 +824,6 @@ class PartsModule extends BaseModule {
           : null
         if (!partType) {
           results.errors.push({ row: i, message: `Part Type "${part_type_name}" not found` })
-          results.skipped++
-          continue
-        }
-
-        const category = category_name
-          ? await RefPartCategory.findOne({ where: { name: category_name, deleted_at: null }, transaction: t })
-          : null
-        if (!category) {
-          results.errors.push({ row: i, message: `Category "${category_name}" not found` })
           results.skipped++
           continue
         }
@@ -900,8 +859,7 @@ class PartsModule extends BaseModule {
         const partData = {
           part_number, part_name,
           part_type_code: partType.code,
-          part_category_id: category.id,
-          supplier_id: supplier?.id || null,
+          part_category, supplier_id: supplier?.id || null,
           uom_id: uom.id,
           package_id: pkg?.id || null,
           price, safety_stock, lead_time_days,

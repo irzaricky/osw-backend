@@ -20,9 +20,6 @@ export default (sequelize) => {
 
       // Part belongs to UOM
       SParts.belongsTo(models.SUom, { foreignKey: 'uom_id', as: 'uom' });
-
-      // Part belongs to Category
-      SParts.belongsTo(models.RefPartCategory, { foreignKey: 'part_category_id', as: 'category' });
     }
   }
 
@@ -37,10 +34,7 @@ export default (sequelize) => {
       allowNull: false
     },
     part_type_code: DataTypes.STRING,
-    part_category_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    },
+    part_category: DataTypes.STRING,
     supplier_id: DataTypes.INTEGER,
     price: DataTypes.DECIMAL(15, 2),
     safety_stock: {

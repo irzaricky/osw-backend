@@ -3,10 +3,10 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class RefPartCategory extends Model {
     static associate(models) {
-      RefPartCategory.hasMany(models.SParts, {
-        foreignKey: 'part_category_id',
-        as: 'parts',
-      });
+      // RefPartCategory.hasMany(models.SParts, {
+      //   foreignKey: 'part_category_id',
+      //   as: 'parts',
+      // });
     }
   }
 

@@ -49,10 +49,42 @@ async list(req) {
       where.wo_type_id = wo_type_id;
     }
 
+    if (search) {
+  where.wo_number = {
+    [Op.iLike]: `%${search}%`
+  };
+}
+
     if (wo_date_start && wo_date_end) {
-      where.wo_date = {
-        [Op.between]: [wo_date_start, wo_date_end]
-      };
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        db.sequelize.where(
+          db.sequelize.fn('DATE', db.sequelize.col('TWorkOrderStoring.wo_date')),
+          {
+            [Op.between]: [wo_date_start, wo_date_end]
+          }
+        )
+      ];
+    } else if (wo_date_start) {
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        db.sequelize.where(
+          db.sequelize.fn('DATE', db.sequelize.col('TWorkOrderStoring.wo_date')),
+          {
+            [Op.gte]: wo_date_start
+          }
+        )
+      ];
+    } else if (wo_date_end) {
+      where[Op.and] = [
+        ...(where[Op.and] || []),
+        db.sequelize.where(
+          db.sequelize.fn('DATE', db.sequelize.col('TWorkOrderStoring.wo_date')),
+          {
+            [Op.lte]: wo_date_end
+          }
+        )
+      ];
     }
 
     const { count, rows } = await TWorkOrderStoring.findAndCountAll({
@@ -158,7 +190,10 @@ async detail(req) {
         'wo_description',
         'wo_type_id',
         'warehouse_area_id',
-        'wo_status_id'
+        'wo_status_id',
+        'ref_doc_id',
+        'ref_doc_number',
+        'ref_doc_name',
       ],
       include: [
         {
@@ -283,7 +318,10 @@ async detail(req) {
         scanned_pcs: scannedPcs,
         remaining_pcs: totalPcs - scannedPcs,
         progress: totalLabel > 0 ? Math.round((totalScanned / totalLabel) * 100) : 0,
-        items
+        items,
+        ref_doc_id: workOrder.ref_doc_id,
+        ref_doc_number: workOrder.ref_doc_number,
+        ref_doc_name: workOrder.ref_doc_name,
       }
     };
 
@@ -411,7 +449,10 @@ async detail(req) {
           wo_item_label_id: itemLabel.id,
           label_number,
           part: itemLabel.work_order_item?.part?.dataValues,
-          package: itemLabel.work_order_item?.part?.package
+          package: itemLabel.work_order_item?.part?.package,
+          ref_doc_id: workOrder.ref_doc_id,
+          ref_doc_number: workOrder.ref_doc_number,
+          ref_doc_name: workOrder.ref_doc_name,
         }
       };
 
@@ -842,7 +883,10 @@ if (
         qty_per_kanban,
         total_label: totalLabels,
         total_scanned: totalScanned,
-        remaining: totalLabels - totalScanned
+        remaining: totalLabels - totalScanned,
+        ref_doc_id: workOrder.ref_doc_id,
+        ref_doc_number: workOrder.ref_doc_number,
+        ref_doc_name: workOrder.ref_doc_name,
       }
     };
   } catch (error) {

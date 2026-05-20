@@ -22,7 +22,10 @@ const {
   TMaterialReceiving,
   TMaterialReceivingItem,
   TMaterialReceivingItemLabel,
-  TPartLabels
+  TPartLabels,
+  TNgTicket,
+  TNgTicketQuantity,
+  TNgTicketQuality
 } = db;
 
 class MaterialReceivingModule extends BaseModule {
@@ -471,6 +474,746 @@ class MaterialReceivingModule extends BaseModule {
         message: 'Material delivery order has been marked as arrived',
         data: {
           id: materialReceiving.id
+        }
+      };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async progress(req) {
+    try {
+      const id = req.params.id;
+
+      const materialDeliveryOrder = await SMaterialDeliveryOrder.findByPk(id, {
+        attributes: ['id', 'number', 'target_date', 'status'],
+        include: [
+          {
+            model: SMaterialPurchaseOrder,
+            as: 'mpo',
+            attributes: ['id'],
+            include: [
+              {
+                model: SWarehouses,
+                as: 'warehouse',
+                attributes: ['id', 'name']
+              }
+            ]
+          },
+          {
+            model: SDocks,
+            as: 'dock',
+            attributes: ['id', 'name']
+          },
+          {
+            model: TMaterialDeliveryOrderDetail,
+            as: 'mdo_details',
+            attributes: ['id', 'qty'],
+            include: [
+              {
+                model: SParts,
+                as: 'part',
+                attributes: ['id', 'part_number', 'part_name']
+              }
+            ]
+          },
+          {
+            model: TMaterialReceiving,
+            as: 'material_receiving',
+            required: false,
+            attributes: ['id', 'received_at'],
+            include: [
+              {
+                model: RefReceivingStatus,
+                as: 'status',
+                attributes: ['id', 'name']
+              },
+              {
+                model: TMaterialReceivingItem,
+                as: 'items',
+                attributes: ['id', 'mdo_detail_id', 'quantity_checked_at', 'quality_checked_at'],
+                include: [
+                  {
+                    model: TMaterialReceivingItemLabel,
+                    as: 'labels',
+                    attributes: ['id', 'is_quantity', 'is_quality']
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!materialDeliveryOrder) {
+        return {
+          status: false,
+          message:
+            'Material delivery order not found',
+          code: 404
+        };
+      }
+
+      const mr = materialDeliveryOrder.material_receiving;
+
+      const mappedData = {
+        id: materialDeliveryOrder.id,
+        number: materialDeliveryOrder.number,
+        status: mr?.status?.name || materialDeliveryOrder.status.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+        target_date: materialDeliveryOrder.target_date,
+        arrived_at: mr?.received_at || null,
+        warehouse: materialDeliveryOrder.mpo?.warehouse?.name || null,
+        dock: materialDeliveryOrder.dock?.name || null,
+
+        items: materialDeliveryOrder.mdo_details.map((detail) => {
+          const mrItem = mr?.items?.find(item => item.mdo_detail_id === detail.id);
+          const itemLabels = mrItem?.labels || [];
+
+          // Total Qty Actual
+          const totalQtyActual = mrItem?.quantity_checked_at ? itemLabels.filter(label => label.is_quantity === true).length : null;
+
+          // Quality Check OK
+          const qualityCheckOk = mrItem?.quality_checked_at ? itemLabels.filter(label => label.is_quality === true).length : null;
+
+          // Quality Check NG
+          const qualityCheckNg = mrItem?.quality_checked_at ? itemLabels.filter(label => label.is_quality === false).length : null;
+
+          return {
+            id: detail.id,
+            mr_item_id: mrItem?.id || null,
+            part_number: detail.part?.part_number || null,
+            part_name: detail.part?.part_name || null,
+            total_qty: detail.qty || 0,
+            total_qty_actual: totalQtyActual,
+            quantity_checked_at: mrItem?.quantity_checked_at,
+            quality_check_ok: qualityCheckOk,
+            quality_check_ng: qualityCheckNg,
+            quality_checked_at: mrItem?.quality_checked_at,
+          };
+        }) || []
+      };
+
+      return {
+        status: true,
+        data: mappedData
+      };
+    } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async quantityCheckingDetail(req) {
+    try {
+      const { mdo_detail_id } = req.params;
+
+      const materialReceivingItem = await TMaterialReceivingItem.findOne({
+        where: { mdo_detail_id },
+        attributes: ['id', 'quantity_checked_at'],
+        include: [
+          {
+            model: TMaterialReceiving,
+            as: 'material_receiving',
+            attributes: ['id', 'received_at'],
+            include: [
+              {
+                model: SMaterialDeliveryOrder,
+                as: 'mdo',
+                attributes: ['id', 'number', 'target_date'],
+                include: [
+                  {
+                    model: SMaterialPurchaseOrder,
+                    as: 'mpo',
+                    attributes: ['id'],
+                    include: [
+                      {
+                        model: SWarehouses,
+                        as: 'warehouse',
+                        attributes: ['id', 'name']
+                      }
+                    ]
+                  },
+                  {
+                    model: SDocks,
+                    as: 'dock',
+                    attributes: ['id', 'name']
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            model: TMaterialDeliveryOrderDetail,
+            as: 'mdo_detail',
+            attributes: ['id', 'qty'],
+            include: [
+              {
+                model: SParts,
+                as: 'part',
+                attributes: ['id', 'part_number', 'part_name'],
+                include: [
+                  {
+                    model: SPackages,
+                    as: 'package',
+                    attributes: ['capacity']
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            model: TMaterialReceivingItemLabel,
+            as: 'labels',
+            required: false,
+            attributes: ['id', 'is_quantity', 'quantity_checked_at'],
+            include: [
+              {
+                model: TPartLabels,
+                as: 'label',
+                attributes: ['label_number']
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!materialReceivingItem) {
+        return {
+          status: false,
+          message: 'Material receiving item not found',
+          code: 404
+        };
+      }
+
+      const checkedLabels = (
+        materialReceivingItem.labels || []
+      )
+      .filter(
+        (item) =>
+          item.quantity_checked_at !== null
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.quantity_checked_at) -
+          new Date(a.quantity_checked_at)
+      );
+      const totalQty = materialReceivingItem.mdo_detail?.qty || 0;
+      const checkedQty = checkedLabels.length;
+
+      const mappedData = {
+        id: materialReceivingItem.mdo_detail?.id,
+        mr_item_id: materialReceivingItem.id,
+        mdo_number: materialReceivingItem.material_receiving?.mdo?.number || null,
+        warehouse: materialReceivingItem.material_receiving?.mdo?.mpo?.warehouse?.name || null,
+        dock: materialReceivingItem.material_receiving?.mdo?.dock?.name || null,
+        target_date: materialReceivingItem.material_receiving?.mdo?.target_date || null,
+        arrived_at: materialReceivingItem.material_receiving?.received_at || null,
+        submitted_at: materialReceivingItem.quantity_checked_at || null,
+
+        part: {
+          part_number: materialReceivingItem.mdo_detail?.part?.part_number || null,
+          part_name: materialReceivingItem.mdo_detail?.part?.part_name || null,
+          qty_per_kanban: materialReceivingItem.mdo_detail?.part?.package?.capacity || null,
+          total_qty: totalQty,
+          checked_qty: checkedQty,
+          remaining_qty: totalQty - checkedQty
+        },
+
+        labels: checkedLabels.map((item) => ({
+          id: item.id,
+          label_number: item.label?.label_number || null,
+          judgement: item.is_quantity === true ? 'OK' : 'NG',
+          scanned_at: item.quantity_checked_at
+        }))
+      };
+
+      return {
+        status: true,
+        data: mappedData
+      };
+    } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async scanQuantityLabel(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const data = req.body;
+
+      const schema = Joi.object({
+        label_number: Joi.string().required()
+      });
+
+      const validation = helper.validate(data, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return validation;
+      }
+
+      const value = validation.value;
+
+      const materialReceivingItemLabel = await TMaterialReceivingItemLabel.findOne({
+        attributes: ['id', 'quantity_checked_at'],
+        include: [
+          {
+            model: TPartLabels,
+            as: 'label',
+            where: {
+              label_number: value.label_number
+            },
+            attributes: ['id', 'label_number']
+          },
+          {
+            model: TMaterialReceivingItem,
+            as: 'material_receiving_item',
+            attributes: ['id', 'mdo_detail_id']
+          }
+        ],
+        transaction: t
+      });
+
+      if (!materialReceivingItemLabel) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Label not found',
+          code: 404
+        };
+      }
+
+      if (materialReceivingItemLabel.quantity_checked_at) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Label has already been scanned',
+          code: 400
+        };
+      }
+
+      const checkedAt = new Date();
+
+      await materialReceivingItemLabel.update(
+        {
+          is_quantity: true,
+          quantity_checked_at: checkedAt,
+          quantity_checked_by: req.user.id
+        },
+        {
+          transaction: t
+        }
+      );
+
+      await t.commit();
+
+      return {
+        status: true,
+        message: 'Label scanned successfully',
+        data: {
+          id: materialReceivingItemLabel.id,
+          mr_item_id: materialReceivingItemLabel.material_receiving_item?.id || null,
+          mdo_detail_id: materialReceivingItemLabel.material_receiving_item?.mdo_detail_id || null,
+          label_number: materialReceivingItemLabel.label?.label_number || null,
+          judgement: 'OK',
+          scanned_at: checkedAt
+        }
+      };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async markQuantityIncomplete(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { mr_item_label_id } = req.params;
+      const data = req.body;
+
+      const schema = Joi.object({
+        actual_qty: Joi.number().integer().min(0).required()
+      });
+
+      const validation = helper.validate(data, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return validation;
+      }
+
+      const value = validation.value;
+
+      const materialReceivingItemLabel = await TMaterialReceivingItemLabel.findByPk(mr_item_label_id, {
+        attributes: ['id', 'is_quantity', 'quantity_checked_at'],
+        include: [
+          {
+            model: TMaterialReceivingItem,
+            as: 'material_receiving_item',
+            attributes: ['id'],
+            include: [
+              {
+                model: TMaterialDeliveryOrderDetail,
+                as: 'mdo_detail',
+                attributes: ['id'],
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    attributes: ['id'],
+                    include: [
+                      {
+                        model: SPackages,
+                        as: 'package',
+                        attributes: ['capacity']
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                mode: TPartLabels,
+                as: 'label',
+                attributes: ['label_number']
+              }
+            ]
+          }
+        ],
+        transaction: t
+      });
+
+      if (!materialReceivingItemLabel) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Material receiving item label not found',
+          code: 404
+        };
+      }
+
+      if (!materialReceivingItemLabel.quantity_checked_at) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Label has not been scanned yet',
+          code: 400
+        };
+      }
+
+      if (materialReceivingItemLabel.is_quantity === false) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Label has already been marked as incomplete',
+          code: 400
+        };
+      }
+
+      const packageCapacity = Number(materialReceivingItemLabel.material_receiving_item?.mdo_detail?.part?.package?.capacity || 0);
+
+      if (value.actual_qty >= packageCapacity) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Actual quantity must be less than expected quantity',
+          code: 400
+        };
+      }
+
+      await materialReceivingItemLabel.update(
+        {
+          is_quantity: false
+        },
+        {
+          transaction: t
+        }
+      );
+
+      // Generate NG Ticket Number
+      const dateStr = dayjs().format('YYMMDD');
+      const prefix = `NGQ-${dateStr}-`;
+
+      const lastTicket = await TNgTicket.findOne({
+        where: {
+          ng_ticket_number: {
+            [Op.like]: `${prefix}%`
+          }
+        },
+
+        order: [
+          ['ng_ticket_number', 'DESC']
+        ],
+
+        transaction: t
+      });
+
+      let nextNumber = 1;
+
+      if (lastTicket) {
+        const lastSeq = parseInt(lastTicket.ng_ticket_number.split('-').pop(), 10);
+
+        nextNumber = lastSeq + 1;
+      }
+
+      const ngTicketNumber = `${prefix}${String(nextNumber).padStart(6, '0')}`;
+
+      const ngTicket = await TNgTicket.create(
+        {
+          mr_item_label_id: materialReceivingItemLabel.id,
+          ng_ticket_number: ngTicketNumber,
+          created_by: req.user.id
+        },
+        {
+          transaction: t
+        }
+      );
+
+      await TNgTicketQuantity.create(
+        {
+          ng_ticket_id: ngTicket.id,
+          expected_qty: packageCapacity,
+          actual_qty: value.actual_qty
+        },
+        {
+          transaction: t
+        }
+      );
+
+      await t.commit();
+
+      return {
+        status: true,
+        message: 'Label has been marked as incomplete',
+        data: {
+          id: materialReceivingItemLabel.id,
+          label_number: materialReceivingItemLabel.label?.label_number || null,
+          judgement: 'NG',
+          ng_ticket: {
+            id: ngTicket.id,
+            ng_ticket_number: ngTicket.ng_ticket_number
+          }
+        }
+      };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async submitQuantityChecking(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { mdo_detail_id } = req.params;
+
+      const materialReceivingItem = await TMaterialReceivingItem.findOne({
+        where: {
+          mdo_detail_id
+        },
+        attributes: ['id', 'quantity_checked', 'quantity_checked_at'],
+        include: [
+          {
+            model: TMaterialReceivingItemLabel,
+            as: 'labels',
+            attributes: ['id', 'is_quantity', 'quantity_checked_at'],
+            include: [
+              {
+                model: TPartLabels,
+                as: 'label',
+                attributes: ['id', 'label_number']
+              },
+              {
+                model: TNgTicket,
+                as: 'ng_ticket',
+                required: false,
+                attributes: ['id']
+              }
+            ]
+          },
+          {
+            model: TMaterialDeliveryOrderDetail,
+            as: 'mdo_detail',
+            attributes: ['id'],
+            include: [
+              {
+                model: SParts,
+                as: 'part',
+                attributes: ['id'],
+                include: [
+                  {
+                    model: SPackages,
+                    as: 'package',
+                    attributes: ['capacity']
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        transaction: t
+      });
+
+      if (!materialReceivingItem) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Material receiving item not found',
+          code: 404
+        };
+      }
+
+      if (materialReceivingItem.quantity_checked_at) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Quantity checking has already been submitted',
+          code: 400
+        };
+      }
+
+      const packageCapacity = Number(materialReceivingItem.mdo_detail?.part?.package?.capacity || 0);
+
+      const uncheckedLabels = (materialReceivingItem.labels || []).filter((item) => item.quantity_checked_at === null);
+
+      for (const item of uncheckedLabels) {
+        if (item.ng_ticket) {
+          continue;
+        }
+        
+        await item.update(
+          {
+            is_quantity: false
+          },
+          {
+            transaction: t
+          }
+        );
+
+        // Generate NG Ticket Number
+        const dateStr = dayjs().format('YYMMDD');
+        const prefix = `NGQ-${dateStr}-`;
+
+        const lastTicket = await TNgTicket.findOne({
+          where: {
+            ng_ticket_number: {
+              [Op.like]: `${prefix}%`
+            }
+          },
+
+          order: [
+            ['ng_ticket_number', 'DESC']
+          ],
+
+          transaction: t
+        });
+
+        let nextNumber = 1;
+
+        if (lastTicket) {
+          const lastSeq = parseInt(lastTicket.ng_ticket_number.split('-').pop(), 10);
+
+          nextNumber = lastSeq + 1;
+        }
+
+        const ngTicketNumber = `${prefix}${String(nextNumber).padStart(6, '0')}`;
+
+        const ngTicket = await TNgTicket.create(
+          {
+            mr_item_label_id: item.id,
+            ng_ticket_number: ngTicketNumber,
+            created_by: req.user.id
+          },
+          {
+            transaction: t
+          }
+        );
+
+        await TNgTicketQuantity.create(
+          {
+            ng_ticket_id: ngTicket.id,
+            expected_qty: packageCapacity,
+            actual_qty: 0
+          },
+          {
+            transaction: t
+          }
+        );
+      }
+
+      const submittedAt = new Date();
+
+      await materialReceivingItem.update(
+        {
+          quantity_checked: true,
+          quantity_checked_at: submittedAt
+        },
+        {
+          transaction: t
+        }
+      );
+
+      await t.commit();
+
+      return {
+        status: true,
+        message: 'Quantity checking has been submitted successfully',
+        data: {
+          id: materialReceivingItem.id,
+          quantity_checked: true,
+          quantity_checked_at: submittedAt,
+          auto_ng_count: uncheckedLabels.length
         }
       };
     } catch (error) {

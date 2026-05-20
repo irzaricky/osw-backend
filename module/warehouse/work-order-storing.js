@@ -518,6 +518,54 @@ class WorkOrderStoringModule extends BaseModule {
         returning: true
       });
 
+      if (value.wo_status_id === 2 && value.wo_category === 'Placement' && value.ref_doc_id) {
+        const labels = [];
+
+        for (const item of createdItems) {
+          const receivingLabels = await TMaterialReceivingItemLabel.findAll({
+            attributes: ['id', 'label_id'],
+            include: [
+              {
+                model: TMaterialReceivingItem,
+                as: 'material_receiving_item',
+                required: true,
+                where: {
+                  mr_id: value.ref_doc_id
+                }
+              },
+              {
+                model: TPartLabels,
+                as: 'label',
+                required: true,
+                where: {
+                  part_id: item.part_id
+                }
+              }
+            ],
+            where: {
+              is_quantity: true,
+              is_quality: true
+            },
+            limit: item.total_kanban,
+            order: [['id', 'ASC']],
+            transaction: t
+          });
+
+          for (const receivingLabel of receivingLabels) {
+            labels.push({
+              wo_item_id: item.id,
+              label_id: receivingLabel.label_id
+            });
+          }
+        }
+
+        if (labels.length) {
+          await TWorkOrderStoringItemLabel.bulkCreate(labels, {
+            transaction: t
+          });
+        }
+      }
+
       if (value.wo_status_id === 2 && value.wo_category === 'Placement' && !value.ref_doc_id) {
         const labels = [];
 
@@ -877,6 +925,54 @@ class WorkOrderStoringModule extends BaseModule {
         });
       }
 
+      if (value.wo_status_id === 2 && value.wo_category === 'Placement' && value.ref_doc_id) {
+        const labels = [];
+
+        for (const item of createdItems) {
+          const receivingLabels = await TMaterialReceivingItemLabel.findAll({
+            attributes: ['id', 'label_id'],
+            include: [
+              {
+                model: TMaterialReceivingItem,
+                as: 'material_receiving_item',
+                required: true,
+                where: {
+                  mr_id: value.ref_doc_id
+                }
+              },
+              {
+                model: TPartLabels,
+                as: 'label',
+                required: true,
+                where: {
+                  part_id: item.part_id
+                }
+              }
+            ],
+            where: {
+              is_quantity: true,
+              is_quality: true
+            },
+            limit: item.total_kanban,
+            order: [['id', 'ASC']],
+            transaction: t
+          });
+
+          for (const receivingLabel of receivingLabels) {
+            labels.push({
+              wo_item_id: item.id,
+              label_id: receivingLabel.label_id
+            });
+          }
+        }
+
+        if (labels.length) {
+          await TWorkOrderStoringItemLabel.bulkCreate(labels, {
+            transaction: t
+          });
+        }
+      }
+      
       if (value.wo_status_id === 2 && value.wo_category === 'Placement' && !value.ref_doc_id) {
         const labels = [];
 

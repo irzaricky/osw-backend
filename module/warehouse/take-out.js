@@ -129,9 +129,35 @@ class TakeOutModule extends BaseModule {
       if (wo_type_id) where.wo_type_id = wo_type_id;
 
       if (wo_date_start && wo_date_end) {
-        where.wo_date = {
-          [Op.between]: [wo_date_start, wo_date_end]
-        };
+        where[Op.and] = [
+          ...(where[Op.and] || []),
+          db.sequelize.where(
+            db.sequelize.fn('DATE', db.sequelize.col('TWorkOrderStoring.wo_date')),
+            {
+              [Op.between]: [wo_date_start, wo_date_end]
+            }
+          )
+        ];
+      } else if (wo_date_start) {
+        where[Op.and] = [
+          ...(where[Op.and] || []),
+          db.sequelize.where(
+            db.sequelize.fn('DATE', db.sequelize.col('TWorkOrderStoring.wo_date')),
+            {
+              [Op.gte]: wo_date_start
+            }
+          )
+        ];
+      } else if (wo_date_end) {
+        where[Op.and] = [
+          ...(where[Op.and] || []),
+          db.sequelize.where(
+            db.sequelize.fn('DATE', db.sequelize.col('TWorkOrderStoring.wo_date')),
+            {
+              [Op.lte]: wo_date_end
+            }
+          )
+        ];
       }
 
       const { count, rows } = await TWorkOrderStoring.findAndCountAll({

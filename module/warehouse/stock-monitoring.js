@@ -77,14 +77,17 @@ class StockMonitoringModule {
           WHERE COALESCE(stock.used_capacity, 0) > 0
         )::int AS occupied_bins_check,
         COUNT(*) FILTER (
-          WHERE COALESCE(stock.used_capacity, 0) >= b.capacity
-        )::int AS full_bins,
+          WHERE COALESCE(b.capacity, 0) > 0
+            AND COALESCE(stock.used_capacity, 0) >= COALESCE(b.capacity, 0)
+        )::int AS full_bins,  
         COUNT(*) FILTER (
-          WHERE COALESCE(stock.used_capacity, 0) = 0
+          WHERE COALESCE(b.capacity, 0) > 0
+            AND COALESCE(stock.used_capacity, 0) = 0
         )::int AS empty_bins,
         COUNT(*) FILTER (
-          WHERE COALESCE(stock.used_capacity, 0) >= (b.capacity * 0.8)
-          AND COALESCE(stock.used_capacity, 0) < b.capacity
+          WHERE COALESCE(b.capacity, 0) > 0
+            AND COALESCE(stock.used_capacity, 0) >= (b.capacity * 0.8)
+            AND COALESCE(stock.used_capacity, 0) < b.capacity
         )::int AS low_capacity_bins
       FROM s_warehouse_bins b
       LEFT JOIN (
@@ -560,6 +563,7 @@ const finalWhereClause = finalWhere.length
           COALESCE(stock.total_pcs, 0)::int AS total_pcs,
 
           CASE
+            WHEN COALESCE(b.capacity, 0) <= 0 THEN 'Unconfigured'
             WHEN COALESCE(stock.used_capacity, 0) = 0 THEN 'Empty'
             WHEN COALESCE(stock.used_capacity, 0) >= COALESCE(b.capacity, 0) THEN 'Full'
             ELSE 'Available'

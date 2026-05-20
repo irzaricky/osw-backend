@@ -35,6 +35,36 @@ router.post('/:id/arrived', auth.sessionChecker, auth.permissionChecker(['Supera
   helper.sendResponse(res, result);
 });
 
+// get progress material receiving
+router.get('/:id/progress', auth.sessionChecker, async (req, res) => {
+  const result = await materialReceivingModule.progress(req);
+  helper.sendResponse(res, result);
+});
+
+// get detail quantity checking
+router.get('/quantity-checking/:mdo_detail_id', auth.sessionChecker, async (req, res) => {
+  const result = await materialReceivingModule.quantityCheckingDetail(req);
+  helper.sendResponse(res, result);
+});
+
+// post scan quantity checking
+router.post('/quantity-checking/scan', auth.sessionChecker, async (req, res) => {
+  const result = await materialReceivingModule.scanQuantityLabel(req);
+  helper.sendResponse(res, result);
+});
+
+// patch mark quantity incomplete / NG
+router.patch('/quantity-checking/incomplete/:mr_item_label_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await materialReceivingModule.markQuantityIncomplete(req);
+  helper.sendResponse(res, result);
+});
+
+// post submit quantity checking
+router.post('/quantity-checking/submit/:mdo_detail_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
+  const result = await materialReceivingModule.submitQuantityChecking(req);
+  helper.sendResponse(res, result);
+});
+
 // print part label
 router.get('/print-label/:mdo_detail_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
   await materialReceivingModule.printLabel(req, res);

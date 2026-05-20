@@ -158,7 +158,10 @@ async detail(req) {
         'wo_description',
         'wo_type_id',
         'warehouse_area_id',
-        'wo_status_id'
+        'wo_status_id',
+        'ref_doc_id',
+        'ref_doc_number',
+        'ref_doc_name',
       ],
       include: [
         {
@@ -283,7 +286,10 @@ async detail(req) {
         scanned_pcs: scannedPcs,
         remaining_pcs: totalPcs - scannedPcs,
         progress: totalLabel > 0 ? Math.round((totalScanned / totalLabel) * 100) : 0,
-        items
+        items,
+        ref_doc_id: workOrder.ref_doc_id,
+        ref_doc_number: workOrder.ref_doc_number,
+        ref_doc_name: workOrder.ref_doc_name,
       }
     };
 
@@ -411,7 +417,10 @@ async detail(req) {
           wo_item_label_id: itemLabel.id,
           label_number,
           part: itemLabel.work_order_item?.part?.dataValues,
-          package: itemLabel.work_order_item?.part?.package
+          package: itemLabel.work_order_item?.part?.package,
+          ref_doc_id: workOrder.ref_doc_id,
+          ref_doc_number: workOrder.ref_doc_number,
+          ref_doc_name: workOrder.ref_doc_name,
         }
       };
 
@@ -842,7 +851,10 @@ if (
         qty_per_kanban,
         total_label: totalLabels,
         total_scanned: totalScanned,
-        remaining: totalLabels - totalScanned
+        remaining: totalLabels - totalScanned,
+        ref_doc_id: workOrder.ref_doc_id,
+        ref_doc_number: workOrder.ref_doc_number,
+        ref_doc_name: workOrder.ref_doc_name,
       }
     };
   } catch (error) {

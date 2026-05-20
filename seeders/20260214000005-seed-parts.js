@@ -107,9 +107,6 @@ export default {
       if (!exists) {
         const uom_id = uomMap[item.uom_code] ?? null;
         const package_id = pkgMap[item.package_code] ?? null;
-        const part_category_id = item.part_category_code
-          ? (catMap[item.part_category_code] ?? null)
-          : null;
 
         if (!uom_id) {
           console.warn(`[WARN] UOM code '${item.uom_code}' tidak ditemukan untuk part ${item.part_number}`);
@@ -120,7 +117,7 @@ export default {
             part_number:      item.part_number,
             part_name:        item.part_name,
             part_type_code:   item.part_type_code,
-            part_category_id: part_category_id,
+            part_category:    item.part_category_code,
             model_name:       item.model_name ?? null,
             model_code:       item.model_code ?? null,
             generation:       item.generation ?? null,

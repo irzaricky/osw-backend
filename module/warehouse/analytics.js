@@ -730,14 +730,8 @@ async inventoryHealth(req) {
         COUNT(*) FILTER (
           WHERE safety_stock > 0
             AND total_kanban > 0
-            AND total_kanban <= (safety_stock * 0.25)
-        )::int AS critical_stock,
-
-        COUNT(*) FILTER (
-          WHERE safety_stock > 0
-            AND total_kanban > (safety_stock * 0.25)
             AND total_kanban < safety_stock
-        )::int AS below_safety,
+        )::int AS critical_stock,
 
         COUNT(*) FILTER (
           WHERE safety_stock > 0

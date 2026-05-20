@@ -515,30 +515,15 @@ class ForecastModule extends BaseModule {
       });
       if (!currentForecast) return { status: false, message: 'Forecast not found', code: 404 };
 
-      // 2. Find closest previous approved forecast of same customer & type
-      const previousForecast = await SSalesForecasts.findOne({
-        where: {
-          customer_id: currentForecast.customer_id,
-          forecast_type: currentForecast.forecast_type,
-          status: 'Approved',
-          end_period: { [Op.lt]: currentForecast.start_period }
-        },
-        order: [['end_period', 'DESC']],
-        attributes: ['id', 'start_period', 'end_period']
-      });
+      // 2. Determine interval step (in months) based on forecast type
+      let stepMonths = 12; // Yearly default
+      if (currentForecast.forecast_type === 'Half-Year') {
+        stepMonths = 6;
+      } else if (currentForecast.forecast_type === '4-Month') {
+        stepMonths = 4;
+      }
 
-      if (!previousForecast) return { status: true, data: {} };
-
-      // 3. Get historical details for requested parts
-      const historicalDetails = await SSalesForecastDetails.findAll({
-        where: {
-          forecast_id: previousForecast.id,
-          part_id: { [Op.in]: part_ids.map(Number) }
-        },
-        attributes: ['part_id', 'period_date', 'forecast_qty']
-      });
-
-      // 4. Generate period arrays for index-based mapping
+      // 3. Generate period arrays for current forecast
       const generatePeriods = (start, end) => {
         const periods = [];
         let current = dayjs(start).startOf('month');
@@ -550,18 +535,85 @@ class ForecastModule extends BaseModule {
         return periods;
       };
 
-      const prevPeriods = generatePeriods(previousForecast.start_period, previousForecast.end_period);
       const currPeriods = generatePeriods(currentForecast.start_period, currentForecast.end_period);
 
-      const result = {};
+      // 4. Calculate past 4 historical dates for each target period
+      const allHistoricalDates = [];
+      const periodToHistDatesMap = {}; // targetPeriod -> [histDate_1, histDate_2, histDate_3, histDate_4]
+      for (const targetPeriod of currPeriods) {
+        const dates = [];
+        for (let i = 1; i <= 4; i++) {
+          const histDate = dayjs(targetPeriod).subtract(i * stepMonths, 'month').format('YYYY-MM-01');
+          dates.push(histDate);
+          if (!allHistoricalDates.includes(histDate)) {
+            allHistoricalDates.push(histDate);
+          }
+        }
+        periodToHistDatesMap[targetPeriod] = dates;
+      }
+
+      // 5. Query approved forecast details that match the historical dates with qty_status = 'Fix'
+      const historicalDetails = await SSalesForecastDetails.findAll({
+        where: {
+          part_id: { [Op.in]: part_ids.map(Number) },
+          qty_status: 'Fix',
+          period_date: { [Op.in]: allHistoricalDates }
+        },
+        include: [
+          {
+            model: SSalesForecasts,
+            as: 'forecast',
+            where: {
+              customer_id: currentForecast.customer_id,
+              forecast_type: currentForecast.forecast_type,
+              status: 'Approved'
+            },
+            attributes: ['id', 'updated_at']
+          }
+        ],
+        attributes: ['part_id', 'period_date', 'forecast_qty']
+      });
+
+      // Deduplicate: if multiple approved forecasts cover the same date, take the one with the highest ID (latest revision)
+      const detailMap = {}; // "part_id:period_date" -> { qty, forecastId }
       historicalDetails.forEach(detail => {
-        const histIndex = prevPeriods.indexOf(dayjs(detail.period_date).format('YYYY-MM-01'));
-        if (histIndex >= 0 && histIndex < currPeriods.length) {
-          const targetPeriod = currPeriods[histIndex];
-          if (!result[detail.part_id]) result[detail.part_id] = {};
-          result[detail.part_id][targetPeriod] = detail.forecast_qty;
+        const pDate = dayjs(detail.period_date).format('YYYY-MM-01');
+        const key = `${detail.part_id}:${pDate}`;
+        const forecastId = detail.forecast.id;
+        if (!detailMap[key] || forecastId > detailMap[key].forecastId) {
+          detailMap[key] = {
+            qty: detail.forecast_qty,
+            forecastId: forecastId
+          };
         }
       });
+
+      // 6. Perform Single Exponential Smoothing over chronological matched history
+      const ALPHA = 0.3;
+      const result = {};
+
+      for (const partId of part_ids.map(Number)) {
+        result[partId] = {};
+        for (const targetPeriod of currPeriods) {
+          // Retrieve historical details in chronological order: index 3 (oldest) down to 0 (newest)
+          const values = [];
+          for (let i = 3; i >= 0; i--) {
+            const histDate = periodToHistDatesMap[targetPeriod][i];
+            const key = `${partId}:${histDate}`;
+            if (detailMap[key]) {
+              values.push(detailMap[key].qty);
+            }
+          }
+
+          if (values.length > 0) {
+            let smoothed = values[0];
+            for (let idx = 1; idx < values.length; idx++) {
+              smoothed = ALPHA * values[idx] + (1 - ALPHA) * smoothed;
+            }
+            result[partId][targetPeriod] = Math.round(smoothed);
+          }
+        }
+      }
 
       return { status: true, data: result };
     } catch (error) {

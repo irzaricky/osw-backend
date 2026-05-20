@@ -693,6 +693,20 @@ class MaterialReceivingModule extends BaseModule {
                 model: TPartLabels,
                 as: 'label',
                 attributes: ['label_number']
+              },
+              {
+                model: TNgTicket,
+                as: 'ng_ticket',
+                required: false,
+                attributes: ['id', 'ng_ticket_number'],
+                include: [
+                  {
+                    model: TNgTicketQuantity,
+                    as: 'quantity',
+                    required: false,
+                    attributes: ['expected_qty', 'actual_qty']
+                  }
+                ]
               }
             ]
           }
@@ -741,7 +755,15 @@ class MaterialReceivingModule extends BaseModule {
           id: item.id,
           label_number: item.label?.label_number || null,
           judgement: item.is_quantity === true ? 'OK' : 'NG',
-          scanned_at: item.quantity_checked_at
+          scanned_at: item.quantity_checked_at,
+          ng_ticket: item.ng_ticket
+            ? {
+              id: item.ng_ticket.id,
+              ng_ticket_number: item.ng_ticket.ng_ticket_number,
+              expected_qty: item.ng_ticket?.quantity?.expected_qty || null,
+              actual_qty: item.ng_ticket?.quantity?.actual_qty || null
+            }
+            : null
         }))
       };
 
@@ -1441,6 +1463,20 @@ class MaterialReceivingModule extends BaseModule {
                 model: TPartLabels,
                 as: 'label',
                 attributes: ['label_number']
+              },
+              {
+                model: TNgTicket,
+                as: 'ng_ticket',
+                required: false,
+                attributes: ['id', 'ng_ticket_number'],
+                include: [
+                  {
+                    model: TNgTicketQuality,
+                    as: 'qualities',
+                    required: false,
+                    attributes: ['id', 'defect_id', 'image']
+                  }
+                ]
               }
             ]
           }
@@ -1492,7 +1528,20 @@ class MaterialReceivingModule extends BaseModule {
           id: item.id,
           label_number: item.label?.label_number || null,
           judgement: item.is_quality === true ? 'OK' : 'NG',
-          scanned_at: item.quality_checked_at
+          scanned_at: item.quality_checked_at,
+          ng_ticket: item.ng_ticket
+            ? {
+              id: item.ng_ticket.id,
+              ng_ticket_number: item.ng_ticket.ng_ticket_number,
+              defects: (item.ng_ticket?.qualities || []).map(
+                (quality) => ({
+                  id: quality.id,
+                  defect_id: quality.defect_id,
+                  image: quality.image
+                })
+              )
+            }
+            : null
         }))
       };
 
@@ -1626,7 +1675,6 @@ class MaterialReceivingModule extends BaseModule {
           .items(
             Joi.object({
               defect_id: Joi.number().integer().required(),
-              remarks: Joi.string().allow('', null),
               image: Joi.string().allow('', null)
             })
           )
@@ -1779,7 +1827,6 @@ class MaterialReceivingModule extends BaseModule {
         (item) => ({
           ng_ticket_id: ngTicket.id,
           defect_id: item.defect_id,
-          remarks: item.remarks || null,
           image: item.image || null
         })
       );
@@ -1834,7 +1881,6 @@ class MaterialReceivingModule extends BaseModule {
           .items(
             Joi.object({
               defect_id: Joi.number().integer().required(),
-              remarks: Joi.string().allow('', null),
               image: Joi.string().allow('', null)
             })
           )
@@ -1939,7 +1985,6 @@ class MaterialReceivingModule extends BaseModule {
         (item) => ({
           ng_ticket_id: materialReceivingItemLabel.ng_ticket.id,
           defect_id: item.defect_id,
-          remarks: item.remarks || null,
           image: item.image || null
         })
       );

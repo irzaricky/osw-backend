@@ -3,24 +3,21 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class SParts extends Model {
     static associate(models) {
-      // Parts can be parent to many BOMs (Both Products and Sub-assemblies)
       SParts.hasMany(models.SBoms, { foreignKey: 'parent_part_id', as: 'boms' });
-      
-      // Parts can be children in many different BOMs
       SParts.hasMany(models.SBomDetails, { foreignKey: 'part_id', as: 'bom_usages' });
-
-      // Part belongs to Type
       SParts.belongsTo(models.RefPartTypes, { foreignKey: 'part_type_code', targetKey: 'code', as: 'type' });
-
-      // Part belongs to Supplier
       SParts.belongsTo(models.SSuppliers, { foreignKey: 'supplier_id', as: 'supplier' });
-
-      // Part belongs to Package
       SParts.belongsTo(models.SPackages, { foreignKey: 'package_id', as: 'package' });
-
-      // Part belongs to UOM
       SParts.belongsTo(models.SUom, { foreignKey: 'uom_id', as: 'uom' });
       SParts.hasMany(models.SPartRoutings, { foreignKey: 'part_id', as: 'routings' });
+      SParts.belongsTo(models.RefPartCategory, { foreignKey: 'part_category_id', as: 'category' });
+      SParts.hasMany(models.SPartSuppliers, { foreignKey: 'part_id', as: 'part_suppliers' });
+      SParts.belongsToMany(models.SSuppliers, {
+        through: models.SPartSuppliers,
+        foreignKey: 'part_id',
+        otherKey: 'supplier_id',
+        as: 'suppliers',
+      });
     }
   }
 
@@ -28,23 +25,26 @@ export default (sequelize) => {
     part_number: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true
+      unique: true,
     },
     part_name: {
       type: DataTypes.STRING,
-      allowNull: false
+      allowNull: false,
     },
     part_type_code: DataTypes.STRING,
-    part_category: DataTypes.STRING,
+    part_category_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
     supplier_id: DataTypes.INTEGER,
     price: DataTypes.DECIMAL(15, 2),
     safety_stock: {
       type: DataTypes.INTEGER,
-      defaultValue: 0
+      defaultValue: 0,
     },
     lead_time_days: {
       type: DataTypes.INTEGER,
-      defaultValue: 0
+      defaultValue: 0,
     },
     // Product fields
     model_name: DataTypes.STRING,
@@ -52,16 +52,28 @@ export default (sequelize) => {
     generation: DataTypes.STRING,
     color: DataTypes.STRING,
     color_code: DataTypes.STRING,
-    uom_id: { 
+    uom_id: {
       type: DataTypes.INTEGER,
-      allowNull: true
+      allowNull: true,
     },
-    
     // Common
     package_id: {
       type: DataTypes.INTEGER,
-      allowNull: true
-    }
+      allowNull: true,
+    },
+    /**
+     * Berat per unit dalam kilogram (kg).
+     * Wajib diisi agar sistem bisa menghitung apakah muatan melebihi
+     * kapasitas kendaraan (load_capacity di ref_vehicle_types).
+     * NULL berarti berat belum dikonfigurasi — part tersebut akan
+     * dianggap berbobot 0 saat preview split, dengan warning di response.
+     */
+    weight: {
+      type: DataTypes.DECIMAL(10, 3),
+      allowNull: true,
+      defaultValue: null,
+      comment: 'Berat per unit dalam kilogram (kg)',
+    },
   }, {
     sequelize,
     modelName: 'SParts',
@@ -69,7 +81,7 @@ export default (sequelize) => {
     underscored: true,
     timestamps: true,
     paranoid: true,
-    deletedAt: 'deleted_at'
+    deletedAt: 'deleted_at',
   });
 
   return SParts;

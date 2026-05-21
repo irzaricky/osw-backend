@@ -3,7 +3,14 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class SSuppliers extends Model {
     static associate(models) {
-      // Define associations here if needed
+      // Supplier bisa supply banyak parts via junction table (many-to-many)
+      SSuppliers.hasMany(models.SPartSuppliers, { foreignKey: 'supplier_id', as: 'part_suppliers' });
+      SSuppliers.belongsToMany(models.SParts, {
+        through: models.SPartSuppliers,
+        foreignKey: 'supplier_id',
+        otherKey: 'part_id',
+        as: 'parts',
+      });
     }
   }
 

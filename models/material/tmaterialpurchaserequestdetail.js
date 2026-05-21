@@ -1,18 +1,20 @@
 'use strict';
-import {
-  Model, DataTypes
-} from 'sequelize';
+import { Model, DataTypes } from 'sequelize';
+
 export default (sequelize) => {
   class TMaterialPurchaseRequestDetail extends Model {
-    /**
-     * Helper method for defining associations.
-     * This method is not a part of Sequelize lifecycle.
-     * The `models/index` file will call this method automatically.
-     */
     static associate(models) {
-      // define association here
+      TMaterialPurchaseRequestDetail.belongsTo(models.SMaterialPurchaseRequest, {
+        foreignKey: 'mpr_id',
+        as: 'purchaseRequest'
+      });
+      TMaterialPurchaseRequestDetail.belongsTo(models.SParts, {
+        foreignKey: 'part_id',
+        as: 'part'
+      });
     }
   }
+
   TMaterialPurchaseRequestDetail.init({
     mpr_id: DataTypes.INTEGER,
     part_id: DataTypes.INTEGER,
@@ -28,5 +30,6 @@ export default (sequelize) => {
     paranoid: true,
     deletedAt: 'deleted_at'
   });
+
   return TMaterialPurchaseRequestDetail;
 };

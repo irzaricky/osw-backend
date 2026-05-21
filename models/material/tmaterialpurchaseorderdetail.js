@@ -10,7 +10,8 @@ export default (sequelize) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // define association here
+      TMaterialPurchaseOrderDetail.belongsTo(models.SMaterialPurchaseOrder, { foreignKey: 'mpo_id', as: 'purchase_order' });
+      TMaterialPurchaseOrderDetail.belongsTo(models.SParts, { foreignKey: 'part_id', as: 'part' });
     }
   }
   TMaterialPurchaseOrderDetail.init({

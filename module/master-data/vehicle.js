@@ -17,6 +17,7 @@ class VehicleModule extends BaseModule {
             const search = params.search || '';
             const vehicle_type_id = params.vehicle_type_id;
             const active = params.active;
+            const availability_status = params.availability_status;
 
             const where = {};
 
@@ -33,6 +34,10 @@ class VehicleModule extends BaseModule {
 
             if (active !== undefined && active !== '') {
                 where.status = active === 'true' || active === true;
+            }
+
+            if (availability_status && availability_status !== 'all') {
+                where.availability_status = availability_status;
             }
 
             const include = [
@@ -82,6 +87,7 @@ class VehicleModule extends BaseModule {
                 plate_number: Joi.string().max(20).required(),
                 vehicle_type_id: Joi.number().integer().required(),
                 image: Joi.string().allow(null, '').optional(),
+                availability_status: Joi.string().valid('Available', 'In Transit', 'Maintenance').default('Available').optional()
             });
 
             const validation = helper.validate(data, schema);
@@ -91,7 +97,7 @@ class VehicleModule extends BaseModule {
             }
 
 
-            const { vehicle_code, plate_number, vehicle_type_id } = validation.value;
+            const { vehicle_code, plate_number, vehicle_type_id, availability_status } = validation.value;
 
             // Check if vehicle type exists
             const vehicleType = await RefVehicleType.findByPk(vehicle_type_id, { transaction: t });
@@ -185,6 +191,7 @@ class VehicleModule extends BaseModule {
                 vehicleToRestore.vehicle_type_id = vehicle_type_id;
                 vehicleToRestore.image = imagePath;
                 vehicleToRestore.status = true;
+                if (availability_status) vehicleToRestore.availability_status = availability_status;
 
                 await vehicleToRestore.save({ transaction: t });
 
@@ -232,7 +239,8 @@ class VehicleModule extends BaseModule {
                 plate_number,
                 vehicle_type_id,
                 image: imagePath,
-                status: true
+                status: true,
+                availability_status
             }, { transaction: t });
 
             // Log activity
@@ -281,7 +289,8 @@ class VehicleModule extends BaseModule {
                 plate_number: Joi.string().max(20).optional(),
                 vehicle_type_id: Joi.number().integer().optional(),
                 image: Joi.string().allow(null, '').optional(),
-                status: Joi.boolean().optional()
+                status: Joi.boolean().optional(),
+                availability_status: Joi.string().valid('Available', 'In Transit', 'Maintenance').optional()
             });
 
             const validation = helper.validate(data, schema);
@@ -290,7 +299,7 @@ class VehicleModule extends BaseModule {
                 return validation;
             }
 
-            const { vehicle_code, plate_number, vehicle_type_id, image, status } = validation.value;
+            const { vehicle_code, plate_number, vehicle_type_id, image, status, availability_status } = validation.value;
 
             const vehicle = await SVehicles.findByPk(id, { transaction: t });
 
@@ -367,6 +376,7 @@ class VehicleModule extends BaseModule {
             if (plate_number) vehicle.plate_number = plate_number;
             if (vehicle_type_id) vehicle.vehicle_type_id = vehicle_type_id;
             if (status !== undefined) vehicle.status = status;
+            if (availability_status) vehicle.availability_status = availability_status;
 
             await vehicle.save({ transaction: t });
 

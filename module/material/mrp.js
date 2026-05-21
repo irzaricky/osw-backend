@@ -69,7 +69,7 @@ const includeMrpDetails = {
     {
       model: SParts,
       as: 'part',
-      attributes: ['id', 'part_number', 'part_name', 'safety_stock', 'lead_time_days'],
+      attributes: ['id', 'part_number', 'part_name', 'safety_stock', 'lead_time_days', 'weight'],
       include: [{ model: SUom, as: 'uom', attributes: ['id', 'name', 'code'] }],
     },
     {
@@ -81,18 +81,59 @@ const includeMrpDetails = {
 };
 
 // ============================================================
-// HELPER — generate nomor MRP: MRP-YYYYMMDD-XXXX
+// HELPER — generate nomor MRP: MRP-YYYY-MM-XXX
+// Format baru: MRP-2026-06-001
+//
+// Strategy anti-duplikat:
+//   - Query semua number dalam bulan berjalan, paranoid:false
+//     agar soft-deleted records ikut terhitung
+//   - Parse urutan terakhir dari kedua format lama & baru:
+//       MRP-YYYY-MM-XXX     → e.g. MRP-2026-06-003
+//       MRP-YYYYMMDD-XXXX   → e.g. MRP-20260601-0003
+//   - Ambil nilai sequence terbesar, increment +1
+//   - Format output selalu MRP-YYYY-MM-XXX (3 digit sequence)
+//   - Dijalankan di dalam transaction yang sudah ada +
+//     row-level lock untuk cegah race condition
 // ============================================================
 async function generateMrpNumber(transaction) {
   const now = new Date();
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const countToday = await SMrp.count({
-    where: { created_at: { [Op.gte]: startOfDay } },
+
+  // Prefix bulan berjalan untuk format baru: "MRP-2026-06"
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const monthPrefix = `MRP-${yyyy}-${mm}`;
+
+  // Prefix format lama: "MRP-202606" (YYYYMM, 6 digit)
+  const legacyPrefix = `MRP-${yyyy}${mm}`;
+
+  // Ambil semua nomor bulan ini dari kedua format, paranoid:false
+  const rows = await SMrp.findAll({
+    attributes: ['number'],
+    where: {
+      [Op.or]: [
+        { number: { [Op.like]: `${monthPrefix}-%` } },   // format baru:  MRP-YYYY-MM-*
+        { number: { [Op.like]: `${legacyPrefix}%--%` } }, // format lama:  MRP-YYYYMMDD-*
+      ],
+    },
+    paranoid: false,             // sertakan soft-deleted agar urutan tidak loncat
     transaction,
+    lock: transaction.LOCK.UPDATE, // row-level lock, cegah race condition concurrent create
   });
-  return `MRP-${dateStr}-${String(countToday + 1).padStart(4, '0')}`;
+
+  // Parse semua sequence yang ditemukan, ambil yang terbesar
+  let maxSeq = 0;
+  for (const row of rows) {
+    const parts = row.number.split('-');
+    // Kedua format punya sequence di segmen TERAKHIR setelah split('-')
+    // MRP-2026-06-003    → parts[-1] = '003'
+    // MRP-20260601-0003  → parts[-1] = '0003'
+    const lastSegment = parts[parts.length - 1];
+    const seq = parseInt(lastSegment, 10);
+    if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+  }
+
+  const nextSeq = String(maxSeq + 1).padStart(3, '0');
+  return `${monthPrefix}-${nextSeq}`; // e.g. "MRP-2026-06-001"
 }
 
 // ============================================================
@@ -376,7 +417,7 @@ class MRPModule extends BaseModule {
             as: 'part',
             where: { part_type_code: { [Op.in]: ['RAW', 'Raw', 'raw'] } }, // ← case-insensitive safety
             required: true, // INNER JOIN: bom_detail tanpa RAW part dibuang
-            attributes: ['id', 'part_number', 'part_name', 'part_type_code', 'safety_stock', 'lead_time_days'],
+            attributes: ['id', 'part_number', 'part_name', 'part_type_code', 'safety_stock', 'lead_time_days', 'weight'],
             include: [{ model: SUom, as: 'uom', attributes: ['id', 'name', 'code'] }],
           },
         ],
@@ -900,7 +941,7 @@ class MRPModule extends BaseModule {
 
       const rows = await SParts.findAll({
         where,
-        attributes: ['id', 'part_number', 'part_name', 'safety_stock', 'lead_time_days'],
+        attributes: ['id', 'part_number', 'part_name', 'safety_stock', 'lead_time_days', 'weight'],
         include: [{ model: SUom, as: 'uom', attributes: ['id', 'name', 'code'] }],
         order: [['part_number', 'ASC']],
         limit: 50,

@@ -71,7 +71,7 @@ const detailInclude = [
       {
         model: SParts,
         as: 'part',
-        attributes: ['id', 'part_number', 'part_name']
+        attributes: ['id', 'part_number', 'part_name', 'weight']
       }
     ]
   },
@@ -130,7 +130,7 @@ const getDropdownParts = async (req) => {
 
     const parts = await SParts.findAll({
       where,
-      attributes: ['id', 'part_number', 'part_name'],
+      attributes: ['id', 'part_number', 'part_name', 'weight'],
       order: [['part_number', 'ASC']],
       limit: 50
     });
@@ -139,7 +139,8 @@ const getDropdownParts = async (req) => {
       status: true,
       data: parts.map((p) => ({
         value: p.id,
-        label: `${p.part_number} - ${p.part_name}`
+        label: `${p.part_number} - ${p.part_name}`,
+        weight: p.weight ?? null,
       }))
     };
   } catch (error) {

@@ -171,6 +171,110 @@ function calcTotalWeight(details) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AUDIT WEIGHT INTEGRITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * auditWeightIntegrity
+ *
+ * Mendeteksi part_id yang memiliki weight = NULL atau <= 0
+ * dalam konteks sebuah transaksi (MDO yang sudah ada, MPO, atau detail mentah).
+ *
+ * Bisa dipanggil:
+ *  1. Sebelum create/update MDO, untuk warning di response.
+ *  2. Sebagai endpoint audit mandiri: GET /audit-weight?mdo_id=X atau ?mpo_id=X
+ *
+ * @param {object} options
+ * @param {number} [options.mdo_id]   - Audit berdasarkan MDO yang sudah ada
+ * @param {number} [options.mpo_id]   - Audit berdasarkan detail MPO
+ * @param {Array}  [options.details]  - Audit dari array detail mentah: [{ part_id, qty }]
+ *
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   missing_weight: Array<{ part_id, part_number, part_name, weight, qty }>,
+ *   warnings: string[]
+ * }>}
+ */
+async function auditWeightIntegrity({ mdo_id, mpo_id, details: rawDetails } = {}) {
+  let partIds = [];
+  const qtyMap = {}; // part_id → qty (untuk konteks)
+
+  // ── Sumber 1: dari MDO yang sudah tersimpan ──────────────────────────────
+  if (mdo_id) {
+    const mdoDetails = await TMaterialDeliveryOrderDetail.findAll({
+      where: { mdo_id },
+      attributes: ['part_id', 'qty'],
+    });
+    for (const d of mdoDetails) {
+      partIds.push(d.part_id);
+      qtyMap[d.part_id] = parseFloat(d.qty);
+    }
+  }
+
+  // ── Sumber 2: dari semua detail MPO ─────────────────────────────────────
+  else if (mpo_id) {
+    const mpoDetails = await TMaterialPurchaseOrderDetail.findAll({
+      where: { mpo_id },
+      attributes: ['part_id', 'qty'],
+    });
+    for (const d of mpoDetails) {
+      partIds.push(d.part_id);
+      qtyMap[d.part_id] = parseFloat(d.qty);
+    }
+  }
+
+  // ── Sumber 3: dari array detail mentah (sebelum persist) ────────────────
+  else if (rawDetails && rawDetails.length > 0) {
+    for (const d of rawDetails) {
+      partIds.push(d.part_id);
+      qtyMap[d.part_id] = parseFloat(d.qty);
+    }
+  }
+
+  if (partIds.length === 0) {
+    return { ok: true, missing_weight: [], warnings: [] };
+  }
+
+  // De-duplikasi
+  partIds = [...new Set(partIds)];
+
+  // Ambil data SParts untuk semua part_id
+  const parts = await SParts.findAll({
+    where: { id: partIds },
+    attributes: ['id', 'part_number', 'part_name', 'weight'],
+  });
+
+  const missing = [];
+  const warnings = [];
+
+  for (const p of parts) {
+    const w = p.weight !== null ? parseFloat(p.weight) : null;
+    const isMissing = w === null || w <= 0;
+
+    if (isMissing) {
+      missing.push({
+        part_id: p.id,
+        part_number: p.part_number,
+        part_name: p.part_name,
+        weight: p.weight,
+        qty: qtyMap[p.id] ?? null,
+      });
+      warnings.push(
+        `Part ${p.part_number} (${p.part_name}) belum memiliki data berat yang valid` +
+        (p.weight === null ? ' (weight = NULL).' : ` (weight = ${p.weight} ≤ 0).`) +
+        ' Harap isi di master data Parts.'
+      );
+    }
+  }
+
+  return {
+    ok: missing.length === 0,
+    missing_weight: missing,
+    warnings,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DROPDOWN
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -904,4 +1008,5 @@ export default {
   update,
   delete: deleteMdo,
   updateStatus,
+  auditWeightIntegrity,
 };

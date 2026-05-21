@@ -216,7 +216,7 @@ class MPOModule extends BaseModule {
                         include: [{
                             model: SParts,
                             as: 'part',
-                            attributes: ['id', 'part_number', 'part_name', 'price', 'supplier_id'],
+                            attributes: ['id', 'part_number', 'part_name', 'price', 'supplier_id', 'weight'],
                             include: [
                                 { model: db.SUom, as: 'uom', attributes: ['id', 'name', 'code'] },
                                 { model: SSuppliers, as: 'supplier', attributes: ['id', 'supplier_code', 'name'] }
@@ -270,7 +270,7 @@ class MPOModule extends BaseModule {
                         include: [{
                             model: SParts,
                             as: 'part',
-                            attributes: ['id', 'part_number', 'part_name', 'price', 'supplier_id'],
+                            attributes: ['id', 'part_number', 'part_name', 'price', 'supplier_id', 'weight'],
                             include: [
                                 { model: db.SUom, as: 'uom', attributes: ['id', 'name', 'code'] },
                                 { model: SSuppliers, as: 'supplier', attributes: ['id', 'supplier_code', 'name'] }
@@ -425,7 +425,7 @@ class MPOModule extends BaseModule {
                         include: [{
                             model: SParts,
                             as: 'part',
-                            attributes: ['id', 'part_number', 'part_name'],
+                            attributes: ['id', 'part_number', 'part_name', 'weight'],
                             include: [{ model: db.SUom, as: 'uom', attributes: ['id', 'name', 'code'] }]
                         }]
                     },

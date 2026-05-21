@@ -539,6 +539,11 @@ class ForecastModule extends BaseModule {
       const { forecast_id } = req.params;
       let { part_ids } = req.query;
 
+      // Handle part_ids[] format often sent by frontend libraries/URLSearchParams
+      if (!part_ids && req.query['part_ids[]']) {
+        part_ids = req.query['part_ids[]'];
+      }
+
       if (!part_ids) return { status: true, data: {} };
       if (!Array.isArray(part_ids)) part_ids = [part_ids];
 
@@ -548,13 +553,8 @@ class ForecastModule extends BaseModule {
       });
       if (!currentForecast) return { status: false, message: 'Forecast not found', code: 404 };
 
-      // 2. Determine interval step (in months) based on forecast type
-      let stepMonths = 12; // Yearly default
-      if (currentForecast.forecast_type === 'Half-Year') {
-        stepMonths = 6;
-      } else if (currentForecast.forecast_type === '4-Month') {
-        stepMonths = 4;
-      }
+      // 2. Seasonality: Always look back at the same month in previous years (12-month interval)
+      const stepMonths = 12;
 
       // 3. Generate period arrays for current forecast
       const generatePeriods = (start, end) => {
@@ -569,6 +569,7 @@ class ForecastModule extends BaseModule {
       };
 
       const currPeriods = generatePeriods(currentForecast.start_period, currentForecast.end_period);
+      const is4Month = currentForecast.forecast_type === '4-Month';
 
       // 4. Calculate past 4 historical dates for each target period
       const allHistoricalDates = [];
@@ -598,7 +599,7 @@ class ForecastModule extends BaseModule {
             as: 'forecast',
             where: {
               customer_id: currentForecast.customer_id,
-              forecast_type: currentForecast.forecast_type,
+              // Removed forecast_type filter: search for 'Fix' qty across any forecast type
               status: 'Approved'
             },
             attributes: ['id', 'updated_at']
@@ -627,7 +628,26 @@ class ForecastModule extends BaseModule {
 
       for (const partId of part_ids.map(Number)) {
         result[partId] = {};
-        for (const targetPeriod of currPeriods) {
+        let tempPeriodCount = 0;
+
+        for (let idx = 0; idx < currPeriods.length; idx++) {
+          const targetPeriod = currPeriods[idx];
+
+          // 4-Month first period is Fix and 0
+          if (is4Month && idx === 0) {
+            result[partId][targetPeriod] = {
+              qty: 0,
+              status: 'Fix',
+              isRecommended: false
+            };
+            continue;
+          }
+
+          // Otherwise, it is Temporary
+          tempPeriodCount++;
+          // Graduation multiplier: 1st temp = 1.0, 2nd temp = 1.05, 3rd temp = 1.10, etc.
+          const multiplier = 1 + (tempPeriodCount - 1) * 0.05;
+
           // Retrieve historical details in chronological order: index 3 (oldest) down to 0 (newest)
           const values = [];
           for (let i = 3; i >= 0; i--) {
@@ -638,13 +658,50 @@ class ForecastModule extends BaseModule {
             }
           }
 
+          let calculatedValue = 0;
+
           if (values.length > 0) {
             let smoothed = values[0];
-            for (let idx = 1; idx < values.length; idx++) {
-              smoothed = ALPHA * values[idx] + (1 - ALPHA) * smoothed;
+            for (let vIdx = 1; vIdx < values.length; vIdx++) {
+              smoothed = ALPHA * values[vIdx] + (1 - ALPHA) * smoothed;
             }
-            result[partId][targetPeriod] = Math.round(smoothed);
+            calculatedValue = Math.round(smoothed);
+          } else {
+            // Fallback baseline: query any chronological approved Fix forecast details for the customer and part,
+            // and use the nearest available historical Fix quantity.
+            const fallbackDetail = await SSalesForecastDetails.findOne({
+              where: {
+                part_id: partId,
+                qty_status: 'Fix'
+              },
+              include: [
+                {
+                  model: SSalesForecasts,
+                  as: 'forecast',
+                  where: {
+                    customer_id: currentForecast.customer_id,
+                    status: 'Approved'
+                  },
+                  attributes: ['id']
+                }
+              ],
+              order: [
+                ['period_date', 'DESC'],
+                ['id', 'DESC']
+              ],
+              attributes: ['forecast_qty']
+            });
+            calculatedValue = fallbackDetail ? fallbackDetail.forecast_qty : 0;
           }
+
+          // Apply graduation multiplier
+          const finalQty = Math.round(calculatedValue * multiplier);
+
+          result[partId][targetPeriod] = {
+            qty: finalQty,
+            status: 'Temporary',
+            isRecommended: finalQty > 0
+          };
         }
       }
 

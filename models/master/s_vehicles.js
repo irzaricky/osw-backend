@@ -28,6 +28,11 @@ export default (sequelize) => {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: true
+    },
+    availability_status: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'Available'
     }
   }, {
     sequelize,

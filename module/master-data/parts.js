@@ -6,15 +6,7 @@ import BaseModule from '../../class/base.module.js'
 import ExcelJS from 'exceljs'
 import Joi from 'joi'
 
-const {
-  SParts,
-  RefPartTypes,
-  RefPartCategory,
-  SSuppliers,
-  SUom,
-  SPackages,
-  sequelize, TWorkOrderStoring, TWorkOrderStoringItem
-} = db
+const { SParts, SPartSuppliers, RefPartTypes, SSuppliers, sequelize, TWorkOrderStoring, TWorkOrderStoringItem } = db
 
 class PartsModule extends BaseModule {
   async dropdown(req, res) {
@@ -461,6 +453,13 @@ class PartsModule extends BaseModule {
         part = await SParts.create(partData, { transaction: t })
       }
 
+      // Otomatis daftarkan supplier ke junction table sebagai primary
+      await SPartSuppliers.findOrCreate({
+        where: { part_id: part.id, supplier_id },
+        defaults: { part_id: part.id, supplier_id, is_primary: true },
+        transaction: t
+      })
+
       await this.logActivity(req, {
         moduleCode: 'master-data',
         activityCode: 'CREATE',
@@ -589,6 +588,14 @@ class PartsModule extends BaseModule {
         },
         { transaction: t }
       )
+
+      // Jika supplier_id berubah, pastikan supplier baru masuk ke junction table.
+      // Supplier lama tidak dihapus otomatis — admin bisa hapus manual via DELETE /parts/:id/suppliers/:sid
+      await SPartSuppliers.findOrCreate({
+        where: { part_id: part.id, supplier_id },
+        defaults: { part_id: part.id, supplier_id, is_primary: false },
+        transaction: t
+      })
 
       await this.logActivity(req, {
         moduleCode: 'master-data',
@@ -856,15 +863,7 @@ class PartsModule extends BaseModule {
           continue
         }
 
-        const partData = {
-          part_number, part_name,
-          part_type_code: partType.code,
-          part_category, supplier_id: supplier?.id || null,
-          uom_id: uom.id,
-          package_id: pkg?.id || null,
-          price, safety_stock, lead_time_days,
-          model_name, model_code, generation, color, color_code
-        }
+        let part
 
         if (existing && existing.deleted_at) {
           const oldData = existing.toJSON()
@@ -880,9 +879,28 @@ class PartsModule extends BaseModule {
             description: `Restored part via upload (${part_number})`,
             transaction: t
           })
+
+          part = existing
           results.restored++
         } else {
-          const part = await SParts.create(partData, { transaction: t })
+          part = await SParts.create(
+            {
+              part_number,
+              part_name,
+              part_type_code: partType.code,
+              supplier_id: supplier.id,
+              price,
+              safety_stock,
+              lead_time_days,
+              model_name,
+              model_code,
+              generation,
+              color,
+              color_code,
+              uom
+            },
+            { transaction: t }
+          )
 
           await this.logActivity(req, {
             moduleCode: 'master-data',
@@ -894,6 +912,13 @@ class PartsModule extends BaseModule {
           })
           results.created++
         }
+
+        // Otomatis daftarkan supplier ke junction table sebagai primary
+        await SPartSuppliers.findOrCreate({
+          where: { part_id: part.id, supplier_id: supplier.id },
+          defaults: { part_id: part.id, supplier_id: supplier.id, is_primary: true },
+          transaction: t
+        })
       }
 
       await t.commit()
@@ -912,6 +937,244 @@ class PartsModule extends BaseModule {
         code: 500,
         message: error.message || 'Internal Server Error'
       })
+    }
+  }
+  // ============================================================
+  // SUPPLIER MANAGEMENT
+  // ============================================================
+
+  /**
+   * GET /parts/:id/suppliers
+   * List semua supplier yang terdaftar untuk part ini.
+   */
+  async getSuppliers(req, res) {
+    try {
+      const { id } = req.params
+
+      const part = await SParts.findByPk(id)
+      if (!part) {
+        return helper.sendResponse(res, { status: false, code: 404, message: 'Part not found' })
+      }
+
+      const rows = await SPartSuppliers.findAll({
+        where: { part_id: id },
+        include: [{
+          model: SSuppliers,
+          as: 'supplier',
+          attributes: ['id', 'supplier_code', 'name', 'email']
+        }],
+        order: [['is_primary', 'DESC'], [{ model: SSuppliers, as: 'supplier' }, 'name', 'ASC']]
+      })
+
+      return helper.sendResponse(res, { status: true, code: 200, data: rows })
+    } catch (error) {
+      console.log('[PartsModule][getSuppliers]:', error)
+      return helper.sendResponse(res, { status: false, code: 500, message: error.message || 'Internal Server Error' })
+    }
+  }
+
+  /**
+   * POST /parts/:id/suppliers
+   * Replace seluruh daftar supplier untuk part ini sekaligus.
+   * Body: { suppliers: [{ supplier_id: 1, is_primary: true }, { supplier_id: 2, is_primary: false }] }
+   */
+  async setSuppliers(req, res) {
+    const t = await sequelize.transaction()
+    try {
+      const { id } = req.params
+
+      const schema = Joi.object({
+        suppliers: Joi.array().items(
+          Joi.object({
+            supplier_id: Joi.number().integer().required(),
+            is_primary: Joi.boolean().default(false)
+          })
+        ).min(1).required()
+      })
+
+      const validation = helper.validate(req.body, schema)
+      if (!validation.status) {
+        await t.rollback()
+        return helper.sendResponse(res, validation)
+      }
+
+      const part = await SParts.findByPk(id, { transaction: t })
+      if (!part) {
+        await t.rollback()
+        return helper.sendResponse(res, { status: false, code: 404, message: 'Part not found' })
+      }
+
+      const { suppliers } = validation.value
+
+      const primaryCount = suppliers.filter(s => s.is_primary).length
+      if (primaryCount > 1) {
+        await t.rollback()
+        return helper.sendResponse(res, { status: false, code: 400, message: 'Only one supplier can be set as primary' })
+      }
+
+      const supplierIds = suppliers.map(s => s.supplier_id)
+      const validSuppliers = await SSuppliers.findAll({
+        where: { id: { [Op.in]: supplierIds } },
+        attributes: ['id'],
+        transaction: t
+      })
+      if (validSuppliers.length !== supplierIds.length) {
+        await t.rollback()
+        return helper.sendResponse(res, { status: false, code: 400, message: 'One or more supplier_id not found' })
+      }
+
+      const oldData = await SPartSuppliers.findAll({ where: { part_id: id }, transaction: t })
+
+      await SPartSuppliers.destroy({ where: { part_id: id }, transaction: t })
+
+      const now = new Date()
+      await SPartSuppliers.bulkCreate(
+        suppliers.map(s => ({
+          part_id: Number(id),
+          supplier_id: s.supplier_id,
+          is_primary: s.is_primary ?? false,
+          created_at: now,
+          updated_at: now
+        })),
+        { transaction: t }
+      )
+
+      // Sync supplier_id di s_parts ke supplier yang is_primary
+      const primarySupplier = suppliers.find(s => s.is_primary)
+      if (primarySupplier) {
+        await part.update({ supplier_id: primarySupplier.supplier_id }, { transaction: t })
+      }
+
+      await this.logActivity(req, {
+        moduleCode: 'master-data',
+        activityCode: 'UPDATE',
+        resourceId: id,
+        oldData,
+        newData: suppliers,
+        description: `Updated suppliers for part ${part.part_number}`,
+        transaction: t
+      })
+
+      await t.commit()
+
+      return helper.sendResponse(res, { status: true, code: 200, message: 'Suppliers updated successfully' })
+    } catch (error) {
+      await t.rollback()
+      console.log('[PartsModule][setSuppliers]:', error)
+      return helper.sendResponse(res, { status: false, code: 500, message: error.message || 'Internal Server Error' })
+    }
+  }
+
+  /**
+   * PUT /parts/:id/suppliers/:sid
+   * Update is_primary untuk satu supplier di part ini.
+   * Jika is_primary di-set true, supplier lain otomatis di-unset.
+   */
+  async updateSupplier(req, res) {
+    const t = await sequelize.transaction()
+    try {
+      const { id, sid } = req.params
+
+      const schema = Joi.object({
+        is_primary: Joi.boolean().required()
+      })
+
+      const validation = helper.validate(req.body, schema)
+      if (!validation.status) {
+        await t.rollback()
+        return helper.sendResponse(res, validation)
+      }
+
+      const record = await SPartSuppliers.findOne({
+        where: { part_id: id, supplier_id: sid },
+        transaction: t
+      })
+
+      if (!record) {
+        await t.rollback()
+        return helper.sendResponse(res, { status: false, code: 404, message: 'Supplier not found for this part' })
+      }
+
+      const { is_primary } = validation.value
+
+      if (is_primary) {
+        // Unset semua supplier lain dulu
+        await SPartSuppliers.update(
+          { is_primary: false },
+          { where: { part_id: id }, transaction: t }
+        )
+        // Sync supplier_id di s_parts ke primary baru
+        await SParts.update({ supplier_id: sid }, { where: { id }, transaction: t })
+      }
+
+      await record.update({ is_primary }, { transaction: t })
+
+      await t.commit()
+
+      return helper.sendResponse(res, { status: true, code: 200, message: 'Supplier updated successfully' })
+    } catch (error) {
+      await t.rollback()
+      console.log('[PartsModule][updateSupplier]:', error)
+      return helper.sendResponse(res, { status: false, code: 500, message: error.message || 'Internal Server Error' })
+    }
+  }
+
+  /**
+   * DELETE /parts/:id/suppliers/:sid
+   * Hapus satu supplier dari part.
+   * Jika yang dihapus adalah primary dan masih ada supplier lain,
+   * supplier pertama yang tersisa otomatis dijadikan primary.
+   */
+  async removeSupplier(req, res) {
+    const t = await sequelize.transaction()
+    try {
+      const { id, sid } = req.params
+
+      const record = await SPartSuppliers.findOne({
+        where: { part_id: id, supplier_id: sid },
+        transaction: t
+      })
+
+      if (!record) {
+        await t.rollback()
+        return helper.sendResponse(res, { status: false, code: 404, message: 'Supplier not found for this part' })
+      }
+
+      const wasPrimary = record.is_primary
+      const oldData = record.toJSON()
+
+      await record.destroy({ transaction: t })
+
+      // Jika yang dihapus adalah primary, promote supplier berikutnya
+      if (wasPrimary) {
+        const next = await SPartSuppliers.findOne({
+          where: { part_id: id },
+          order: [['created_at', 'ASC']],
+          transaction: t
+        })
+        if (next) {
+          await next.update({ is_primary: true }, { transaction: t })
+          // Sync supplier_id di s_parts ke primary baru
+          await SParts.update({ supplier_id: next.supplier_id }, { where: { id }, transaction: t })
+        }
+      }
+
+      await this.logActivity(req, {
+        moduleCode: 'master-data',
+        activityCode: 'DELETE',
+        resourceId: id,
+        oldData,
+        description: `Removed supplier ${sid} from part ${id}`,
+        transaction: t
+      })
+
+      await t.commit()
+
+      return helper.sendResponse(res, { status: true, code: 200, message: 'Supplier removed successfully' })
+    } catch (error) {
+      await t.rollback()
+      console.log('[PartsModule][removeSupplier]:', error)
+      return helper.sendResponse(res, { status: false, code: 500, message: error.message || 'Internal Server Error' })
     }
   }
 }

@@ -15,7 +15,7 @@ const {
   sequelize,
 } = db;
 
-const ALLOWED_DETAIL_TYPES = ['material', 'phantom', 'byproduct', 'co-product'];
+const ALLOWED_DETAIL_TYPES = ['RAW', 'WIP', 'PRODUCT'];
 
 const BOM_HEADER_INCLUDE = [
   { model: SParts,                  as: 'parent_part',       attributes: ['id', 'part_number', 'part_name', 'part_type_code'] },

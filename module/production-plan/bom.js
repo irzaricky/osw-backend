@@ -15,8 +15,8 @@ const {
   sequelize,
 } = db;
 
-
 const ALLOWED_DETAIL_TYPES = ['material', 'phantom', 'byproduct', 'co-product'];
+
 const BOM_HEADER_INCLUDE = [
   { model: SParts,                  as: 'parent_part',       attributes: ['id', 'part_number', 'part_name', 'part_type_code'] },
   { model: SUom,                    as: 'uom',               attributes: ['id', 'code', 'name'] },
@@ -197,11 +197,14 @@ class BomModule extends BaseModule {
 
       // Total Components / Part
       const bomIds = rows.map((r) => r.id);
-      const detailCounts = await SBomDetails.findAll({
-        where: { bom_id: bomIds, deleted_at: null },
-        attributes: ['bom_id', [sequelize.fn('COUNT', sequelize.col('id')), 'component_count']],
-        group: ['bom_id'],
-      });
+      const detailCounts = bomIds.length
+        ? await SBomDetails.findAll({
+            where: { bom_id: bomIds, deleted_at: null },
+            attributes: ['bom_id', [sequelize.fn('COUNT', sequelize.col('id')), 'component_count']],
+            group: ['bom_id'],
+          })
+        : [];
+
       const countMap = {};
       detailCounts.forEach((dc) => {
         countMap[dc.bom_id] = parseInt(dc.get('component_count'), 10);
@@ -254,9 +257,6 @@ class BomModule extends BaseModule {
   //
   // POST /boms
   // Body: { parent_part_id, description?, uom_id?, notes?, details?: [...] }
-  //
-  // Details are optional on create — user can add/edit them later via PUT /boms/:id.
-  // All header + detail data is saved in one transaction.
 
   async create(req, res) {
     const t = await sequelize.transaction();
@@ -277,6 +277,13 @@ class BomModule extends BaseModule {
 
       const { description, parent_part_id, uom_id, notes, details } = validation.value;
 
+      // Validate parent_part exists
+      const parentPart = await SParts.findByPk(parent_part_id, { transaction: t });
+      if (!parentPart) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 400, error: 'Parent part not found' });
+      }
+
       const bom_number = await generateBomNumber(parent_part_id);
 
       const draftStatus = await RefBomDocumentStatus.findOne({
@@ -284,6 +291,11 @@ class BomModule extends BaseModule {
         order: [['sequence', 'ASC']],
         transaction: t,
       });
+
+      if (!draftStatus) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 500, error: 'Document status DRAFT not configured' });
+      }
 
       // ── Handle soft-deleted BOM with same number ──
       let bom;
@@ -300,7 +312,7 @@ class BomModule extends BaseModule {
         await existing.update({
           description, parent_part_id, uom_id, notes,
           bom_version: 1,
-          doc_status_id: draftStatus?.id ?? null,
+          doc_status_id: draftStatus.id,
           activation_status_id: null,
           reject_reason: null,
           approved_by: null,
@@ -319,7 +331,7 @@ class BomModule extends BaseModule {
         bom = await SBoms.create({
           bom_number, description, parent_part_id, uom_id, notes,
           bom_version: 1,
-          doc_status_id: draftStatus?.id ?? null,
+          doc_status_id: draftStatus.id,
           created_by: req.user?.id ?? null,
         }, { transaction: t });
 
@@ -480,9 +492,6 @@ class BomModule extends BaseModule {
   }
 
   // ── Detail Management (single-row operations) ───────────────────────────────
-  //
-  // Tersedia sebagai alternatif jika FE ingin operasi baris per baris,
-  // tapi flow utama cukup lewat PUT /boms/:id dengan array details.
 
   async addDetail(req, res) {
     const t = await sequelize.transaction();
@@ -501,6 +510,16 @@ class BomModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: bom.code, error: bom.error });
       }
 
+      // Check for duplicate part_id in existing details
+      const existingDetail = await SBomDetails.findOne({
+        where: { bom_id: id, part_id: validation.value.part_id, deleted_at: null },
+        transaction: t,
+      });
+      if (existingDetail) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 400, error: `part_id ${validation.value.part_id} already exists in this BOM` });
+      }
+
       const detailValidation = await validateDetails([validation.value], id, bom.data.parent_part_id, t);
       if (!detailValidation.ok) {
         await t.rollback();
@@ -509,11 +528,86 @@ class BomModule extends BaseModule {
 
       const detail = await SBomDetails.create({ bom_id: id, ...validation.value }, { transaction: t });
 
+      await this.logActivity(req, {
+        moduleCode: 'bom', activityCode: 'UPDATE',
+        resourceId: bom.data.id, newData: detail,
+        description: `Added detail to BOM ${bom.data.bom_number}`, transaction: t,
+      });
+
       await t.commit();
       return helper.sendResponse(res, { status: true, code: 201, message: 'Detail added', data: detail });
     } catch (error) {
       await t.rollback();
       console.log('[BomModule][addDetail]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
+
+  // ── Bulk Replace Details ────────────────────────────────────────────────────
+  //
+  // PUT /boms/:id/details/replace
+  // Body: { details: [...] }
+  // Used for drag-to-reorder saves — replaces ALL details at once.
+
+  async replaceDetails(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id } = req.params;
+
+      const schema = Joi.object({
+        details: Joi.array().items(DETAIL_SCHEMA).required().min(0),
+      });
+
+      const validation = helper.validate(req.body, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return helper.sendResponse(res, validation);
+      }
+
+      const bom = await this._getBomEditable(id, t);
+      if (!bom.ok) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: bom.code, error: bom.error });
+      }
+
+      const { details } = validation.value;
+
+      if (details.length) {
+        const detailValidation = await validateDetails(details, id, bom.data.parent_part_id, t);
+        if (!detailValidation.ok) {
+          await t.rollback();
+          return helper.sendResponse(res, { status: false, code: 400, error: detailValidation.error });
+        }
+      }
+
+      // Hard-delete all existing, then bulk insert
+      await SBomDetails.destroy({ where: { bom_id: id }, transaction: t, force: true });
+
+      let insertedDetails = [];
+      if (details.length) {
+        const rows = details.map((d, i) => ({
+          ...d,
+          bom_id: id,
+          sequence: d.sequence ?? i,
+        }));
+        insertedDetails = await SBomDetails.bulkCreate(rows, { transaction: t });
+      }
+
+      await this.logActivity(req, {
+        moduleCode: 'bom', activityCode: 'UPDATE',
+        resourceId: bom.data.id, newData: { detail_count: insertedDetails.length },
+        description: `Replaced all details on BOM ${bom.data.bom_number} (${insertedDetails.length} rows)`, transaction: t,
+      });
+
+      await t.commit();
+      return helper.sendResponse(res, {
+        status: true, code: 200,
+        message: `Details replaced (${insertedDetails.length} rows)`,
+        data: { bom_id: Number(id), detail_count: insertedDetails.length },
+      });
+    } catch (error) {
+      await t.rollback();
+      console.log('[BomModule][replaceDetails]:', error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
@@ -542,6 +636,18 @@ class BomModule extends BaseModule {
       if (!detail) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'Detail not found' });
+      }
+
+      // If part_id is changing, check for duplicates among other rows
+      if (validation.value.part_id !== detail.part_id) {
+        const duplicate = await SBomDetails.findOne({
+          where: { bom_id: id, part_id: validation.value.part_id, deleted_at: null, id: { [Op.ne]: detail_id } },
+          transaction: t,
+        });
+        if (duplicate) {
+          await t.rollback();
+          return helper.sendResponse(res, { status: false, code: 400, error: `part_id ${validation.value.part_id} already exists in this BOM` });
+        }
       }
 
       const detailValidation = await validateDetails([validation.value], id, bom.data.parent_part_id, t);
@@ -590,6 +696,12 @@ class BomModule extends BaseModule {
 
       await detail.destroy({ transaction: t });
 
+      await this.logActivity(req, {
+        moduleCode: 'bom', activityCode: 'UPDATE',
+        resourceId: bom.data.id,
+        description: `Deleted BOM detail #${detail_id} from ${bom.data.bom_number}`, transaction: t,
+      });
+
       await t.commit();
       return helper.sendResponse(res, { status: true, code: 200, message: 'Detail deleted' });
     } catch (error) {
@@ -617,9 +729,9 @@ class BomModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
 
-      if (bom.doc_status?.code !== 'REJECTED' && bom.doc_status?.code !== 'PENDING_APPROVAL') {
+      if (!['REJECTED', 'PENDING_APPROVAL'].includes(bom.doc_status?.code)) {
         await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 400, error: 'Only Rejected BOMs can be returned to Draft' });
+        return helper.sendResponse(res, { status: false, code: 400, error: 'Only Rejected or Pending Approval BOMs can be returned to Draft' });
       }
 
       const draftStatus = await RefBomDocumentStatus.findOne({
@@ -643,7 +755,7 @@ class BomModule extends BaseModule {
       });
     } catch (error) {
       await t.rollback();
-      console.log('[BomModule][returnDraft]:', error);
+      console.log('[BomModule][returnToDraft]:', error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
@@ -978,22 +1090,19 @@ class BomModule extends BaseModule {
 
       if (bom.details?.length) {
         const cloned = bom.details.map((detail) => ({
-          bom_id: newBom.id,
-      
-          part_id: detail.part_id,
-          qty_required: detail.qty_required,
-          level: detail.level ?? null,
-          type: detail.type ?? null,
-          notes: detail.notes ?? null,
-          uom_id: detail.uom_id ?? null,
+          bom_id:           newBom.id,
+          part_id:          detail.part_id,
+          qty_required:     detail.qty_required,
+          level:            detail.level ?? null,
+          type:             detail.type ?? null,
+          notes:            detail.notes ?? null,
+          uom_id:           detail.uom_id ?? null,
           scrap_percentage: detail.scrap_percentage ?? 0,
-          sequence: detail.sequence ?? 0,
-          child_bom_id: detail.child_bom_id ?? null,
+          sequence:         detail.sequence ?? 0,
+          child_bom_id:     detail.child_bom_id ?? null,
         }));
-      
-        await SBomDetails.bulkCreate(cloned, {
-          transaction: t,
-        });
+
+        await SBomDetails.bulkCreate(cloned, { transaction: t });
       }
 
       await this.logActivity(req, {

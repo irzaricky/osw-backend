@@ -17,14 +17,32 @@ class ForecastModule extends BaseModule {
   async list(req) {
     try {
       const params = req.query;
-      const { start_date, end_date, customer_id, status, search, forecast_type } = params;
-      const { limit, page, offset } = helper.getPagination(params);
+      const { start_date, end_date, customer_id, status, search, forecast_type, is_archive } = params;
+
+      let limit, page, offset;
+      if (is_archive === 'false') {
+        limit = undefined;
+        page = 1;
+        offset = undefined;
+      } else {
+        const pagination = helper.getPagination(params);
+        limit = pagination.limit;
+        page = pagination.page;
+        offset = pagination.offset;
+      }
 
       const where = {};
 
       if (start_date && end_date) {
         where.start_period = { [Op.gte]: start_date };
         where.end_period = { [Op.lte]: end_date };
+      }
+
+      const currentYearStart = `${dayjs().year()}-01-01`;
+      if (is_archive === 'true') {
+        where.start_period = { ...(where.start_period || {}), [Op.lt]: currentYearStart };
+      } else if (is_archive === 'false') {
+        where.start_period = { ...(where.start_period || {}), [Op.gte]: currentYearStart };
       }
 
       if (customer_id) {
@@ -85,6 +103,19 @@ class ForecastModule extends BaseModule {
         offset,
         order: [['customer_id', 'ASC'], ['status', 'ASC']]
       });
+
+      if (is_archive === 'false') {
+        return {
+          status: true,
+          data: {
+            rows,
+            count,
+            page: 1,
+            limit: count,
+            totalPages: 1
+          }
+        };
+      }
 
       return {
         status: true,

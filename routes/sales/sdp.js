@@ -25,6 +25,10 @@ router.post('/', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, await sdp.create(req));
 });
 
+router.get('/max-vehicle-capacity', session.sessionChecker, async (req, res) => {
+  return helper.sendResponse(res, await sdp.getMaxVehicleCapacity(req));
+});
+
 router.get('/:id', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, await sdp.detail(req));
 });

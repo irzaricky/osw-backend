@@ -10,7 +10,8 @@ const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
   SWarehouses, SDocks, SCustomers, SParts, SUsers, SUserDetail,
-  SWarehouseAreas, RefWarehouseCategories, SPackages
+  SWarehouseAreas, RefWarehouseCategories, SPackages,
+  SVehicles, RefVehicleType
 } = db;
 
 class SDPModule extends BaseModule {
@@ -103,6 +104,19 @@ class SDPModule extends BaseModule {
                   AND dpd.deleted_at IS NULL
               )`),
               'total_planned_qty'
+            ],
+            [
+              db.sequelize.literal(`(
+                SELECT COALESCE(COUNT(ws.id) * COALESCE(MAX(pk.capacity), 1), 0)
+                FROM t_warehouse_stock ws
+                INNER JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+                INNER JOIN t_part_labels pl ON pl.id = wil.label_id AND pl.deleted_at IS NULL
+                INNER JOIN s_parts p ON p.id = pl.part_id AND p.deleted_at IS NULL
+                LEFT JOIN s_packages pk ON pk.id = p.package_id AND pk.deleted_at IS NULL
+                WHERE p.id = "SSalesPurchaseOrderDetails"."part_id"
+                  AND ws.deleted_at IS NULL
+              )`),
+              'stock_qty'
             ]
           ]
         },
@@ -117,7 +131,14 @@ class SDPModule extends BaseModule {
           {
             model: SParts,
             as: 'part',
-            attributes: ['id', 'part_number', 'part_name']
+            attributes: ['id', 'part_number', 'part_name', 'package_id'],
+            include: [
+              {
+                model: SPackages,
+                as: 'package',
+                attributes: ['id', 'name', 'capacity', 'load']
+              }
+            ]
           }
         ]
       });
@@ -126,11 +147,87 @@ class SDPModule extends BaseModule {
         .map(d => {
           const json = d.toJSON();
           const totalPlanned = parseInt(json.total_planned_qty) || 0;
-          return { ...json, total_planned_qty: totalPlanned, remaining_qty: json.ordered_qty - totalPlanned };
+          const stockQty = parseInt(json.stock_qty) || 0;
+          return {
+            ...json,
+            total_planned_qty: totalPlanned,
+            remaining_qty: json.ordered_qty - totalPlanned,
+            stock_qty: stockQty
+          };
         })
         .filter(d => d.remaining_qty > 0);
 
       return { status: true, data: results };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async _calculateTotalLoad(details, transaction) {
+    let totalLoad = 0;
+    for (const item of details) {
+      const spoDetail = await SSalesPurchaseOrderDetails.findByPk(item.spo_detail_id, {
+        include: [{
+          model: SParts,
+          as: 'part',
+          include: [{
+            model: SPackages,
+            as: 'package'
+          }]
+        }],
+        transaction
+      });
+
+      if (spoDetail && spoDetail.part) {
+        const part = spoDetail.part;
+        const pkg = part.package;
+        const planned_qty = item.planned_qty;
+
+        if (pkg && pkg.capacity && pkg.capacity > 0 && pkg.load !== null && pkg.load !== undefined) {
+          const num_packages = Math.ceil(planned_qty / pkg.capacity);
+          totalLoad += num_packages * pkg.load;
+        } else {
+          totalLoad += planned_qty;
+        }
+      } else {
+        totalLoad += item.planned_qty;
+      }
+    }
+    return totalLoad;
+  }
+
+  async _getMaxCapacityValue(transaction) {
+    const maxActive = await SVehicles.findOne({
+      where: { status: true },
+      include: [{
+        model: RefVehicleType,
+        as: 'vehicle_type',
+        required: true
+      }],
+      order: [[{ model: RefVehicleType, as: 'vehicle_type' }, 'load_capacity', 'DESC']],
+      transaction
+    });
+
+    let maxCapacity = 100;
+    if (maxActive) {
+      maxCapacity = maxActive.vehicle_type.load_capacity;
+    } else {
+      const maxType = await RefVehicleType.findOne({
+        order: [['load_capacity', 'DESC']],
+        transaction
+      });
+      if (maxType) {
+        maxCapacity = maxType.load_capacity;
+      }
+    }
+    return maxCapacity;
+  }
+
+  async getMaxVehicleCapacity(req) {
+    try {
+      const maxCapacity = await this._getMaxCapacityValue();
+      return { status: true, data: maxCapacity };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
@@ -256,6 +353,18 @@ class SDPModule extends BaseModule {
       if (!validation.status) { await t.rollback(); return validation; }
 
       const { scheduled_date, time_start, time_end, warehouse_id, dock_id, destination, details } = validation.value;
+
+      // Check total planned load capacity against max vehicle capacity
+      const totalLoad = await this._calculateTotalLoad(details, t);
+      const maxCapacity = await this._getMaxCapacityValue(t);
+      if (totalLoad > maxCapacity) {
+        await t.rollback();
+        return {
+          status: false,
+          message: `Total planned load (${totalLoad}) exceeds the maximum vehicle capacity (${maxCapacity})`,
+          code: 400
+        };
+      }
 
       // Validate time order
       if (time_start >= time_end) {
@@ -464,6 +573,18 @@ class SDPModule extends BaseModule {
         where: { delivery_plan_id: sdp.id },
         transaction: t
       });
+
+      // Check total planned load capacity against max vehicle capacity
+      const totalLoad = await this._calculateTotalLoad(detailsToValidate, t);
+      const maxCapacity = await this._getMaxCapacityValue(t);
+      if (totalLoad > maxCapacity) {
+        await t.rollback();
+        return {
+          status: false,
+          message: `Total planned load (${totalLoad}) exceeds the maximum vehicle capacity (${maxCapacity})`,
+          code: 400
+        };
+      }
 
       for (const item of detailsToValidate) {
         const spoDetail = await SSalesPurchaseOrderDetails.findByPk(item.spo_detail_id, {

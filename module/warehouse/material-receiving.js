@@ -13,6 +13,7 @@ const {
   SSuppliers,
   SPackages,
   SParts,
+  SDefects,
   SWarehouses,
   SDocks,
   SMaterialPurchaseOrder,
@@ -1457,7 +1458,7 @@ class MaterialReceivingModule extends BaseModule {
             model: TMaterialReceivingItemLabel,
             as: 'labels',
             required: false,
-            attributes: ['id', 'is_quality', 'quality_checked_at'],
+            attributes: ['id', 'is_quantity', 'is_quality', 'quality_checked_at'],
             include: [
               {
                 model: TPartLabels,
@@ -1474,7 +1475,15 @@ class MaterialReceivingModule extends BaseModule {
                     model: TNgTicketQuality,
                     as: 'qualities',
                     required: false,
-                    attributes: ['id', 'defect_id', 'image']
+                    attributes: ['id', 'image'],
+                    include: [
+                      {
+                        model: SDefects,
+                        as: 'defect',
+                        required: false,
+                        attributes: ['id', 'name']
+                      }
+                    ]
                   }
                 ]
               }
@@ -1536,7 +1545,8 @@ class MaterialReceivingModule extends BaseModule {
               defects: (item.ng_ticket?.qualities || []).map(
                 (quality) => ({
                   id: quality.id,
-                  defect_id: quality.defect_id,
+                  defect_id: quality.defect?.id || null,
+                  defect_name: quality.defect?.name || null,
                   image: quality.image
                 })
               )

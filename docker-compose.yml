@@ -2,17 +2,20 @@ services:
   db-postgres:
     image: postgres:16-alpine
     container_name: osw-postgres
+    profiles: ["local-db"]
     restart: always
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASS:-password} 
+      POSTGRES_PASSWORD: ${DB_PASS:-password}
       POSTGRES_DB: ${DB_NAME:-osw_backend}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - osw-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
       interval: 5s
       timeout: 5s
       retries: 5
@@ -26,28 +29,30 @@ services:
     depends_on:
       db-postgres:
         condition: service_healthy
+        required: false
     environment:
       SITE_TITLE: Order System Warehouse CI/CD
       SITE_URL: https://be-osw.splatza.my.id/
       APP_DEBUG: true
       PORT: 3001
-      DB_HOST: db-postgres
-      DB_USER: postgres
-      DB_PASS: password
-      DB_NAME: osw_backend
-      DB_PORT: 5432
+      DB_HOST: ${DB_HOST:-db-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASS: ${DB_PASS:-password}
+      DB_NAME: ${DB_NAME:-osw_backend}
+      DB_PORT: ${DB_PORT:-5432}
       FRONTEND_URL: https://fe-osw.splatza.my.id/
     networks:
       - osw-network
     ports:
-      - "3001:3001"
+      - 3001:3001
 
   cloudbeaver:
     image: dbeaver/cloudbeaver:latest
     container_name: osw-cloudbeaver
+    profiles: ["local-db"]
     restart: always
     ports:
-      - "8978:8978"
+      - 8978:8978
     volumes:
       - cloudbeaver_data:/opt/cloudbeaver/workspace
     networks:
@@ -59,7 +64,9 @@ services:
 networks:
   osw-network:
     external: true
+  dokploy-network:
+    external: true
 
 volumes:
-  postgres_data:
-  cloudbeaver_data:
+  postgres_data: null
+  cloudbeaver_data: null

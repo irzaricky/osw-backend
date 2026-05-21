@@ -56,7 +56,11 @@ export default (sequelize) => {
     calculation_version: {
       type: DataTypes.INTEGER,
       defaultValue: 1
-    }
+    },
+    total_capacity_units: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
   }, {
     sequelize,
     modelName: 'SProductionPlanCapacityResult',

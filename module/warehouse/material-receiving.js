@@ -13,6 +13,7 @@ const {
   SSuppliers,
   SPackages,
   SParts,
+  SDefects,
   SWarehouses,
   SDocks,
   SMaterialPurchaseOrder,
@@ -491,6 +492,85 @@ class MaterialReceivingModule extends BaseModule {
         code: 500
       };
     }
+  }
+
+  async updateMdoStatus(
+    materialReceivingId,
+    transaction = null
+  ) {
+
+    const items =
+      await TMaterialReceivingItem.findAll({
+        where: {
+          mr_id:
+            materialReceivingId
+        },
+
+        attributes: [
+          'quantity_checked_at',
+          'quality_checked_at'
+        ],
+
+        transaction
+      });
+
+    if (!items.length) {
+      return;
+    }
+
+    const allQtyChecked =
+      items.every(
+        (item) =>
+          item.quantity_checked_at
+      );
+
+    const allQualityChecked =
+      items.every(
+        (item) =>
+          item.quality_checked_at
+      );
+
+    const hasQtyChecking =
+      items.some(
+        (item) =>
+          item.quantity_checked_at
+      );
+
+    const hasQualityChecking =
+      items.some(
+        (item) =>
+          item.quality_checked_at
+      );
+
+    let status_id = 1; // Arrived
+
+    if (hasQtyChecking) {
+      status_id = 2; // Quantity Checking
+    }
+
+    if (hasQualityChecking) {
+      status_id = 3; // Quality Checking
+    }
+
+    if (
+      allQtyChecked &&
+      allQualityChecked
+    ) {
+      status_id = 4; // Waiting GR Approval
+    }
+
+    await TMaterialReceiving.update(
+      {
+        status_id
+      },
+      {
+        where: {
+          id: materialReceivingId
+        },
+
+        transaction
+      }
+    );
   }
 
   async progress(req) {
@@ -1230,7 +1310,7 @@ class MaterialReceivingModule extends BaseModule {
         where: {
           mdo_detail_id
         },
-        attributes: ['id', 'quantity_checked', 'quantity_checked_at'],
+        attributes: ['id', 'mr_id', 'quantity_checked', 'quantity_checked_at'],
         include: [
           {
             model: TMaterialReceivingItemLabel,
@@ -1366,6 +1446,8 @@ class MaterialReceivingModule extends BaseModule {
         }
       );
 
+      await this.updateMdoStatus(materialReceivingItem.mr_id, t);
+
       await t.commit();
 
       return {
@@ -1457,7 +1539,7 @@ class MaterialReceivingModule extends BaseModule {
             model: TMaterialReceivingItemLabel,
             as: 'labels',
             required: false,
-            attributes: ['id', 'is_quality', 'quality_checked_at'],
+            attributes: ['id', 'is_quantity', 'is_quality', 'quality_checked_at'],
             include: [
               {
                 model: TPartLabels,
@@ -1474,7 +1556,15 @@ class MaterialReceivingModule extends BaseModule {
                     model: TNgTicketQuality,
                     as: 'qualities',
                     required: false,
-                    attributes: ['id', 'defect_id', 'image']
+                    attributes: ['id', 'image'],
+                    include: [
+                      {
+                        model: SDefects,
+                        as: 'defect',
+                        required: false,
+                        attributes: ['id', 'name']
+                      }
+                    ]
                   }
                 ]
               }
@@ -1536,7 +1626,8 @@ class MaterialReceivingModule extends BaseModule {
               defects: (item.ng_ticket?.qualities || []).map(
                 (quality) => ({
                   id: quality.id,
-                  defect_id: quality.defect_id,
+                  defect_id: quality.defect?.id || null,
+                  defect_name: quality.defect?.name || null,
                   image: quality.image
                 })
               )
@@ -2028,7 +2119,7 @@ class MaterialReceivingModule extends BaseModule {
         where: {
           mdo_detail_id
         },
-        attributes: ['id', 'quality_checked', 'quality_checked_at'],
+        attributes: ['id', 'mr_id', 'quality_checked', 'quality_checked_at'],
         include: [
           {
             model: TMaterialReceivingItemLabel,
@@ -2122,6 +2213,8 @@ class MaterialReceivingModule extends BaseModule {
           transaction: t
         }
       );
+
+      await this.updateMdoStatus(materialReceivingItem.mr_id, t);
 
       await t.commit();
 

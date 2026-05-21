@@ -6,6 +6,7 @@ export default (sequelize) => {
       SStations.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
       SStations.belongsTo(models.RefStationTypes, { foreignKey: 'station_type_id', as: 'station_type' });
       SStations.hasMany(models.SStationJobs, { foreignKey: 'station_id', as: 'station_jobs' });
+      SStations.hasMany(models.SPartRoutingDetails, { foreignKey: 'station_id', as: 'routing_details' });
     }
   }
 

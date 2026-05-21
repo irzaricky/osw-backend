@@ -12,6 +12,7 @@ export default (sequelize) => {
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'approved_by', as: 'approver' });
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'rejected_by', as: 'rejector' });
+      SProductionPlan.belongsTo(models.SLines, { foreignKey: 'bottleneck_line_id', as: 'bottleneck_line' });
     }
   }
 
@@ -74,7 +75,10 @@ export default (sequelize) => {
     },
     rejection_reason: {
       type: DataTypes.TEXT
-    }
+    },
+    bottleneck_line_id: {
+      type: DataTypes.INTEGER,
+    },
   }, {
     sequelize,
     modelName: 'SProductionPlan',

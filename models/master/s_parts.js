@@ -20,6 +20,7 @@ export default (sequelize) => {
 
       // Part belongs to UOM
       SParts.belongsTo(models.SUom, { foreignKey: 'uom_id', as: 'uom' });
+      SParts.hasMany(models.SPartRoutings, { foreignKey: 'part_id', as: 'routings' });
     }
   }
 

@@ -101,7 +101,9 @@ class ForecastModule extends BaseModule {
         include,
         limit,
         offset,
-        order: [['customer_id', 'ASC'], ['status', 'ASC']]
+        order: is_archive === 'true'
+          ? [['start_period', 'DESC'], ['forecast_number', 'DESC']]
+          : [['customer_id', 'ASC'], ['status', 'ASC']]
       });
 
       if (is_archive === 'false') {

@@ -5,7 +5,7 @@
   "scripts": {
     "nodemon": "nodemon --expose-gc ./bin/www",
     "dev-win": "set DEBUG=express:* & nodemon  --expose-gc ./bin/www",
-    "dev": "DEBUG=express:* nodemon --expose-gc ./bin/www",
+    "dev": "cross-env DEBUG=express:* nodemon --expose-gc ./bin/www",
     "start": "node --expose-gc ./bin/www",
     "db:migrate": "sequelize-cli db:migrate",
     "db:migrate:undo": "sequelize-cli db:migrate:undo",
@@ -42,5 +42,8 @@
     "sharp": "^0.34.5",
     "xlsx": "^0.18.5",
     "xlsx-populate": "^1.21.0"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }

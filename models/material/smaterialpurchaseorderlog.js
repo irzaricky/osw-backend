@@ -15,7 +15,8 @@ export default (sequelize) => {
   }
   SMaterialPurchaseOrderLog.init({
     mpo_id: DataTypes.INTEGER,
-    action: DataTypes.STRING
+    action: DataTypes.STRING,
+    notes: DataTypes.TEXT
   }, {
     sequelize,
     modelName: 'SMaterialPurchaseOrderLog',

@@ -10,6 +10,7 @@ export default (sequelize) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
+      TMaterialDeliveryOrderDetail.belongsTo(models.SMaterialDeliveryOrder, { foreignKey: 'mdo_id', as: 'mdo' }); // ← BARU: inverse dari hasMany di SMaterialDeliveryOrder
       TMaterialDeliveryOrderDetail.belongsTo(models.SParts, { foreignKey: 'part_id', as: 'part' });
       TMaterialDeliveryOrderDetail.hasOne(models.TMaterialReceivingItem, { foreignKey: 'mdo_detail_id', as: 'material_receiving_item' });
     }

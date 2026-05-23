@@ -197,6 +197,70 @@ async function getWarehouseStockByParts(partIds) {
   return stockMap;
 }
 
+// ============================================================
+// HELPER — BOM Explosion rekursif
+// Menelusuri child_bom_id ke bawah sampai ketemu part RAW.
+// Part bertipe WIP / PRODUCT / dsb. di-skip, tapi kalau mereka
+// punya child_bom_id maka level berikutnya tetap ditelusuri.
+//
+// Parameter:
+//   bomId        — ID BOM yang ditelusuri
+//   qtyMultiplier — faktor pengali dari level parent
+//   visited      — Set<bomId> untuk deteksi circular reference
+//   result       — Map<part_id → { ...fields, qty }> akumulasi
+// ============================================================
+async function explodeBom(bomId, qtyMultiplier = 1, visited = new Set(), result = new Map()) {
+  // Guard: circular reference
+  if (visited.has(bomId)) return result;
+  visited.add(bomId);
+
+  const details = await SBomDetails.findAll({
+    where: { bom_id: bomId },
+    attributes: ['id', 'bom_id', 'part_id', 'qty_required', 'scrap_percentage', 'child_bom_id'],
+    include: [
+      {
+        model: SParts,
+        as: 'part',
+        attributes: ['id', 'part_number', 'part_name', 'part_type_code', 'safety_stock', 'lead_time_days', 'weight'],
+        include: [{ model: SUom, as: 'uom', attributes: ['id', 'name', 'code'] }],
+      },
+    ],
+  });
+
+  for (const detail of details) {
+    const rawPart = detail.part;
+    if (!rawPart) continue;
+
+    const qtyRequired = parseFloat(detail.qty_required || 0);
+    const scrapPct = parseFloat(detail.scrap_percentage || 0);
+    // qty efektif di level ini (sudah memperhitungkan scrap)
+    const effectiveQty = qtyRequired * (1 + scrapPct / 100) * qtyMultiplier;
+
+    const typeCode = (rawPart.part_type_code || '').toUpperCase();
+
+    if (typeCode === 'RAW') {
+      // ✅ Ketemu RAW — akumulasikan ke result
+      const existing = result.get(rawPart.id);
+      if (existing) {
+        existing.qty += effectiveQty;
+      } else {
+        result.set(rawPart.id, {
+          part_id: rawPart.id,
+          bom_id: bomId,          // BOM langsung yang mengandung komponen ini
+          qty: effectiveQty,
+          part: rawPart.toJSON(),
+        });
+      }
+    } else if (detail.child_bom_id) {
+      // ⬇️  Bukan RAW tapi punya child BOM — telusuri lebih dalam
+      await explodeBom(detail.child_bom_id, effectiveQty, visited, result);
+    }
+    // Part bukan RAW dan tidak punya child_bom_id → di-skip
+  }
+
+  return result;
+}
+
 class MRPModule extends BaseModule {
 
   // ============================================================
@@ -276,9 +340,17 @@ class MRPModule extends BaseModule {
 
   // ============================================================
   // [GET] /mrp/sales-plan/:spr_id/load
-  // Load data Sales Plan + BOM details + warehouse stock
-  // Dipanggil saat Staff memilih Sales Plan di form Create MRP
-  // — otomatis muncul produk, BOM, dan stok gudang
+  // Load data Sales Plan + BOM Explosion rekursif + warehouse stock
+  // Dipanggil saat Staff memilih Sales Plan di form Create MRP.
+  //
+  // Alur BOM Explosion:
+  //   1. Cari BOM utama (top-level) berdasarkan parent_part_id dari SPR.
+  //   2. Telusuri setiap BOM secara rekursif via child_bom_id.
+  //   3. Kumpulkan HANYA part bertipe RAW (skip WIP/PRODUCT/dll).
+  //   4. Akumulasi qty dengan memperhitungkan scrap & qty produk.
+  //   5. Response menyertakan `primary_bom` (BOM utama) untuk
+  //      ditampilkan sebagai field disabled di frontend.
+  //
   // Aktor: Staff Material
   // ============================================================
   async loadSalesPlanData(req) {
@@ -291,7 +363,7 @@ class MRPModule extends BaseModule {
       });
       if (!spr) return { status: false, message: 'Sales Plan not found', code: 404 };
 
-      // ── STEP 2: Ambil SPR details → kumpulkan part_id (tipe PRODUCT) ──
+      // ── STEP 2: Ambil SPR details → kumpulkan part_id produk ──────
       const sprDetails = await SSalesPurchaseRequestDetails.findAll({
         where: { spr_id },
         include: [
@@ -308,6 +380,7 @@ class MRPModule extends BaseModule {
           status: true,
           data: {
             spr: spr.toJSON(),
+            primary_bom: null,
             products: [],
             suggestedDetails: [],
             warehouseStock: [],
@@ -324,47 +397,35 @@ class MRPModule extends BaseModule {
       }
       const productPartIds = Object.keys(productQtyMap).map(Number);
 
-      // ── STEP 3: Cari BOM yang parent_part_id ada di daftar product part_id ──
-      // s_boms.parent_part_id = part_id dari SPR detail
-      // Prioritas: BOM Approved (doc_status_id=3) & Active (activation_status_id=1)
-      // Fallback: BOM Approved tanpa filter activation, lalu semua BOM aktif
+      // ── STEP 3: Cari BOM utama per produk ────────────────────────
+      // Prioritas: Approved (doc_status_id=3) + Active (activation_status_id=1)
+      // Fallback 1: Approved saja
+      // Fallback 2: BOM apapun yang ada (dev/data belum lengkap)
       let boms = await SBoms.findAll({
-        where: {
-          parent_part_id: { [Op.in]: productPartIds },
-          doc_status_id: 3,       // Approved
-          activation_status_id: 1 // Active
-        },
-        attributes: ['id', 'bom_number', 'parent_part_id'],
-        order: [['id', 'DESC']], // ambil versi terbaru jika ada duplikat
+        where: { parent_part_id: { [Op.in]: productPartIds }, doc_status_id: 3, activation_status_id: 1 },
+        attributes: ['id', 'bom_number', 'bom_version', 'description', 'parent_part_id'],
+        order: [['id', 'DESC']],
       });
 
-      // Fallback 1: ada BOM Approved tapi activation_status berbeda
       if (boms.length === 0) {
         boms = await SBoms.findAll({
-          where: {
-            parent_part_id: { [Op.in]: productPartIds },
-            doc_status_id: 3,
-          },
-          attributes: ['id', 'bom_number', 'parent_part_id'],
+          where: { parent_part_id: { [Op.in]: productPartIds }, doc_status_id: 3 },
+          attributes: ['id', 'bom_number', 'bom_version', 'description', 'parent_part_id'],
           order: [['id', 'DESC']],
         });
       }
 
-      // Fallback 2: tidak ada BOM Approved sama sekali, ambil semua BOM yang ada
-      // (berguna di environment development / data belum lengkap)
       if (boms.length === 0) {
         boms = await SBoms.findAll({
-          where: {
-            parent_part_id: { [Op.in]: productPartIds },
-          },
-          attributes: ['id', 'bom_number', 'parent_part_id'],
+          where: { parent_part_id: { [Op.in]: productPartIds } },
+          attributes: ['id', 'bom_number', 'bom_version', 'description', 'parent_part_id'],
           order: [['id', 'DESC']],
         });
       }
 
       const skippedProducts = [];
+
       if (boms.length === 0) {
-        // Semua produk tidak punya BOM Approved
         for (const d of sprDetails) {
           skippedProducts.push({ part_number: d.part?.part_number, reason: 'No approved BOM' });
         }
@@ -372,6 +433,7 @@ class MRPModule extends BaseModule {
           status: true,
           data: {
             spr: spr.toJSON(),
+            primary_bom: null,
             products: sprDetails.map((d) => ({
               part_id: d.part_id,
               part_number: d.part?.part_number,
@@ -387,7 +449,7 @@ class MRPModule extends BaseModule {
         };
       }
 
-      // Map: parent_part_id → bom (ambil BOM pertama per produk)
+      // Map: parent_part_id → bom utama (ambil BOM pertama/terbaru per produk)
       const bomByProductPartId = {};
       for (const bom of boms) {
         if (!bomByProductPartId[bom.parent_part_id]) {
@@ -395,7 +457,7 @@ class MRPModule extends BaseModule {
         }
       }
 
-      // Produk yang tidak punya BOM
+      // Produk yang tidak punya BOM — catat ke skippedProducts
       for (const partId of productPartIds) {
         if (!bomByProductPartId[partId]) {
           const d = sprDetails.find((s) => s.part_id === partId);
@@ -403,80 +465,95 @@ class MRPModule extends BaseModule {
         }
       }
 
-      // Kumpulkan semua bom_id yang relevan
-      const bomIds = boms.map((b) => b.id);
+      // ── STEP 4: BOM Explosion rekursif per produk ─────────────────
+      // Untuk setiap produk di SPR, jalankan explodeBom() dengan
+      // qty_multiplier = qty produk dari SPR.
+      // Hasilnya diakumulasikan ke satu Map global (rawMaterialAccum).
+      //
+      // Kenapa per-produk, bukan sekali untuk semua bom_id?
+      //   → Karena setiap produk bisa punya qty berbeda di SPR,
+      //     dan kita butuh mengalikan qty BOM dengan qty produk.
+      const rawMaterialAccum = new Map(); // Map<part_id → { part_id, bom_id, qty, part }>
 
-      // ── STEP 4: Ambil BOM details berdasarkan bom_id ──────────────
-      // Join ke s_parts dan filter yang part_type_code = 'RAW'
-      const bomDetails = await SBomDetails.findAll({
-        where: { bom_id: { [Op.in]: bomIds } },
-        attributes: ['id', 'bom_id', 'part_id', 'qty_required', 'scrap_percentage'],
-        include: [
-          {
-            model: SParts,
-            as: 'part',
-            where: { part_type_code: { [Op.in]: ['RAW', 'Raw', 'raw'] } }, // ← case-insensitive safety
-            required: true, // INNER JOIN: bom_detail tanpa RAW part dibuang
-            attributes: ['id', 'part_number', 'part_name', 'part_type_code', 'safety_stock', 'lead_time_days', 'weight'],
-            include: [{ model: SUom, as: 'uom', attributes: ['id', 'name', 'code'] }],
-          },
-        ],
-      });
+      for (const partId of productPartIds) {
+        const topBom = bomByProductPartId[partId];
+        if (!topBom) continue;
 
-      // ── STEP 5: Kalkulasi qty kebutuhan material ──────────────────
-      // materialMap: { raw_part_id → { part_id, bom_id, qty, part } }
-      const materialMap = {};
+        const qtyProduct = productQtyMap[partId] || 0;
+        if (qtyProduct <= 0) continue;
 
-      for (const bomDetail of bomDetails) {
-        // Temukan bom ini milik product_part_id mana
-        const bom = boms.find((b) => b.id === bomDetail.bom_id);
-        if (!bom) continue;
+        // Jalankan explosion: visited & result di-share dalam satu produk,
+        // tapi di-reset antar produk agar tidak tumpang tindih circular detection.
+        const productResult = await explodeBom(topBom.id, qtyProduct, new Set(), new Map());
 
-        const qtyProduct = productQtyMap[bom.parent_part_id] || 0;
-        const rawPart = bomDetail.part;
-        if (!rawPart) continue;
-
-        const partId = rawPart.id;
-        const qtyRequired = parseFloat(bomDetail.qty_required || 0);
-        const scrapPct = parseFloat(bomDetail.scrap_percentage || 0);
-        const qtyNeeded = qtyRequired * qtyProduct * (1 + scrapPct / 100);
-
-        if (materialMap[partId]) {
-          materialMap[partId].qty += qtyNeeded;
-        } else {
-          materialMap[partId] = {
-            part_id: partId,
-            bom_id: bom.id,
-            bom_number: bom.bom_number,
-            qty: qtyNeeded,
-            part: rawPart.toJSON(),
-          };
+        // Gabungkan hasil per-produk ke akumulasi global
+        for (const [rawPartId, item] of productResult.entries()) {
+          const existing = rawMaterialAccum.get(rawPartId);
+          if (existing) {
+            existing.qty += item.qty;
+          } else {
+            // Simpan bom_id BOM utama (top-level) agar referensi di detail tetap ke BOM header
+            rawMaterialAccum.set(rawPartId, {
+              ...item,
+              bom_id: topBom.id,
+              bom_number: topBom.bom_number,
+            });
+          }
         }
       }
 
-      // ── STEP 6: Ambil stok warehouse & susun response ─────────────
-      const allRawPartIds = Object.keys(materialMap).map(Number);
+      // ── STEP 5: Ambil stok warehouse & susun response ─────────────
+      const allRawPartIds = [...rawMaterialAccum.keys()];
       const stockMap = await getWarehouseStockByParts(allRawPartIds);
 
-      const suggestedDetails = Object.values(materialMap).map((item) => {
-        const stockQty = stockMap[item.part_id] || 0;
-        const qtyNeeded = Math.ceil(item.qty);
+      const TARGET_SAFETY_STOCK = 50;
+
+      const suggestedDetails = [...rawMaterialAccum.values()].map((item) => {
+        const grossRequirement = Math.ceil(item.qty);
+        const stockOnHand = stockMap[item.part_id] || 0;
+        const currentSafetyStock = item.part?.safety_stock ?? 0;
+        // Net Req = Gross + Target Safety (50) - (Stock On-Hand + Current Safety Stock)
+        const netRequirement = Math.max(0, grossRequirement + TARGET_SAFETY_STOCK - (stockOnHand + currentSafetyStock));
         return {
           part_id: item.part_id,
           bom_id: item.bom_id,
           bom_number: item.bom_number,
-          qty: qtyNeeded,
-          stock_qty: stockQty,
-          shortage_qty: Math.max(0, qtyNeeded - stockQty),
+          gross_requirement: grossRequirement,
+          stock_on_hand: stockOnHand,
+          current_safety_stock: currentSafetyStock,
+          target_safety_stock: TARGET_SAFETY_STOCK,
+          net_requirement: netRequirement,
+          qty: netRequirement,
+          // Backward-compat
+          stock_qty: stockOnHand,
+          shortage_qty: Math.max(0, grossRequirement - stockOnHand),
           part: item.part,
           notes: `Auto-calculated from SPR: ${spr.spr_number}`,
         };
       });
 
+      // BOM utama untuk ditampilkan sebagai field read-only di frontend.
+      // Jika SPR punya banyak produk, ambil BOM pertama yang ditemukan
+      // (umumnya satu SPR = satu produk utama).
+      const firstBom = Object.values(bomByProductPartId)[0] ?? null;
+      const primaryBom = firstBom
+        ? {
+            id: firstBom.id,
+            bom_number: firstBom.bom_number,
+            bom_version: firstBom.bom_version,
+            description: firstBom.description,
+            // Label yang ditampilkan di field disabled frontend:
+            // contoh: "BOM-2025-001 (v2)"
+            display_label: `${firstBom.bom_number} (v${firstBom.bom_version ?? 1})`,
+          }
+        : null;
+
       return {
         status: true,
         data: {
           spr: spr.toJSON(),
+          // ← field baru: info BOM utama untuk field disabled di frontend
+          primary_bom: primaryBom,
           products: sprDetails.map((d) => ({
             part_id: d.part_id,
             part_number: d.part?.part_number,
@@ -484,7 +561,7 @@ class MRPModule extends BaseModule {
             qty_request: d.qty,
             has_bom: !!bomByProductPartId[d.part_id],
           })),
-          suggestedDetails,         // dibaca frontend: data.suggestedDetails
+          suggestedDetails,         // hanya RAW, hasil BOM explosion rekursif
           warehouseStock: allRawPartIds.map((id) => ({
             part_id: id,
             qty_on_hand: stockMap[id] || 0,
@@ -493,8 +570,8 @@ class MRPModule extends BaseModule {
           total_materials: suggestedDetails.length,
           _debug: {
             product_part_ids: productPartIds,
-            bom_ids_found: bomIds,
-            bom_detail_raw_count: bomDetails.length,
+            top_level_bom_ids: Object.values(bomByProductPartId).map((b) => b.id),
+            raw_part_count_after_explosion: allRawPartIds.length,
           },
         },
       };
@@ -930,7 +1007,8 @@ class MRPModule extends BaseModule {
       const { search } = req.query;
 
       // Hanya tampilkan parts dengan part_type_code = 'RAW' (Raw Material)
-      const where = { part_type_code: 'RAW' };
+      // Menggunakan Op.in untuk case-insensitive safety (RAW / Raw / raw)
+      const where = { part_type_code: { [Op.in]: ['RAW', 'Raw', 'raw'] } };
 
       if (search) {
         where[Op.or] = [

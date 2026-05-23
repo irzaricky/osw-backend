@@ -44,6 +44,10 @@ export default (sequelize) => {
       allowNull: true,
       comment: 'Rejection or other notes'
     },
+    po_document: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     created_by: {
       type: DataTypes.INTEGER,
       allowNull: false

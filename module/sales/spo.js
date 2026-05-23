@@ -5,6 +5,12 @@ import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
 import dayjs from 'dayjs';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const {
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
@@ -211,6 +217,29 @@ class SPOModule extends BaseModule {
 
       const spo_number = await this._generateSPONumber(t);
 
+      // Handle po_document file upload
+      let poDocumentUrl = null;
+      if (req.files && req.files.po_document) {
+        const file = req.files.po_document;
+        const ext = path.extname(file.name);
+        const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
+        if (!allowedExts.includes(ext.toLowerCase())) {
+          await t.rollback();
+          return { status: false, message: 'Only PDF or Image files (.pdf, .jpg, .jpeg, .png) are allowed for Customer PO Document', code: 400 };
+        }
+        const fileName = `po_${Date.now()}${ext}`;
+        const uploadDir = path.join(__dirname, '../../public/uploads/po');
+
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
+        }
+
+        const uploadPath = path.join(uploadDir, fileName);
+        await file.mv(uploadPath);
+
+        poDocumentUrl = `/uploads/po/${fileName}`;
+      }
+
       const spo = await SSalesPurchaseOrders.create({
         spo_number,
         customer_id,
@@ -219,6 +248,7 @@ class SPOModule extends BaseModule {
         spo_date,
         delivery_due_date,
         status: 'Draft',
+        po_document: poDocumentUrl,
         created_by: currentUser.id
       }, { transaction: t });
 

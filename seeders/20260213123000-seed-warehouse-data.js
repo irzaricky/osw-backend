@@ -80,28 +80,66 @@ export default {
     await queryInterface.bulkInsert('s_warehouse_areas', areas, { ignoreDuplicates: true });
 
     // 5. Seed Warehouse Bins
-    const bins = [
-      { bin_code: 'BIN-EL-01-A', area_id: 1, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-BATT-48V', capacity: 500, ...timestamp },
-      { bin_code: 'BIN-EL-01-B', area_id: 1, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'PART-BATT-36V', capacity: 500, ...timestamp },
-      { bin_code: 'BIN-EL-02-A', area_id: 1, col_index: 1, row_index: 3, is_dedicated: false, dedicated_part_number: null, capacity: 1000, ...timestamp },
-      
-      { bin_code: 'BIN-FR-01-A', area_id: 2, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-FRAME-VC', capacity: 50, ...timestamp },
-      { bin_code: 'BIN-FR-01-B', area_id: 2, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'PART-FRAME-EF', capacity: 50, ...timestamp },
-      
-      { bin_code: 'BIN-SM-01-A', area_id: 3, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-NUT-M12', capacity: 10000, ...timestamp },
-      { bin_code: 'BIN-SM-01-B', area_id: 3, col_index: 1, row_index: 2, is_dedicated: false, dedicated_part_number: null, capacity: 5000, ...timestamp },
-      
-      { bin_code: 'BIN-TR-01-A', area_id: 4, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-TIRE-26', capacity: 200, ...timestamp },
-      { bin_code: 'BIN-TR-01-B', area_id: 4, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'PART-TIRE-20', capacity: 200, ...timestamp },
-      
-      { bin_code: 'BIN-FG-VO-01', area_id: 9, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'VOBKME2025', capacity: 20, ...timestamp },
-      { bin_code: 'BIN-FG-VO-02', area_id: 9, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'VOWHME2025', capacity: 20, ...timestamp },
-      
-      { bin_code: 'BIN-FG-EC-01', area_id: 10, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'ECBKME2025', capacity: 30, ...timestamp },
-      
-      { bin_code: 'BIN-NG-01', area_id: 11, col_index: 1, row_index: 1, is_dedicated: false, dedicated_part_number: null, capacity: 1000, ...timestamp }
-    ];
-    await queryInterface.bulkInsert('s_warehouse_bins', bins, { ignoreDuplicates: true });
+      const bins = [
+        { bin_code: 'AREA-ELEC-R1C1', area_id: 1, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-BMS-48V', capacity: 500, ...timestamp },
+        { bin_code: 'AREA-ELEC-R2C1', area_id: 1, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'PART-BMS-36V', capacity: 500, ...timestamp },
+        { bin_code: 'AREA-ELEC-R3C1', area_id: 1, col_index: 1, row_index: 3, is_dedicated: false, dedicated_part_number: null, capacity: 1000, ...timestamp },
+
+        { bin_code: 'AREA-SMALL-R1C1', area_id: 3, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-NUT-M12', capacity: 10000, ...timestamp },
+        { bin_code: 'AREA-SMALL-R1C2', area_id: 3, col_index: 1, row_index: 2, is_dedicated: false, dedicated_part_number: null, capacity: 5000, ...timestamp },
+
+        { bin_code: 'AREA-TIRE-R1C1', area_id: 4, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'PART-TIRE-26', capacity: 200, ...timestamp },
+        { bin_code: 'AREA-TIRE-R2C1', area_id: 4, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'PART-TIRE-20', capacity: 200, ...timestamp },
+
+        { bin_code: 'AREA-VOLT-R1C1', area_id: 9, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'VOBKME2025', capacity: 20, ...timestamp },
+        { bin_code: 'AREA-VOLT-R2C1', area_id: 9, col_index: 1, row_index: 2, is_dedicated: true, dedicated_part_number: 'VOWHME2025', capacity: 20, ...timestamp },
+
+        { bin_code: 'AREA-ECO-R1C1', area_id: 10, col_index: 1, row_index: 1, is_dedicated: true, dedicated_part_number: 'ECBKME2025', capacity: 30, ...timestamp },
+
+        { bin_code: 'AREA-REJECT-R1C1', area_id: 11, col_index: 1, row_index: 1, is_dedicated: false, dedicated_part_number: null, capacity: 1000, ...timestamp }
+      ];
+
+      // Generate Free Bin Unconfigured untuk slot area yang belum punya bin
+      const warehouseAreas = await queryInterface.sequelize.query(
+        `
+          SELECT id, area_code, total_rows, total_cols
+          FROM s_warehouse_areas
+          WHERE deleted_at IS NULL
+        `,
+        {
+          type: Sequelize.QueryTypes.SELECT
+        }
+      );
+
+      for (const area of warehouseAreas) {
+        for (let row = 1; row <= Number(area.total_rows || 0); row++) {
+          for (let col = 1; col <= Number(area.total_cols || 0); col++) {
+            const alreadyExists = bins.some(
+              bin =>
+                Number(bin.area_id) === Number(area.id) &&
+                Number(bin.row_index) === row &&
+                Number(bin.col_index) === col
+            );
+
+            if (!alreadyExists) {
+              bins.push({
+                bin_code: `${area.area_code}-R${row}C${col}`,
+                area_id: area.id,
+                row_index: row,
+                col_index: col,
+                is_dedicated: false,
+                dedicated_part_number: null,
+                capacity: 0,
+                ...timestamp
+              });
+            }
+          }
+        }
+      }
+
+      await queryInterface.bulkInsert('s_warehouse_bins', bins, {
+        ignoreDuplicates: true
+      });
 
     // 6. Seed Docks
     const docks = [

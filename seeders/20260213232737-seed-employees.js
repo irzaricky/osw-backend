@@ -64,7 +64,7 @@ export default {
     line: null,
     phone: '8123456003',
     email: 'citra.lestari@company.com',
-    role: 'Supervisor Sales Forecast'
+    role: 'Supervisor Sales'
   },
   {
     full_name: 'Dewi Anggraini',
@@ -82,7 +82,7 @@ export default {
     line: null,
     phone: '8123456005',
     email: 'eko.nugroho@company.com',
-    role: 'Supervisor Sales Order'
+    role: 'Supervisor Sales'
   },
   {
     full_name: 'Fajar Hidayat',
@@ -100,7 +100,7 @@ export default {
     line: null,
     phone: '8123456007',
     email: 'rina.wulandari@company.com',
-    role: 'Supervisor Sales Delivery'
+    role: 'Supervisor Sales'
   },
   {
     full_name: 'Umar Winarno',

@@ -12,11 +12,9 @@ export default {
     const rolesData = [
       { name: 'Superadmin', division_id: null },
       { name: 'Staff Sales Forecast', division_id: 1 },
-      { name: 'Supervisor Sales Forecast', division_id: 1 },
       { name: 'Staff Sales Order', division_id: 1 },
-      { name: 'Supervisor Sales Order', division_id: 1 },
       { name: 'Staff Sales Delivery', division_id: 1 },
-      { name: 'Supervisor Sales Delivery', division_id: 1 },
+      { name: 'Supervisor Sales', division_id: 1 },
       { name: 'Admin sales', division_id: 1 },
       { name: 'Warehouse Staff', division_id: 2 },
       { name: 'Supervisor Warehouse', division_id: 2 },

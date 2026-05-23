@@ -1492,7 +1492,7 @@ class ForecastModule extends BaseModule {
       request_date: dayjs().format('YYYY-MM-DD'),
       required_date,
       description: `Auto-generated from Approved Forecast ${forecast.forecast_number}`,
-      status: 'Waiting Review PPIC',
+      status: 'Approved',
       created_by: forecast.approved_by
     }, { transaction });
 
@@ -1515,7 +1515,7 @@ class ForecastModule extends BaseModule {
     // Log creation
     await SSalesPurchaseRequestLogs.create({
       spr_id: spr.id,
-      status: 'Waiting Review PPIC',
+      status: 'Approved',
       action: 'Created (Auto)',
       remarks: `Automatically generated from forecast ${forecast.forecast_number}`,
       changed_by: forecast.approved_by

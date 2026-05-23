@@ -10,6 +10,7 @@ const {
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
   SDeliveryOrders, SDeliveryOrderDetails,
   SDeliveryPlans, SDeliveryPlanDetails,
+  SSalesForecasts, SSalesForecastDetails,
   SDocks, SWarehouses, SCustomers, SVehicles, SUserDetail
 } = db;
 
@@ -66,14 +67,14 @@ class AnalyticsModule extends BaseModule {
       });
 
       const sdoCounts = {
-        Draft: 0,
-        Scheduled: 0,
+        Created: 0,
+        Loading: 0,
         'In Transit': 0,
         Delivered: 0
       };
 
       for (const sdo of sdos) {
-        const status = sdo.delivery_status || 'Draft';
+        const status = sdo.delivery_status || 'Created';
         if (sdoCounts[status] !== undefined) {
           sdoCounts[status]++;
         } else {
@@ -475,6 +476,188 @@ class AnalyticsModule extends BaseModule {
     } catch (error) {
       console.error('Excel Export Error:', error);
       res.status(500).json({ status: false, error: error.message });
+    }
+  }
+
+  /**
+   * GET /sales/analytics/sla
+   * Returns on-time vs delayed SDO deliveries (SLA = shipment_date + 24h)
+   */
+  async getSlaMetrics(req) {
+    try {
+      const { start_date, end_date } = req.query;
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
+        : dayjs().format('YYYY-MM-DD');
+
+      const sdos = await SDeliveryOrders.findAll({
+        where: {
+          delivery_status: 'Delivered',
+          shipment_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        attributes: ['shipment_date', 'received_at']
+      });
+
+      let on_time = 0;
+      let delayed = 0;
+      for (const sdo of sdos) {
+        if (!sdo.received_at) continue;
+        const sla_deadline = dayjs(sdo.shipment_date).add(1, 'day');
+        if (dayjs(sdo.received_at).isBefore(sla_deadline) || dayjs(sdo.received_at).isSame(sla_deadline)) {
+          on_time++;
+        } else {
+          delayed++;
+        }
+      }
+
+      const total = on_time + delayed;
+      const on_time_rate = total > 0 ? helper.round(on_time / total, 4) : 0;
+
+      return { status: true, data: { on_time, delayed, total, on_time_rate } };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  /**
+   * GET /sales/analytics/forecast-vs-spo
+   * Returns last 6 months of forecast monthly target vs SPO actual ordered qty
+   */
+  async getForecastVsSpo(req) {
+    try {
+      const monthsList = [];
+      for (let i = 5; i >= 0; i--) {
+        monthsList.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
+      }
+
+      // Fetch all non-draft/rejected forecasts
+      const forecasts = await SSalesForecasts.findAll({
+        where: {
+          status: { [Op.notIn]: ['Draft', 'Rejected'] }
+        },
+        include: [{
+          model: SSalesForecastDetails,
+          as: 'details',
+          attributes: ['fix_qty', 'temporary_qty']
+        }],
+        attributes: ['id', 'forecast_type', 'start_period', 'end_period']
+      });
+
+      // Fetch SPOs for the 6-month window
+      const windowStart = dayjs().subtract(5, 'month').startOf('month').format('YYYY-MM-DD');
+      const windowEnd = dayjs().endOf('month').format('YYYY-MM-DD');
+
+      const spos = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [windowStart, windowEnd] }
+        },
+        include: [{
+          model: SSalesPurchaseOrderDetails,
+          as: 'details',
+          attributes: ['ordered_qty']
+        }]
+      });
+
+      // Build month map
+      const result = {};
+      for (const month of monthsList) {
+        result[month] = { month, forecast_target: 0, spo_actual: 0 };
+      }
+
+      // Compute monthly forecast target
+      const typeMonthMap = { 'Yearly': 12, 'Half-Year': 6, '4-Month': 4 };
+      for (const forecast of forecasts) {
+        const divisor = typeMonthMap[forecast.forecast_type] || 12;
+        // Total qty from details (fix + temporary)
+        let totalQty = 0;
+        for (const d of (forecast.details || [])) {
+          totalQty += (d.fix_qty || 0) + (d.temporary_qty || 0);
+        }
+        const monthlyShare = helper.round(totalQty / divisor, 2);
+
+        // Add share to each month that overlaps forecast period
+        for (const month of monthsList) {
+          const monthStart = dayjs(month + '-01');
+          const monthEnd = monthStart.endOf('month');
+          const forecastStart = dayjs(forecast.start_period);
+          const forecastEnd = dayjs(forecast.end_period);
+          if (monthStart.isBefore(forecastEnd) && monthEnd.isAfter(forecastStart)) {
+            result[month].forecast_target += monthlyShare;
+          }
+        }
+      }
+
+      // Compute SPO actual per month
+      for (const spo of spos) {
+        const month = dayjs(spo.spo_date).format('YYYY-MM');
+        if (result[month]) {
+          for (const d of (spo.details || [])) {
+            result[month].spo_actual += d.ordered_qty || 0;
+          }
+        }
+      }
+
+      // Round forecast targets
+      for (const month of monthsList) {
+        result[month].forecast_target = helper.round(result[month].forecast_target, 0);
+      }
+
+      return { status: true, data: monthsList.map(m => result[m]) };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  /**
+   * GET /sales/analytics/top-customers
+   * Returns top 5 customers by total ordered_qty in the date range
+   */
+  async getTopCustomers(req) {
+    try {
+      const { start_date, end_date } = req.query;
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
+        : dayjs().format('YYYY-MM-DD');
+
+      const spos = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        include: [
+          { model: SCustomers, as: 'customer', attributes: ['id', 'name'] },
+          { model: SSalesPurchaseOrderDetails, as: 'details', attributes: ['ordered_qty'] }
+        ]
+      });
+
+      // Aggregate by customer
+      const customerMap = {};
+      for (const spo of spos) {
+        if (!spo.customer) continue;
+        const cid = spo.customer.id;
+        if (!customerMap[cid]) {
+          customerMap[cid] = { customer_id: cid, customer_name: spo.customer.name, total_ordered_qty: 0 };
+        }
+        for (const d of (spo.details || [])) {
+          customerMap[cid].total_ordered_qty += d.ordered_qty || 0;
+        }
+      }
+
+      const topCustomers = Object.values(customerMap)
+        .sort((a, b) => b.total_ordered_qty - a.total_ordered_qty)
+        .slice(0, 5);
+
+      return { status: true, data: topCustomers };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
     }
   }
 }

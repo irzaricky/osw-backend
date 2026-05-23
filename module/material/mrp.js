@@ -506,16 +506,27 @@ class MRPModule extends BaseModule {
       const allRawPartIds = [...rawMaterialAccum.keys()];
       const stockMap = await getWarehouseStockByParts(allRawPartIds);
 
+      const TARGET_SAFETY_STOCK = 50;
+
       const suggestedDetails = [...rawMaterialAccum.values()].map((item) => {
-        const stockQty = stockMap[item.part_id] || 0;
-        const qtyNeeded = Math.ceil(item.qty);
+        const grossRequirement = Math.ceil(item.qty);
+        const stockOnHand = stockMap[item.part_id] || 0;
+        const currentSafetyStock = item.part?.safety_stock ?? 0;
+        // Net Req = Gross + Target Safety (50) - (Stock On-Hand + Current Safety Stock)
+        const netRequirement = Math.max(0, grossRequirement + TARGET_SAFETY_STOCK - (stockOnHand + currentSafetyStock));
         return {
           part_id: item.part_id,
           bom_id: item.bom_id,
           bom_number: item.bom_number,
-          qty: qtyNeeded,
-          stock_qty: stockQty,
-          shortage_qty: Math.max(0, qtyNeeded - stockQty),
+          gross_requirement: grossRequirement,
+          stock_on_hand: stockOnHand,
+          current_safety_stock: currentSafetyStock,
+          target_safety_stock: TARGET_SAFETY_STOCK,
+          net_requirement: netRequirement,
+          qty: netRequirement,
+          // Backward-compat
+          stock_qty: stockOnHand,
+          shortage_qty: Math.max(0, grossRequirement - stockOnHand),
           part: item.part,
           notes: `Auto-calculated from SPR: ${spr.spr_number}`,
         };

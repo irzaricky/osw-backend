@@ -54,7 +54,7 @@ class ForecastModule extends BaseModule {
       }
 
       // Supervisor filtering
-      if (req.user.role === 'Supervisor Sales Forecast') {
+      if (req.user.role === 'Supervisor Sales') {
         const allowedStatuses = ['Submitted', 'Rejected', 'Approved'];
         if (status) {
           if (!allowedStatuses.includes(status)) {

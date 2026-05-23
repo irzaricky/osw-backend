@@ -82,8 +82,8 @@ router.delete('/:id', session.sessionChecker, session.permissionChecker(['Supera
   return helper.sendResponse(res, result);
 });
 
-// SUPERVISOR SALES ORDER
-router.put('/:id/review-sales', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales Order']), async (req, res) => {
+// SUPERVISOR SALES
+router.put('/:id/review-sales', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
   const result = await module.reviewSalesOrder(req);
   return helper.sendResponse(res, result);
 });

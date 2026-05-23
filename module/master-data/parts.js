@@ -6,7 +6,7 @@ import BaseModule from '../../class/base.module.js'
 import ExcelJS from 'exceljs'
 import Joi from 'joi'
 
-const { SParts, SPartSuppliers, RefPartTypes, SSuppliers, sequelize, TWorkOrderStoring, TWorkOrderStoringItem } = db
+const { SParts, SUom, SPackages, SPartSuppliers, RefPartTypes, SSuppliers, sequelize, TWorkOrderStoring, TWorkOrderStoringItem } = db
 
 class PartsModule extends BaseModule {
   async dropdown(req, res) {

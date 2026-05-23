@@ -10,7 +10,6 @@ export default (sequelize) => {
       SParts.belongsTo(models.SPackages, { foreignKey: 'package_id', as: 'package' });
       SParts.belongsTo(models.SUom, { foreignKey: 'uom_id', as: 'uom' });
       SParts.hasMany(models.SPartRoutings, { foreignKey: 'part_id', as: 'routings' });
-      SParts.belongsTo(models.RefPartCategory, { foreignKey: 'part_category_id', as: 'category' });
       SParts.hasMany(models.SPartSuppliers, { foreignKey: 'part_id', as: 'part_suppliers' });
       SParts.belongsToMany(models.SSuppliers, {
         through: models.SPartSuppliers,
@@ -32,8 +31,8 @@ export default (sequelize) => {
       allowNull: false,
     },
     part_type_code: DataTypes.STRING,
-    part_category_id: {
-      type: DataTypes.INTEGER,
+    part_category: {
+      type: DataTypes.STRING,
       allowNull: true,
     },
     supplier_id: DataTypes.INTEGER,

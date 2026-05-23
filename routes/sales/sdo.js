@@ -30,6 +30,21 @@ router.put('/:id/status', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, await sdo.updateStatus(req));
 });
 
+// ── Status Update: Created → Loading (with loading photo upload)
+router.put('/:id/loading-photo', session.sessionChecker, async (req, res) => {
+  return helper.sendResponse(res, await sdo.uploadLoadingPhoto(req));
+});
+
+// ── Status Update: Approve Dispatch (Supervisor Sales only)
+router.put('/:id/approve-dispatch', session.sessionChecker, async (req, res) => {
+  return helper.sendResponse(res, await sdo.approveDispatch(req));
+});
+
+// ── Status Update: Start Delivery: Loading → In Transit
+router.put('/:id/start-delivery', session.sessionChecker, async (req, res) => {
+  return helper.sendResponse(res, await sdo.startDelivery(req));
+});
+
 // ── Print official DO PDF (Surat Jalan)
 router.get('/:id/pdf', session.sessionChecker, async (req, res) => {
   return sdo.printSuratJalan(req, res);

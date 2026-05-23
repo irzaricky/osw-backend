@@ -365,7 +365,7 @@ class SDOModule extends BaseModule {
         vehicle_id,
         driver_id,
         shipment_date: dayjs().format('YYYY-MM-DD'),
-        delivery_status: 'In Transit',
+        delivery_status: 'Created',
         created_by: currentUser.id
       }, { transaction: t });
 
@@ -395,6 +395,104 @@ class SDOModule extends BaseModule {
       return { status: true, message: 'Delivery Order created successfully', data: sdo };
     } catch (error) {
       await t.rollback();
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async uploadLoadingPhoto(req) {
+    try {
+      const { id } = req.params;
+      const sdo = await SDeliveryOrders.findByPk(id);
+      if (!sdo) return { status: false, message: 'Delivery Order not found', code: 404 };
+
+      if (sdo.delivery_status !== 'Created') {
+        return { status: false, message: 'Loading photo can only be uploaded when status is "Created"', code: 400 };
+      }
+
+      if (!req.files || !req.files.loading_photo) {
+        return { status: false, message: 'Loading photo file is required', code: 400 };
+      }
+
+      const file = req.files.loading_photo;
+      const ext = path.extname(file.name);
+      const allowedExts = ['.jpg', '.jpeg', '.png'];
+      if (!allowedExts.includes(ext.toLowerCase())) {
+        return { status: false, message: 'Only Image files (.jpg, .jpeg, .png) are allowed for Loading photo', code: 400 };
+      }
+
+      const fileName = `loading_${Date.now()}${ext}`;
+      const uploadDir = path.join(__dirname, '../../public/uploads/loading');
+
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+
+      const uploadPath = path.join(uploadDir, fileName);
+      await file.mv(uploadPath);
+
+      const loadingPhotoUrl = `/uploads/loading/${fileName}`;
+
+      await sdo.update({
+        loading_photo_url: loadingPhotoUrl,
+        delivery_status: 'Loading'
+      });
+
+      return { status: true, message: 'Loading photo uploaded successfully and status updated to Loading', data: sdo };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async approveDispatch(req) {
+    try {
+      const { id } = req.params;
+      const currentUser = req.user;
+
+      if (currentUser.role !== 'Supervisor Sales' && currentUser.role !== 'Superadmin') {
+        return { status: false, message: 'Forbidden: Only Supervisor Sales can approve dispatch', code: 403 };
+      }
+
+      const sdo = await SDeliveryOrders.findByPk(id);
+      if (!sdo) return { status: false, message: 'Delivery Order not found', code: 404 };
+
+      if (sdo.delivery_status !== 'Loading') {
+        return { status: false, message: 'Dispatch can only be approved when status is "Loading"', code: 400 };
+      }
+
+      await sdo.update({
+        dispatch_approved_by: currentUser.id,
+        dispatch_approved_at: new Date()
+      });
+
+      return { status: true, message: 'Dispatch approved successfully', data: sdo };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async startDelivery(req) {
+    try {
+      const { id } = req.params;
+      const sdo = await SDeliveryOrders.findByPk(id);
+      if (!sdo) return { status: false, message: 'Delivery Order not found', code: 404 };
+
+      if (sdo.delivery_status !== 'Loading') {
+        return { status: false, message: 'Delivery can only be started when status is "Loading"', code: 400 };
+      }
+
+      if (!sdo.dispatch_approved_by) {
+        return { status: false, message: 'Cannot start delivery: Dispatch must be approved by a Supervisor first', code: 400 };
+      }
+
+      await sdo.update({
+        delivery_status: 'In Transit'
+      });
+
+      return { status: true, message: 'Delivery started and status updated to In Transit', data: sdo };
+    } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
     }
@@ -627,9 +725,21 @@ class SDOModule extends BaseModule {
 
       const oldData = JSON.parse(JSON.stringify(sdo));
 
-      // Update SDO header to Delivered
+      // Check if partial delivery
+      let isPartial = false;
+      for (const item of details) {
+        const doDetail = sdo.details.find(d => d.id === item.delivery_order_detail_id);
+        if (doDetail && item.received_qty < doDetail.sent_qty) {
+          isPartial = true;
+          break;
+        }
+      }
+
+      const finalStatus = isPartial ? 'Delivered (Partial)' : 'Delivered';
+
+      // Update SDO header to Delivered or Delivered (Partial)
       await sdo.update({
-        delivery_status: 'Delivered',
+        delivery_status: finalStatus,
         notes: notes ?? sdo.notes,
         proof_of_delivery: proofUrl,
         received_at: new Date()
@@ -639,7 +749,7 @@ class SDOModule extends BaseModule {
       const pendingSDOs = await SDeliveryOrders.count({
         where: {
           delivery_plan_id: sdo.delivery_plan_id,
-          delivery_status: { [Op.ne]: 'Delivered' }
+          delivery_status: { [Op.notIn]: ['Delivered', 'Delivered (Partial)'] }
         },
         transaction: t
       });

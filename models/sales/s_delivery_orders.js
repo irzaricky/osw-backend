@@ -40,7 +40,7 @@ export default (sequelize) => {
     delivery_status: {
       type: DataTypes.STRING(50),
       allowNull: false,
-      defaultValue: 'In Transit'
+      defaultValue: 'Created'
     },
     proof_of_delivery: {
       type: DataTypes.STRING(255),
@@ -51,6 +51,18 @@ export default (sequelize) => {
       allowNull: true
     },
     received_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    loading_photo_url: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    dispatch_approved_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    dispatch_approved_at: {
       type: DataTypes.DATE,
       allowNull: true
     },

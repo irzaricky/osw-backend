@@ -64,6 +64,22 @@ export default (sequelize) => {
     },
     supervisor: {
       type: DataTypes.STRING(100)
+    },
+    part_number_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    part_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    line_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    shift_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
     }
   }, {
     sequelize,

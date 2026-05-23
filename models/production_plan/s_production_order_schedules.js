@@ -63,6 +63,14 @@ export default (sequelize) => {
     },
     notes: {
       type: DataTypes.TEXT
+    },
+    line_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    shift_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
     }
   }, {
     sequelize,

@@ -37,7 +37,23 @@ export default (sequelize) => {
       type: DataTypes.STRING(50),
       allowNull: false,
       defaultValue: 'Pending'
-    }
+    },
+    station_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    job_name_snapshot: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    standard_time_snapshot: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    setup_time_snapshot: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
   }, {
     sequelize,
     modelName: 'SWorkOrderStationJob',

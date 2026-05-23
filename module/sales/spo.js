@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import PdfPrinter from 'pdfmake/src/printer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -603,6 +604,257 @@ class SPOModule extends BaseModule {
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  async generatePdf(req, res) {
+    try {
+      const { id } = req.params;
+
+      const spo = await SSalesPurchaseOrders.findByPk(id, {
+        include: [
+          {
+            model: SCustomers,
+            as: 'customer',
+            attributes: ['id', 'customer_code', 'name']
+          },
+          {
+            model: SSalesPurchaseOrderDetails,
+            as: 'details',
+            include: [
+              {
+                model: SParts,
+                as: 'part',
+                attributes: ['part_number', 'part_name']
+              }
+            ]
+          },
+          {
+            model: SSalesPurchaseRequests,
+            as: 'spr',
+            attributes: ['id', 'spr_number']
+          },
+          {
+            model: SUsers,
+            as: 'creator',
+            attributes: ['id', 'email'],
+            include: [
+              {
+                model: SUserDetail,
+                as: 'user_detail',
+                attributes: ['full_name']
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!spo) {
+        return res.status(404).json({ status: false, message: 'Sales Purchase Order not found' });
+      }
+
+      // Check status: SPO must be at least Locked to generate the formal document
+      const forbiddenStatuses = ['Draft', 'Submitted'];
+      if (forbiddenStatuses.includes(spo.status)) {
+        return res.status(400).json({
+          status: false,
+          message: 'SPO must be Locked, Processing, or Completed to generate PDF'
+        });
+      }
+
+      const printedAt = dayjs().format('DD/MM/YYYY HH:mm:ss');
+
+      const fonts = {
+        Roboto: {
+          normal: path.resolve('fonts/Roboto-Regular.ttf'),
+          bold: path.resolve('fonts/Roboto-Medium.ttf'),
+          bolditalics: path.resolve('fonts/Roboto-MediumItalic.ttf')
+        }
+      };
+
+      const printer = new PdfPrinter(fonts);
+
+      // Build items table body
+      const tableBody = [
+        [
+          { text: 'No.', style: 'tableHeader', alignment: 'center' },
+          { text: 'Part Number', style: 'tableHeader' },
+          { text: 'Part Name', style: 'tableHeader' },
+          { text: 'Ordered Qty', style: 'tableHeader', alignment: 'right' },
+          { text: 'Status', style: 'tableHeader', alignment: 'center' }
+        ]
+      ];
+
+      if (spo.details && spo.details.length > 0) {
+        spo.details.forEach((item, index) => {
+          tableBody.push([
+            { text: String(index + 1), alignment: 'center', style: 'tableCell' },
+            { text: item.part?.part_number || '-', style: 'tableCellHighlight' },
+            { text: item.part?.part_name || '-', style: 'tableCell' },
+            { text: `${item.ordered_qty} pcs`, alignment: 'right', style: 'tableCellHighlight' },
+            { text: item.status || 'Open', alignment: 'center', style: 'tableCell' }
+          ]);
+        });
+      } else {
+        tableBody.push([
+          { text: 'No items found in this Purchase Order', colSpan: 5, alignment: 'center', style: 'tableCell' },
+          {}, {}, {}, {}
+        ]);
+      }
+
+      const docDefinition = {
+        pageSize: 'A4',
+        pageMargins: [36, 36, 36, 36],
+        content: [
+          // Header company details
+          {
+            columns: [
+              {
+                width: '*',
+                stack: [
+                  { text: 'PT. OWS LOGISTICS & DISTRIBUTION', style: 'companyName' },
+                  { text: 'Kawasan Industri Cikarang Blok B-12, Bekasi, Jawa Barat', style: 'companyAddress' },
+                  { text: 'Phone: (021) 8900-1234 | Email: dispatch@ows.co.id', style: 'companyAddress' }
+                ]
+              },
+              {
+                width: 'auto',
+                stack: [
+                  { text: 'SALES PURCHASE ORDER', style: 'docTitle', alignment: 'right' },
+                  { text: 'SPO DOCUMENT', style: 'docSubTitle', alignment: 'right' }
+                ]
+              }
+            ],
+            margin: [0, 0, 0, 15]
+          },
+          // Divider Line
+          {
+            canvas: [{ type: 'line', x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 1.5, lineColor: '#1a237e' }],
+            margin: [0, 0, 0, 15]
+          },
+          // Metadata grid
+          {
+            columns: [
+              {
+                width: '50%',
+                table: {
+                  widths: ['35%', '*'],
+                  body: [
+                    [{ text: 'SPO Number', style: 'metaLabel' }, { text: `: ${spo.spo_number}`, style: 'metaValueBold' }],
+                    [{ text: 'SPO Date', style: 'metaLabel' }, { text: `: ${dayjs(spo.spo_date).format('DD MMMM YYYY')}`, style: 'metaValue' }],
+                    [{ text: 'Due Date', style: 'metaLabel' }, { text: `: ${dayjs(spo.delivery_due_date).format('DD MMMM YYYY')}`, style: 'metaValueBold' }],
+                    [{ text: 'SPR Ref', style: 'metaLabel' }, { text: `: ${spo.spr?.spr_number || '-'}`, style: 'metaValue' }],
+                    [{ text: 'Status', style: 'metaLabel' }, { text: `: ${spo.status}`, style: 'metaValue' }]
+                  ]
+                },
+                layout: 'noBorders'
+              },
+              {
+                width: '50%',
+                table: {
+                  widths: ['30%', '*'],
+                  body: [
+                    [{ text: 'Customer', style: 'metaLabel' }, { text: `: ${spo.customer?.name || '-'}`, style: 'metaValueBold' }],
+                    [{ text: 'Cust Code', style: 'metaLabel' }, { text: `: ${spo.customer?.customer_code || '-'}`, style: 'metaValue' }],
+                    [{ text: 'Address', style: 'metaLabel' }, { text: `: ${spo.shipping_address || '-'}`, style: 'metaValue' }]
+                  ]
+                },
+                layout: 'noBorders'
+              }
+            ],
+            margin: [0, 0, 0, 20]
+          },
+          // Table Title
+          { text: 'ORDERED ITEMS LIST', style: 'sectionTitle', margin: [0, 0, 0, 8] },
+          // Items Table
+          {
+            table: {
+              headerRows: 1,
+              widths: ['7%', '25%', '43%', '15%', '10%'],
+              body: tableBody
+            },
+            layout: {
+              hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.5,
+              vLineWidth: () => 0,
+              hLineColor: (i, node) => (i === 0 || i === node.table.body.length) ? '#1a237e' : '#e0e0e0',
+              paddingTop: () => 6,
+              paddingBottom: () => 6,
+              paddingLeft: () => 8,
+              paddingRight: () => 8
+            },
+            margin: [0, 0, 0, 30]
+          },
+          // Signatures block
+          {
+            columns: [
+              {
+                width: '50%',
+                stack: [
+                  { text: 'Created By,', style: 'sigLabel', alignment: 'center' },
+                  { text: '', margin: [0, 35, 0, 0] },
+                  { text: `( ${spo.creator?.user_detail?.full_name || 'Sales Staff'} )`, style: 'sigName', alignment: 'center' },
+                  { text: spo.creator?.email || '', style: 'footer', alignment: 'center' }
+                ]
+              },
+              {
+                width: '50%',
+                stack: [
+                  { text: 'Verified & Locked By,', style: 'sigLabel', alignment: 'center' },
+                  { text: '', margin: [0, 35, 0, 0] },
+                  { text: '( Sales Supervisor )', style: 'sigName', alignment: 'center' }
+                ]
+              }
+            ]
+          }
+        ],
+        footer: (currentPage, pageCount) => {
+          return {
+            columns: [
+              { text: `Printed: ${printedAt} | Powered by OSW v1.0`, style: 'footerLeft', margin: [36, 0, 0, 0] },
+              { text: `Page ${currentPage} of ${pageCount}`, style: 'footerRight', alignment: 'right', margin: [0, 0, 36, 0] }
+            ],
+            style: 'footer'
+          };
+        },
+        styles: {
+          companyName: { fontSize: 13, bold: true, color: '#1a237e' },
+          companyAddress: { fontSize: 8, color: '#616161', margin: [0, 2, 0, 0] },
+          docTitle: { fontSize: 18, bold: true, color: '#1a237e' },
+          docSubTitle: { fontSize: 10, bold: true, color: '#757575', margin: [0, 2, 0, 0] },
+          metaLabel: { fontSize: 9, bold: true, color: '#424242' },
+          metaValue: { fontSize: 9, color: '#212121' },
+          metaValueBold: { fontSize: 9, bold: true, color: '#1a237e' },
+          sectionTitle: { fontSize: 10, bold: true, color: '#1a237e', tracking: 1 },
+          tableHeader: { fontSize: 9, bold: true, color: '#ffffff', fillColor: '#1a237e', margin: [0, 2, 0, 2] },
+          tableCell: { fontSize: 9, color: '#212121' },
+          tableCellHighlight: { fontSize: 9, bold: true, color: '#1a237e' },
+          sigLabel: { fontSize: 9, bold: true, color: '#424242' },
+          sigName: { fontSize: 9, bold: true, color: '#212121' },
+          footer: { fontSize: 7, color: '#9e9e9e' },
+          footerLeft: { fontSize: 7, color: '#9e9e9e' },
+          footerRight: { fontSize: 7, color: '#9e9e9e' }
+        },
+        defaultStyle: {
+          font: 'Roboto'
+        }
+      };
+
+      const pdfDoc = printer.createPdfKitDocument(docDefinition);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename=SPO-${spo.spo_number}.pdf`
+      );
+
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    } catch (error) {
+      console.error('Error generating SPO PDF:', error);
+      res.status(500).json({
+        status: false,
+        message: 'Internal server error while generating PDF'
+      });
     }
   }
 

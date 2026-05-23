@@ -57,4 +57,8 @@ router.get('/:id/sdo-history', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, result);
 });
 
+router.get('/:id/pdf', session.sessionChecker, async (req, res) => {
+  await spo.generatePdf(req, res);
+});
+
 export default router;

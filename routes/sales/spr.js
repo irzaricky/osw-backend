@@ -37,16 +37,7 @@ router.post('/upload', session.sessionChecker, async (req, res) => {
   return helper.sendResponse(res, result);
 });
 
-// PPIC AGGREGATION (must be before /:id)
-router.get('/ppic-aggregation', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor PPIC']), async (req, res) => {
-  const result = await module.ppicAggregation(req);
-  return helper.sendResponse(res, result);
-});
 
-router.put('/ppic-batch-approve', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor PPIC']), async (req, res) => {
-  const result = await module.ppicBatchApprove(req);
-  return helper.sendResponse(res, result);
-});
 
 router.get('/:id', session.sessionChecker, async (req, res) => {
   const result = await module.detail(req);
@@ -88,10 +79,6 @@ router.put('/:id/review-sales', session.sessionChecker, session.permissionChecke
   return helper.sendResponse(res, result);
 });
 
-// SUPERVISOR PPIC
-router.put('/:id/review-ppic', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor PPIC']), async (req, res) => {
-  const result = await module.reviewPPIC(req);
-  return helper.sendResponse(res, result);
-});
+
 
 export default router;

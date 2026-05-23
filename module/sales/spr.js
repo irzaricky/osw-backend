@@ -30,7 +30,7 @@ class SPRModule extends BaseModule {
   async getDropdownStatuses(req) {
     return {
       status: true,
-      data: ['Draft', 'Submitted', 'Waiting Review PPIC', 'Approved', 'Rejected']
+      data: ['Draft', 'Submitted', 'Approved', 'Rejected']
     };
   }
 
@@ -400,52 +400,13 @@ class SPRModule extends BaseModule {
         return { status: false, message: 'SPR is not in Submitted status', code: 400 };
       }
 
-      const nextStatus = status === 'Approved' ? 'Waiting Review PPIC' : 'Rejected';
-      const action = status === 'Approved' ? 'Sales Order Approved' : 'Sales Order Rejected';
-
-      await spr.update({
-        status: nextStatus,
-        sales_order_approved_by: status === 'Approved' ? currentUser.id : null,
-        remarks: remarks || null
-      }, { transaction: t });
-
-      await this._saveLogSnapshot(spr.id, nextStatus, action, remarks, currentUser.id, t);
-
-      await t.commit();
-      return { status: true, message: `SPR review completed: ${nextStatus}` };
-    } catch (error) {
-      await t.rollback();
-      if (config.debug) return { status: false, error: error.message, code: 500 };
-      return { status: false, message: 'Internal server error', code: 500 };
-    }
-  }
-
-  async reviewPPIC(req) {
-    const t = await db.sequelize.transaction();
-    try {
-      const { id } = req.params;
-      const { status, remarks } = req.body; // status: 'Approved' or 'Rejected'
-      const currentUser = req.user;
-
-      const spr = await SSalesPurchaseRequests.findByPk(id, { transaction: t });
-      if (!spr) {
-        await t.rollback();
-        return { status: false, message: 'SPR not found', code: 404 };
-      }
-
-      if (spr.status !== 'Waiting Review PPIC') {
-        await t.rollback();
-        return { status: false, message: 'SPR is not in Waiting Review PPIC status', code: 400 };
-      }
-
       const nextStatus = status === 'Approved' ? 'Approved' : 'Rejected';
-      const action = status === 'Approved' ? 'PPIC Approved' : 'PPIC Rejected';
+      const action = status === 'Approved' ? 'Supervisor Approved' : 'Sales Order Rejected';
 
       await spr.update({
         status: nextStatus,
-        ppic_approved_by: status === 'Approved' ? currentUser.id : null,
-        approved_by: status === 'Approved' ? currentUser.id : spr.approved_by, // Final approver
-        remarks: remarks || spr.remarks
+        approved_by: status === 'Approved' ? currentUser.id : null,
+        remarks: remarks || null
       }, { transaction: t });
 
       await this._saveLogSnapshot(spr.id, nextStatus, action, remarks, currentUser.id, t);
@@ -497,202 +458,7 @@ class SPRModule extends BaseModule {
     }
   }
 
-  // ─── PPIC Aggregation ──────────────────────────────────────────────────────
-  // Returns a pivot matrix: part_id × month → { total_qty, spr_count, sprs[] }
-  // Only includes SPRs with status = 'Waiting Supervisor PPIC'
-  // Default month = current month (YYYY-MM)
-  async ppicAggregation(req) {
-    try {
-      const { month, part_id } = req.query;
 
-      // Default to current month if not specified
-      const targetMonth = month || dayjs().format('YYYY-MM');
-      const monthStart = dayjs(targetMonth + '-01').startOf('month').format('YYYY-MM-DD');
-      const monthEnd   = dayjs(targetMonth + '-01').endOf('month').format('YYYY-MM-DD');
-
-      // Build WHERE for SPR header
-      const sprWhere = {
-        status: 'Waiting Review PPIC',
-        required_date: { [Op.between]: [monthStart, monthEnd] }
-      };
-
-      // Fetch all pending SPRs with their details for the target month
-      const sprs = await SSalesPurchaseRequests.findAll({
-        where: sprWhere,
-        include: [
-          {
-            model: SSalesPurchaseRequestDetails,
-            as: 'details',
-            where: part_id ? { part_id: Number(part_id) } : undefined,
-            required: true,
-            include: [
-              { model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name'] }
-            ]
-          }
-        ],
-        order: [['required_date', 'ASC']]
-      });
-
-      // ── Build pivot data structures ──────────────────────────────────────────
-      const monthsSet  = new Set();
-      const partsMap   = new Map();  // part_id → { part_id, part_number, part_name }
-      // matrix[part_id][YYYY-MM] = { total_qty, spr_count, sprs[] }
-      const matrix     = {};
-      const monthTotals = {};
-      const partTotals  = {};
-      let grandTotal    = 0;
-
-      for (const spr of sprs) {
-        const m = dayjs(spr.required_date).format('YYYY-MM');
-        monthsSet.add(m);
-
-        for (const detail of spr.details) {
-          const pid = detail.part_id;
-
-          // Register part
-          if (!partsMap.has(pid)) {
-            partsMap.set(pid, {
-              part_id:     pid,
-              part_number: detail.part?.part_number,
-              part_name:   detail.part?.part_name
-            });
-          }
-
-          // Init matrix cell
-          if (!matrix[pid]) matrix[pid] = {};
-          if (!matrix[pid][m]) {
-            matrix[pid][m] = { total_qty: 0, spr_count: 0, sprs: [] };
-          }
-
-          matrix[pid][m].total_qty  += detail.qty;
-          matrix[pid][m].spr_count  += 1;
-          matrix[pid][m].sprs.push({
-            id:         spr.id,
-            spr_number: spr.spr_number,
-            spr_name:   spr.spr_name,
-            qty:        detail.qty,
-            required_date: spr.required_date
-          });
-
-          // Accumulate totals
-          monthTotals[m]  = (monthTotals[m]  || 0) + detail.qty;
-          partTotals[pid] = (partTotals[pid] || 0) + detail.qty;
-          grandTotal      += detail.qty;
-        }
-      }
-
-      const months = Array.from(monthsSet).sort();
-      const parts  = Array.from(partsMap.values()).sort((a, b) =>
-        a.part_name.localeCompare(b.part_name)
-      );
-
-      // Also return the flat list of pending SPRs (for the card list)
-      const pendingSprs = sprs.map(s => ({
-        id:            s.id,
-        spr_number:    s.spr_number,
-        spr_name:      s.spr_name,
-        source:        s.source,
-        required_date: s.required_date,
-        status:        s.status,
-        total_qty:     s.details.reduce((sum, d) => sum + d.qty, 0),
-        part_count:    s.details.length
-      }));
-
-      return {
-        status: true,
-        data: {
-          target_month:      targetMonth,
-          months,
-          parts,
-          matrix,
-          month_totals:      monthTotals,
-          part_totals:       partTotals,
-          grand_total:       grandTotal,
-          pending_spr_count: sprs.length,
-          pending_sprs:      pendingSprs
-        }
-      };
-    } catch (error) {
-      if (config.debug) return { status: false, error: error.message, code: 500 };
-      return { status: false, message: 'Internal server error', code: 500 };
-    }
-  }
-
-  // ─── PPIC Batch Approve ────────────────────────────────────────────────────
-  // Approves ALL SPRs in status 'Waiting Supervisor PPIC' for a given month
-  // Body: { month: 'YYYY-MM', remarks?: string }
-  async ppicBatchApprove(req) {
-    const t = await db.sequelize.transaction();
-    try {
-      const { month, remarks } = req.body;
-      const currentUser = req.user;
-
-      if (!month) {
-        await t.rollback();
-        return { status: false, message: 'month is required (YYYY-MM)', code: 400 };
-      }
-
-      const monthStart = dayjs(month + '-01').startOf('month').format('YYYY-MM-DD');
-      const monthEnd   = dayjs(month + '-01').endOf('month').format('YYYY-MM-DD');
-
-      // Find all pending PPIC SPRs in that month
-      const sprs = await SSalesPurchaseRequests.findAll({
-        where: {
-          status:        'Waiting Review PPIC',
-          required_date: { [Op.between]: [monthStart, monthEnd] }
-        },
-        transaction: t
-      });
-
-      if (sprs.length === 0) {
-        await t.rollback();
-        return {
-          status: false,
-          message: `No SPRs found with status 'Waiting Review PPIC' for month ${month}`,
-          code: 404
-        };
-      }
-
-      const approvedNumbers = [];
-
-      for (const spr of sprs) {
-        const oldData = JSON.parse(JSON.stringify(spr));
-
-        await spr.update({
-          status:          'Approved',
-          ppic_approved_by: currentUser.id,
-          approved_by:     currentUser.id,
-          confirmed_date:  dayjs().format('YYYY-MM-DD'),
-          remarks:         remarks || null
-        }, { transaction: t });
-
-        await this._saveLogSnapshot(spr.id, 'Approved', 'PPIC Batch Approved', remarks || `Batch approved by PPIC for month ${month}`, currentUser.id, t);
-
-        await this.logActivity(req, {
-          moduleCode:   'sales',
-          activityCode: 'BATCH_APPROVE_SPR_PPIC',
-          resourceId:   spr.id,
-          oldData,
-          newData:      spr,
-          description:  `Batch PPIC approved SPR ${spr.spr_number}`,
-          transaction:  t
-        });
-
-        approvedNumbers.push(spr.spr_number);
-      }
-
-      await t.commit();
-      return {
-        status:  true,
-        message: `${sprs.length} SPR(s) approved successfully`,
-        data:    { approved_count: sprs.length, approved_numbers: approvedNumbers }
-      };
-    } catch (error) {
-      await t.rollback();
-      if (config.debug) return { status: false, error: error.message, code: 500 };
-      return { status: false, message: 'Internal server error', code: 500 };
-    }
-  }
 
   async downloadTemplate(req, res) {
     try {

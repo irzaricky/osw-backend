@@ -891,7 +891,7 @@ class SDOModule extends BaseModule {
               {
                 width: 'auto',
                 stack: [
-                  { text: 'SURAT JALAN', style: 'docTitle', alignment: 'right' },
+                  { text: 'DELIVERY NOTE', style: 'docTitle', alignment: 'right' },
                   { text: 'DELIVERY ORDER', style: 'docSubTitle', alignment: 'right' }
                 ]
               }
@@ -1020,7 +1020,7 @@ class SDOModule extends BaseModule {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        `inline; filename=Surat-Jalan-${sdo.do_number}.pdf`
+        `inline; filename=Delivery-Note-${sdo.do_number}.pdf`
       );
 
       pdfDoc.pipe(res);

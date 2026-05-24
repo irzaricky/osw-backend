@@ -311,20 +311,20 @@ class AnalyticsModule extends BaseModule {
       // 1. Report Title Blocks
       worksheet.mergeCells('A1:J1');
       const titleCell = worksheet.getCell('A1');
-      titleCell.value = 'Laporan Pengiriman Sales Delivery Order';
+      titleCell.value = 'Sales Delivery Order Shipment Report';
       titleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: '312E81' } };
       titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
       worksheet.getRow(1).height = 30;
 
       worksheet.mergeCells('A2:J2');
       const dateCell = worksheet.getCell('A2');
-      dateCell.value = `Rentang Filter Tanggal: ${startDateStr} s/d ${endDateStr}`;
+      dateCell.value = `Date Filter Range: ${startDateStr} to ${endDateStr}`;
       dateCell.font = { name: 'Arial', size: 10, italic: true };
       dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
       worksheet.mergeCells('A3:J3');
       const genCell = worksheet.getCell('A3');
-      genCell.value = `Tanggal Dibuat: ${dayjs().format('DD/MM/YYYY HH:mm:ss')} WIB`;
+      genCell.value = `Generated Date: ${dayjs().format('DD/MM/YYYY HH:mm:ss')} WIB`;
       genCell.font = { name: 'Arial', size: 9, color: { argb: '4B5563' } };
       genCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
@@ -337,8 +337,8 @@ class AnalyticsModule extends BaseModule {
       
       const columns = [
         { header: 'No. DO', key: 'do_number', width: 22 },
-        { header: 'Tanggal Rencana', key: 'plan_date', width: 18 },
-        { header: 'Tanggal Kirim', key: 'shipment_date', width: 18 },
+        { header: 'Planned Date', key: 'plan_date', width: 18 },
+        { header: 'Shipment Date', key: 'shipment_date', width: 18 },
         { header: 'Pelanggan', key: 'customer_name', width: 25 },
         { header: 'Armada (Plat)', key: 'vehicle_plate', width: 15 },
         { header: 'Pengemudi', key: 'driver_name', width: 22 },
@@ -469,7 +469,7 @@ class AnalyticsModule extends BaseModule {
 
       // 4. Send Response Binary Stream
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename=Laporan_Pengiriman_SDO_${startDateStr}_${endDateStr}.xlsx`);
+      res.setHeader('Content-Disposition', `attachment; filename=SDO_Shipment_Report_${startDateStr}_${endDateStr}.xlsx`);
       
       await workbook.xlsx.write(res);
       res.end();
@@ -663,3 +663,5 @@ class AnalyticsModule extends BaseModule {
 }
 
 export default new AnalyticsModule();
+;
+;

@@ -301,12 +301,54 @@ export default {
       });
     });
 
-    await queryInterface.bulkInsert('s_delivery_plans', deliveryPlans, { ignoreDuplicates: true });
-    await queryInterface.bulkInsert('s_delivery_plan_details', deliveryPlanDetails, { ignoreDuplicates: true });
-    await queryInterface.bulkInsert('s_delivery_orders', deliveryOrders, { ignoreDuplicates: true });
+    const insertedPlans = await queryInterface.bulkInsert('s_delivery_plans', deliveryPlans, { ignoreDuplicates: true, returning: true });
+    
+    // Map temporary plan IDs to actual database IDs
+    const planIdMap = {};
+    deliveryPlans.forEach((dp, idx) => {
+      const inserted = insertedPlans.find(ip => ip.dp_number === dp.dp_number);
+      if (inserted) {
+        planIdMap[idx + 1] = inserted.id;
+      }
+    });
+
+    const finalPlanDetails = deliveryPlanDetails.map(dpd => ({
+      ...dpd,
+      delivery_plan_id: planIdMap[dpd.delivery_plan_id] || dpd.delivery_plan_id
+    }));
+
+    const insertedPlanDetails = await queryInterface.bulkInsert('s_delivery_plan_details', finalPlanDetails, { ignoreDuplicates: true, returning: true });
+
+    const finalOrders = deliveryOrders.map(doRecord => ({
+      ...doRecord,
+      delivery_plan_id: planIdMap[doRecord.delivery_plan_id] || doRecord.delivery_plan_id
+    }));
+
+    const insertedOrders = await queryInterface.bulkInsert('s_delivery_orders', finalOrders, { ignoreDuplicates: true, returning: true });
+
+    // Populate Delivery Order Details
+    const deliveryOrderDetails = [];
+    insertedOrders.forEach(insertedOrder => {
+      const planDetails = insertedPlanDetails.filter(ipd => ipd.delivery_plan_id === insertedOrder.delivery_plan_id);
+      planDetails.forEach(pd => {
+        deliveryOrderDetails.push({
+          delivery_order_id: insertedOrder.id,
+          delivery_plan_detail_id: pd.id,
+          sent_qty: pd.planned_qty,
+          received_qty: insertedOrder.delivery_status === 'Delivered' ? pd.planned_qty : null,
+          notes: insertedOrder.delivery_status === 'Delivered' ? 'Diterima dengan baik' : null,
+          ...timestamp
+        });
+      });
+    });
+
+    if (deliveryOrderDetails.length > 0) {
+      await queryInterface.bulkInsert('s_delivery_order_details', deliveryOrderDetails, { ignoreDuplicates: true });
+    }
   },
 
   async down(queryInterface, Sequelize) {
+    await queryInterface.bulkDelete('s_delivery_order_details', null, {});
     await queryInterface.bulkDelete('s_delivery_orders', null, {});
     await queryInterface.bulkDelete('s_delivery_plan_details', null, {});
     await queryInterface.bulkDelete('s_delivery_plans', null, {});

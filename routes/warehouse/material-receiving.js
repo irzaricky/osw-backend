@@ -48,7 +48,7 @@ router.get('/quantity-checking/:mdo_detail_id', auth.sessionChecker, async (req,
 });
 
 // post scan quantity checking
-router.post('/quantity-checking/scan', auth.sessionChecker, async (req, res) => {
+router.post('/quantity-checking/scan/:mr_item_id', auth.sessionChecker, async (req, res) => {
   const result = await materialReceivingModule.scanQuantityLabel(req);
   helper.sendResponse(res, result);
 });
@@ -78,7 +78,7 @@ router.get('/quality-checking/:mdo_detail_id', auth.sessionChecker, async (req, 
 });
 
 // post scan quality checking
-router.post('/quality-checking/scan', auth.sessionChecker, async (req, res) => {
+router.post('/quality-checking/scan/:mr_item_id', auth.sessionChecker, async (req, res) => {
   const result = await materialReceivingModule.scanQualityLabel(req);
   helper.sendResponse(res, result);
 });

@@ -7,7 +7,12 @@ import Joi from 'joi';
 import PdfPrinter from 'pdfmake/src/printer.js';
 import QRCode from 'qrcode';
 import dayjs from 'dayjs';
+import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const { 
   SSuppliers,
@@ -870,6 +875,7 @@ class MaterialReceivingModule extends BaseModule {
   async scanQuantityLabel(req) {
     const t = await db.sequelize.transaction();
     try {
+      const { mr_item_id } = req.params;
       const data = req.body;
 
       const schema = Joi.object({
@@ -885,7 +891,10 @@ class MaterialReceivingModule extends BaseModule {
       const value = validation.value;
 
       const materialReceivingItemLabel = await TMaterialReceivingItemLabel.findOne({
-        attributes: ['id', 'quantity_checked_at'],
+        where: {
+          mr_item_id
+        },
+        attributes: ['id', 'is_quantity', 'quantity_checked_at'],
         include: [
           {
             model: TPartLabels,
@@ -898,7 +907,7 @@ class MaterialReceivingModule extends BaseModule {
           {
             model: TMaterialReceivingItem,
             as: 'material_receiving_item',
-            attributes: ['id', 'mdo_detail_id']
+            attributes: ['id', 'mdo_detail_id', 'quantity_checked_at'],
           }
         ],
         transaction: t
@@ -908,8 +917,17 @@ class MaterialReceivingModule extends BaseModule {
         await t.rollback();
         return {
           status: false,
-          message: 'Label not found',
+          message: 'Label not found for this part',
           code: 404
+        };
+      }
+
+      if (materialReceivingItemLabel.material_receiving_item?.quantity_checked_at) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Quantity checking has already been submitted',
+          code: 400
         };
       }
 
@@ -988,6 +1006,11 @@ class MaterialReceivingModule extends BaseModule {
         attributes: ['id', 'is_quantity', 'quantity_checked_at'],
         include: [
           {
+            model: TPartLabels,
+            as: 'label',
+            attributes: ['label_number']
+          },
+          {
             model: TMaterialReceivingItem,
             as: 'material_receiving_item',
             attributes: ['id', 'quantity_checked_at'],
@@ -1010,11 +1033,6 @@ class MaterialReceivingModule extends BaseModule {
                     ]
                   }
                 ]
-              },
-              {
-                mode: TPartLabels,
-                as: 'label',
-                attributes: ['label_number']
               }
             ]
           }
@@ -1659,6 +1677,7 @@ class MaterialReceivingModule extends BaseModule {
   async scanQualityLabel(req) {
     const t = await db.sequelize.transaction();
     try {
+      const { mr_item_id } = req.params;
       const data = req.body;
 
       const schema = Joi.object({
@@ -1674,7 +1693,10 @@ class MaterialReceivingModule extends BaseModule {
       const value = validation.value;
 
       const materialReceivingItemLabel = await TMaterialReceivingItemLabel.findOne({
-        attributes: ['id', 'quality_checked_at'],
+        where: {
+          mr_item_id
+        },
+        attributes: ['id', 'is_quantity', 'is_quality', 'quality_checked_at'],
         include: [
           {
             model: TPartLabels,
@@ -1687,7 +1709,7 @@ class MaterialReceivingModule extends BaseModule {
           {
             model: TMaterialReceivingItem,
             as: 'material_receiving_item',
-            attributes: ['id', 'mdo_detail_id']
+            attributes: ['id', 'mdo_detail_id', 'quality_checked_at'],
           }
         ],
         transaction: t
@@ -1697,8 +1719,26 @@ class MaterialReceivingModule extends BaseModule {
         await t.rollback();
         return {
           status: false,
-          message: 'Label not found',
+          message: 'Label not found for this part',
           code: 404
+        };
+      }
+
+      if (materialReceivingItemLabel.is_quantity !== true) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Label did not pass quantity checking',
+          code: 400
+        };
+      }
+
+      if (materialReceivingItemLabel.material_receiving_item?.quality_checked_at) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Quality checking has already been submitted',
+          code: 400
         };
       }
 
@@ -1759,7 +1799,20 @@ class MaterialReceivingModule extends BaseModule {
     const t = await db.sequelize.transaction();
     try {
       const { mr_item_label_id } = req.params;
-      const data = req.body;
+      const data = { ...req.body };
+
+      if (typeof data.defects === 'string') {
+        try {
+          data.defects = JSON.parse(data.defects);
+        } catch (err) {
+          await t.rollback();
+          return {
+            status: false,
+            message: 'Invalid defects payload',
+            code: 400
+          };
+        }
+      }
 
       const schema = Joi.object({
         defects: Joi.array()
@@ -1791,6 +1844,76 @@ class MaterialReceivingModule extends BaseModule {
           message: 'Duplicate defect is not allowed',
           code: 400
         };
+      }
+
+      const fileFields = req.files || {};
+      const fileArrays = [
+        fileFields.defects,
+        fileFields.defect_images,
+        fileFields.images,
+        fileFields.image,
+        fileFields.defect_image,
+        fileFields.files,
+        fileFields['files[]']
+      ].filter(Boolean).flatMap((files) => (Array.isArray(files) ? files : [files]));
+
+      const getDefectFile = (index, defectId) => {
+        if (fileArrays[index]) return fileArrays[index];
+
+        for (const key of [
+          `defects[${index}]`,
+          `defect_images[${index}]`,
+          `images[${index}]`,
+          `image[${index}]`,
+          `defect_image[${index}]`,
+          `defect_image_${index}`,
+          `image_${index}`,
+          `defect_${defectId}`,
+          `image_${defectId}`,
+          `files[${index}]`,
+          `files_${index}`,
+          `files[]`
+        ]) {
+          const file = fileFields[key];
+          if (file) return Array.isArray(file) ? file[0] : file;
+        }
+
+        return null;
+      };
+
+      const allowedExts = ['.jpg', '.jpeg', '.png'];
+      const uploadDir = path.join(__dirname, '../../public/uploads/quality-defect');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+
+      const defectsWithImages = [];
+      for (let index = 0; index < value.defects.length; index++) {
+        const item = value.defects[index];
+        let imagePath = item.image || null;
+        const file = getDefectFile(index, item.defect_id);
+
+        if (file) {
+          const ext = path.extname(file.name);
+          if (!allowedExts.includes(ext.toLowerCase())) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Only image files (.jpg, .jpeg, .png) are allowed for defect images',
+              code: 400
+            };
+          }
+
+          const fileName = `quality_defect_${mr_item_label_id}_${item.defect_id}_${Date.now()}_${index}${ext}`;
+          const uploadPath = path.join(uploadDir, fileName);
+          await file.mv(uploadPath);
+          imagePath = `/uploads/quality-defect/${fileName}`;
+        }
+
+        defectsWithImages.push({
+          defect_id: item.defect_id,
+          image: imagePath
+        });
       }
 
       const materialReceivingItemLabel = await TMaterialReceivingItemLabel.findByPk(mr_item_label_id, {
@@ -1914,7 +2037,7 @@ class MaterialReceivingModule extends BaseModule {
       );
 
       // Create NG Ticket Quality
-      const ngQualities = value.defects.map(
+      const ngQualities = defectsWithImages.map(
         (item) => ({
           ng_ticket_id: ngTicket.id,
           defect_id: item.defect_id,
@@ -1965,7 +2088,20 @@ class MaterialReceivingModule extends BaseModule {
     const t = await db.sequelize.transaction();
     try {
       const { mr_item_label_id } = req.params;
-      const data = req.body;
+      const data = { ...req.body };
+
+      if (typeof data.defects === 'string') {
+        try {
+          data.defects = JSON.parse(data.defects);
+        } catch (err) {
+          await t.rollback();
+          return {
+            status: false,
+            message: 'Invalid defects payload',
+            code: 400
+          };
+        }
+      }
 
       const schema = Joi.object({
         defects: Joi.array()
@@ -1997,6 +2133,76 @@ class MaterialReceivingModule extends BaseModule {
           message: 'Duplicate defect is not allowed',
           code: 400
         };
+      }
+
+      const fileFields = req.files || {};
+      const fileArrays = [
+        fileFields.defects,
+        fileFields.defect_images,
+        fileFields.images,
+        fileFields.image,
+        fileFields.defect_image,
+        fileFields.files,
+        fileFields['files[]']
+      ].filter(Boolean).flatMap((files) => (Array.isArray(files) ? files : [files]));
+
+      const getDefectFile = (index, defectId) => {
+        if (fileArrays[index]) return fileArrays[index];
+
+        for (const key of [
+          `defects[${index}]`,
+          `defect_images[${index}]`,
+          `images[${index}]`,
+          `image[${index}]`,
+          `defect_image[${index}]`,
+          `defect_image_${index}`,
+          `image_${index}`,
+          `defect_${defectId}`,
+          `image_${defectId}`,
+          `files[${index}]`,
+          `files_${index}`,
+          `files[]`
+        ]) {
+          const file = fileFields[key];
+          if (file) return Array.isArray(file) ? file[0] : file;
+        }
+
+        return null;
+      };
+
+      const allowedExts = ['.jpg', '.jpeg', '.png'];
+      const uploadDir = path.join(__dirname, '../../public/uploads/quality-defect');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+
+      const defectsWithImages = [];
+      for (let index = 0; index < value.defects.length; index++) {
+        const item = value.defects[index];
+        let imagePath = item.image || null;
+        const file = getDefectFile(index, item.defect_id);
+
+        if (file) {
+          const ext = path.extname(file.name);
+          if (!allowedExts.includes(ext.toLowerCase())) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Only image files (.jpg, .jpeg, .png) are allowed for defect images',
+              code: 400
+            };
+          }
+
+          const fileName = `quality_defect_${mr_item_label_id}_${item.defect_id}_${Date.now()}_${index}${ext}`;
+          const uploadPath = path.join(uploadDir, fileName);
+          await file.mv(uploadPath);
+          imagePath = `/uploads/quality-defect/${fileName}`;
+        }
+
+        defectsWithImages.push({
+          defect_id: item.defect_id,
+          image: imagePath
+        });
       }
 
       const materialReceivingItemLabel = await TMaterialReceivingItemLabel.findByPk(mr_item_label_id, {
@@ -2072,7 +2278,7 @@ class MaterialReceivingModule extends BaseModule {
       });
 
       // Create New Defects
-      const ngQualities = value.defects.map(
+      const ngQualities = defectsWithImages.map(
         (item) => ({
           ng_ticket_id: materialReceivingItemLabel.ng_ticket.id,
           defect_id: item.defect_id,

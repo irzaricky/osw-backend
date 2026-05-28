@@ -13,6 +13,7 @@ export default (sequelize) => {
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'approved_by', as: 'approver' });
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'rejected_by', as: 'rejector' });
       SProductionPlan.belongsTo(models.SLines, { foreignKey: 'bottleneck_line_id', as: 'bottleneck_line' });
+      SProductionPlan.belongsTo(models.SProductionPlan, { foreignKey: 'parent_plan_id', as: 'parent_plan' });
     }
   }
 
@@ -77,6 +78,18 @@ export default (sequelize) => {
       type: DataTypes.TEXT
     },
     bottleneck_line_id: {
+      type: DataTypes.INTEGER,
+    },
+    plan_month: {
+      type: DataTypes.STRING(7),
+      allowNull: false,
+    },
+    plan_type: {
+      type: DataTypes.ENUM('ORIGINAL', 'AMENDMENT'),
+      allowNull: false,
+      defaultValue: 'ORIGINAL',
+    },
+    parent_plan_id: {
       type: DataTypes.INTEGER,
     },
   }, {

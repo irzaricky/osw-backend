@@ -7,17 +7,9 @@ export default (sequelize) => {
         foreignKey: 'group_id',
         as: 'group',
       });
-
-      SEmployeeGroupMember.belongsTo(models.SEmployeePosition, {
-        foreignKey: 'position_id',
-        as: 'position',
-      });
-
-      SEmployeeGroupMember.belongsToMany(models.SSkill, {
-        through: models.SEmployeeSkill,
-        foreignKey: 'member_id',
-        otherKey: 'skill_id',
-        as: 'skills',
+      SEmployeeGroupMember.belongsTo(models.SEmployee, {
+        foreignKey: 'employee_id',
+        as: 'employee',
       });
     }
   }
@@ -28,25 +20,13 @@ export default (sequelize) => {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
-
-      employee_code: {
-        type: DataTypes.STRING,
-      },
-
-      name: {
-        type: DataTypes.STRING,
+      employee_id: {
+        type: DataTypes.INTEGER,
         allowNull: false,
+        references: { model: 's_employees', key: 'id' },
+        onUpdate: 'CASCADE',
+        onDelete: 'RESTRICT',
       },
-
-      position_id: {
-        type: DataTypes.INTEGER,
-      },
-
-      skill_level: {
-        type: DataTypes.INTEGER,
-        defaultValue: 1,
-      },
-
       active: {
         type: DataTypes.BOOLEAN,
         defaultValue: true,

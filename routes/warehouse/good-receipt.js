@@ -11,7 +11,13 @@ router.get('/', auth.sessionChecker, async (req, res) => {
   helper.sendResponse(res, result);
 });
 
-// approve good receipt
+// get detail good receipt
+router.get('/:mr_id', auth.sessionChecker, async (req, res) => {
+  const result = await goodReceiptModule.detail(req);
+  helper.sendResponse(res, result);
+});
+
+// post approve good receipt
 router.post('/approve/:mr_id', auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin']), async (req, res) => {
   const result = await goodReceiptModule.approve(req);
   helper.sendResponse(res, result);

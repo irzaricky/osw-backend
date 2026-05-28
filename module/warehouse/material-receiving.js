@@ -499,53 +499,34 @@ class MaterialReceivingModule extends BaseModule {
     }
   }
 
-  async updateMdoStatus(
-    materialReceivingId,
-    transaction = null
-  ) {
-
-    const items =
-      await TMaterialReceivingItem.findAll({
-        where: {
-          mr_id:
-            materialReceivingId
-        },
-
-        attributes: [
-          'quantity_checked_at',
-          'quality_checked_at'
-        ],
-
-        transaction
-      });
+  async updateMdoStatus(materialReceivingId, transaction = null) {
+    const items = await TMaterialReceivingItem.findAll({
+      where: {
+        mr_id: materialReceivingId
+      },
+      attributes: ['quantity_checked_at', 'quality_checked_at'],
+      transaction
+    });
 
     if (!items.length) {
       return;
     }
 
-    const allQtyChecked =
-      items.every(
-        (item) =>
-          item.quantity_checked_at
-      );
+    const allQtyChecked = items.every(
+      (item) => item.quantity_checked_at
+    );
 
-    const allQualityChecked =
-      items.every(
-        (item) =>
-          item.quality_checked_at
-      );
+    const allQualityChecked = items.every(
+      (item) => item.quality_checked_at
+    );
 
-    const hasQtyChecking =
-      items.some(
-        (item) =>
-          item.quantity_checked_at
-      );
+    const hasQtyChecking = items.some(
+      (item) => item.quantity_checked_at
+    );
 
-    const hasQualityChecking =
-      items.some(
-        (item) =>
-          item.quality_checked_at
-      );
+    const hasQualityChecking = items.some(
+      (item) => item.quality_checked_at
+    );
 
     let status_id = 1; // Arrived
 
@@ -557,10 +538,7 @@ class MaterialReceivingModule extends BaseModule {
       status_id = 3; // Quality Checking
     }
 
-    if (
-      allQtyChecked &&
-      allQualityChecked
-    ) {
+    if (allQtyChecked && allQualityChecked) {
       status_id = 4; // Waiting GR Approval
     }
 
@@ -572,7 +550,6 @@ class MaterialReceivingModule extends BaseModule {
         where: {
           id: materialReceivingId
         },
-
         transaction
       }
     );
@@ -1393,6 +1370,8 @@ class MaterialReceivingModule extends BaseModule {
 
       const uncheckedLabels = (materialReceivingItem.labels || []).filter((item) => item.quantity_checked_at === null);
 
+      const submittedAt = new Date();
+
       for (const item of uncheckedLabels) {
         if (item.ng_ticket) {
           continue;
@@ -1400,7 +1379,9 @@ class MaterialReceivingModule extends BaseModule {
         
         await item.update(
           {
-            is_quantity: false
+            is_quantity: false,
+            quantity_checked_at: submittedAt,
+            quantity_checked_by: req.user.id
           },
           {
             transaction: t
@@ -1451,8 +1432,6 @@ class MaterialReceivingModule extends BaseModule {
           }
         );
       }
-
-      const submittedAt = new Date();
 
       await materialReceivingItem.update(
         {

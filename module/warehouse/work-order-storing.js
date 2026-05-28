@@ -9,7 +9,26 @@ import QRCode from 'qrcode';
 import dayjs from 'dayjs';
 import path from 'path';
 
-const { TWorkOrderStoring, TWorkOrderStoringItem, TWorkOrderStoringItemLabel, RefWorkOrderStoringStatus, RefWorkOrderStoringType, SParts, TPartLabels, SWarehouseAreas, SSuppliers, SUsers, SUserDetail, SPackages, TMaterialReceiving, TMaterialReceivingItem, TMaterialReceivingItemLabel, SMaterialDeliveryOrder, TMaterialDeliveryOrderDetail, RefReceivingStatus } = db;
+const { 
+  SUsers,
+  SUserDetail,
+  SParts,
+  SPackages,
+  SWarehouseAreas,
+  SSuppliers,
+  TWorkOrderStoring, 
+  TWorkOrderStoringItem, 
+  TWorkOrderStoringItemLabel, 
+  RefWorkOrderStoringStatus, 
+  RefWorkOrderStoringType, 
+  TPartLabels,
+  RefReceivingStatus,
+  TMaterialReceiving, 
+  TMaterialReceivingItem, 
+  TMaterialReceivingItemLabel, 
+  SMaterialDeliveryOrder, 
+  TMaterialDeliveryOrderDetail
+} = db;
 
 class WorkOrderStoringModule extends BaseModule {
   async list(req) {

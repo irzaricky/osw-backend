@@ -5,7 +5,20 @@ import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 import Joi from 'joi';
 
-const { SWarehouses, SWarehouseAreas, RefWarehouseCategories, SWarehouseLayout, SAreaLayout, SAreaSpacing, SWarehouseBins, TWarehouseStock, TWorkOrderStoringItemLabel, TPartLabels, SParts, SPackages } = db;
+const { 
+  SWarehouses, 
+  SWarehouseAreas, 
+  RefWarehouseCategories, 
+  SWarehouseLayout, 
+  SAreaLayout, 
+  SAreaSpacing, 
+  SWarehouseBins, 
+  TWarehouseStock, 
+  TWorkOrderStoringItemLabel, 
+  TPartLabels, 
+  SParts, 
+  SPackages 
+} = db;
 
 class WarehouseLayoutModule extends BaseModule {
   async list(req) {

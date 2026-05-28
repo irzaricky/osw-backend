@@ -70,6 +70,12 @@ router.post("/:id/calculate", auth.sessionChecker, async (req, res) => {
   await productionPlanModule.calculateCapacity(req, res);
 });
 
+/** POST /plan/:id/calculate-all
+ * Run capacity calculation for all lines (used after adjustments) */
+router.post("/:id/calculate-all", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.calculateAllCapacity(req, res);
+});
+
 // ── Adjustments ───────────────────────────────────────────────────────────────
 
 /** POST /plan/:id/adjustments

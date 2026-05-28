@@ -629,7 +629,7 @@ class UserModule extends BaseModule {
             const currentUser = req.user;
             
             let roleOptions = {
-                attributes: ['id', 'name'],
+                attributes: ['id', 'name', 'division_id'],
                 where: { status: true },
                 order: [['name', 'ASC']]
             };

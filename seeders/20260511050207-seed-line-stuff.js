@@ -5,10 +5,10 @@ import bcrypt from "bcryptjs";
  * Covers all 14 lines with stations, jobs, employee groups, and operators.
  *
  * Prerequisites:
- *   - s_factories, s_lines, ref_station_types seeded
- *   - s_jobs, ref_job_types seeded
- *   - s_roles with FOREMAN seeded
- *   - parts id 1-12 are product type
+ * - s_factories, s_lines, ref_station_types seeded
+ * - s_jobs, ref_job_types seeded
+ * - s_roles with FOREMAN seeded
+ * - parts id 1-12 are product type
  */
 export default {
   async up(queryInterface) {
@@ -22,16 +22,15 @@ export default {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    const findLine    = (rows, code)   => rows.find((r) => r.line_code  === code)?.id;
-    const findStation = (rows, code)   => rows.find((r) => r.station_code === code)?.id;
-    const findJob     = (rows, code)   => rows.find((r) => r.job_code   === code)?.id;
-    const findStType  = (rows, name)   => rows.find((r) => r.name       === name)?.id;
+    const findLine    = (rows, code) => rows.find((r) => r.line_code    === code)?.id;
+    const findStation = (rows, code) => rows.find((r) => r.station_code === code)?.id;
+    const findJob     = (rows, code) => rows.find((r) => r.job_code     === code)?.id;
+    const findStType  = (rows, name) => rows.find((r) => r.name         === name)?.id;
 
     // ── Fetch existing master data ────────────────────────────────────────────
 
-    const lines      = await q(`SELECT id, line_code FROM s_lines WHERE deleted_at IS NULL`);
-    const stTypes    = await q(`SELECT id, name FROM ref_station_types`);
-    const existJobs  = await q(`SELECT id, job_code FROM s_jobs WHERE deleted_at IS NULL`);
+    const lines   = await q(`SELECT id, line_code FROM s_lines WHERE deleted_at IS NULL`);
+    const stTypes = await q(`SELECT id, name FROM ref_station_types`);
 
     const ST = {
       INSPECTION: findStType(stTypes, 'INSPECTION'),
@@ -42,84 +41,116 @@ export default {
       PACKING:    findStType(stTypes, 'PACKING'),
     };
 
-    // ── 1. Add stations for lines that don't have them yet ────────────────────
-    // Lines 2, 5, 7, 11, 12 have no stations in previous seeder
-
+    // ── 1. Stations ───────────────────────────────────────────────────────────
     const newStations = [
-      // Line 2 — Battery Assembly
+      // ── Line 2 — Battery Assembly ─────────────────────────────────────────
       { station_code: 'ST-BATT-CELL',  name: 'Cell Incoming Inspection', line_id: findLine(lines, 'ASSY-BATT'), station_type_id: ST.INSPECTION, sequence: 10, status: true },
       { station_code: 'ST-BATT-ASSY',  name: 'Battery Pack Assembly',    line_id: findLine(lines, 'ASSY-BATT'), station_type_id: ST.ASSEMBLY,   sequence: 20, status: true },
       { station_code: 'ST-BATT-TEST',  name: 'Battery Charge Test',      line_id: findLine(lines, 'ASSY-BATT'), station_type_id: ST.TESTING,    sequence: 30, status: true },
       { station_code: 'ST-BATT-QC',    name: 'Battery Final QC',         line_id: findLine(lines, 'ASSY-BATT'), station_type_id: ST.INSPECTION, sequence: 40, status: true },
 
-      // Line 5 — Charging & Testing
+      // ── Line 5 — Charging & Testing ───────────────────────────────────────
       { station_code: 'ST-TST-CHG',    name: 'Charging Station',         line_id: findLine(lines, 'ASSY-TEST'), station_type_id: ST.TESTING,    sequence: 10, status: true },
       { station_code: 'ST-TST-ELEC',   name: 'Electrical Safety Check',  line_id: findLine(lines, 'ASSY-TEST'), station_type_id: ST.TESTING,    sequence: 20, status: true },
       { station_code: 'ST-TST-PERF',   name: 'Performance Test',         line_id: findLine(lines, 'ASSY-TEST'), station_type_id: ST.TESTING,    sequence: 30, status: true },
 
-      // Line 7 — Rework
+      // ── Line 7 — Rework ───────────────────────────────────────────────────
       { station_code: 'ST-RWK-DIAG',   name: 'Defect Diagnosis',         line_id: findLine(lines, 'ASSY-RWK'),  station_type_id: ST.INSPECTION, sequence: 10, status: true },
       { station_code: 'ST-RWK-REPAIR', name: 'Repair & Correction',      line_id: findLine(lines, 'ASSY-RWK'),  station_type_id: ST.ASSEMBLY,   sequence: 20, status: true },
       { station_code: 'ST-RWK-VERIFY', name: 'Rework Verification',      line_id: findLine(lines, 'ASSY-RWK'),  station_type_id: ST.INSPECTION, sequence: 30, status: true },
 
-      // Line 11 — Incoming QC
-      { station_code: 'ST-INQC-RECV',  name: 'Goods Receiving Check',    line_id: findLine(lines, 'WH-INQC'),   station_type_id: ST.INSPECTION, sequence: 10, status: true },
-      { station_code: 'ST-INQC-SAMP',  name: 'Sample Inspection',        line_id: findLine(lines, 'WH-INQC'),   station_type_id: ST.INSPECTION, sequence: 20, status: true },
-      { station_code: 'ST-INQC-STCK',  name: 'Stock Putaway',            line_id: findLine(lines, 'WH-INQC'),   station_type_id: ST.ASSEMBLY,   sequence: 30, status: true },
+      // ── Line 8 — Painting Primer ──────────────────────────────────────────
+      { station_code: 'ST-PRM-CLEAN',  name: 'Surface Cleaning',         line_id: findLine(lines, 'PAINT-PRM'), station_type_id: ST.PAINTING,   sequence: 10, status: true },
+      { station_code: 'ST-PRM-SPRAY',  name: 'Primer Spray',             line_id: findLine(lines, 'PAINT-PRM'), station_type_id: ST.PAINTING,   sequence: 20, status: true },
+      { station_code: 'ST-PRM-OVEN',   name: 'Oven Drying Primer',       line_id: findLine(lines, 'PAINT-PRM'), station_type_id: ST.OVEN,       sequence: 30, status: true },
+      { station_code: 'ST-PRM-QC',     name: 'Primer Quality Check',     line_id: findLine(lines, 'PAINT-PRM'), station_type_id: ST.INSPECTION, sequence: 40, status: true },
 
-      // Line 12 — Material Handling
-      { station_code: 'ST-MAT-PICK',   name: 'Material Picking',         line_id: findLine(lines, 'WH-MAT'),    station_type_id: ST.ASSEMBLY,   sequence: 10, status: true },
-      { station_code: 'ST-MAT-PREP',   name: 'Material Preparation',     line_id: findLine(lines, 'WH-MAT'),    station_type_id: ST.ASSEMBLY,   sequence: 20, status: true },
-      { station_code: 'ST-MAT-ISSUE',  name: 'Material Issuance',        line_id: findLine(lines, 'WH-MAT'),    station_type_id: ST.ASSEMBLY,   sequence: 30, status: true },
+      // ── Line 9 — Painting Color ───────────────────────────────────────────
+      { station_code: 'ST-COL-SPRAY',  name: 'Color Spray',              line_id: findLine(lines, 'PAINT-COL'), station_type_id: ST.PAINTING,   sequence: 10, status: true },
+      { station_code: 'ST-COL-OVEN',   name: 'Oven Drying Color',        line_id: findLine(lines, 'PAINT-COL'), station_type_id: ST.OVEN,       sequence: 20, status: true },
+      { station_code: 'ST-COL-QC',     name: 'Color Defect Inspection',  line_id: findLine(lines, 'PAINT-COL'), station_type_id: ST.INSPECTION, sequence: 30, status: true },
+
+      // ── Line 10 — Painting Color Coat ─────────────────────────────────────
+      { station_code: 'ST-COAT-CLEAN', name: 'Surface Final Cleaning',      line_id: findLine(lines, 'PAINT-COAT'), station_type_id: ST.PAINTING,   sequence: 10, status: true },
+      { station_code: 'ST-COAT-SPRAY', name: 'Color Coat Spray',            line_id: findLine(lines, 'PAINT-COAT'), station_type_id: ST.PAINTING,   sequence: 20, status: true },
+      { station_code: 'ST-COAT-OVEN',  name: 'Oven Drying Color Coat',      line_id: findLine(lines, 'PAINT-COAT'), station_type_id: ST.OVEN,       sequence: 30, status: true },
+      { station_code: 'ST-COAT-THK',   name: 'Color Coat Thickness Check',  line_id: findLine(lines, 'PAINT-COAT'), station_type_id: ST.INSPECTION, sequence: 40, status: true },
+      { station_code: 'ST-COAT-VIS',   name: 'Color Coat Visual Inspection',line_id: findLine(lines, 'PAINT-COAT'), station_type_id: ST.INSPECTION, sequence: 50, status: true },
+
+      // ── Line 11 — Incoming QC ─────────────────────────────────────────────
+      { station_code: 'ST-INQC-RECV',  name: 'Goods Receiving Check',    line_id: findLine(lines, 'WH-INQC'),    station_type_id: ST.INSPECTION, sequence: 10, status: true },
+      { station_code: 'ST-INQC-SAMP',  name: 'Sample Inspection',        line_id: findLine(lines, 'WH-INQC'),    station_type_id: ST.INSPECTION, sequence: 20, status: true },
+      { station_code: 'ST-INQC-STCK',  name: 'Stock Putaway',            line_id: findLine(lines, 'WH-INQC'),    station_type_id: ST.ASSEMBLY,   sequence: 30, status: true },
+
+      // ── Line 12 — Material Handling ───────────────────────────────────────
+      { station_code: 'ST-MAT-PICK',   name: 'Material Picking',         line_id: findLine(lines, 'WH-MAT'),     station_type_id: ST.ASSEMBLY,   sequence: 10, status: true },
+      { station_code: 'ST-MAT-PREP',   name: 'Material Preparation',     line_id: findLine(lines, 'WH-MAT'),     station_type_id: ST.ASSEMBLY,   sequence: 20, status: true },
+      { station_code: 'ST-MAT-ISSUE',  name: 'Material Issuance',        line_id: findLine(lines, 'WH-MAT'),     station_type_id: ST.ASSEMBLY,   sequence: 30, status: true },
     ].map((s) => ({ ...s, ...ts }));
 
     await queryInterface.bulkInsert('s_stations', newStations, { ignoreDuplicates: true });
 
-    // ── 2. Add jobs for new stations ──────────────────────────────────────────
+    // ── 2. Jobs ───────────────────────────────────────────────────────────────
 
-    const [jobTypeRows] = await queryInterface.sequelize.query(
-      `SELECT id, name FROM ref_job_types`
-    );
+    const [jobTypeRows] = await queryInterface.sequelize.query(`SELECT id, name FROM ref_job_types`);
     const jtMap = Object.fromEntries(jobTypeRows.map((r) => [r.name, r.id]));
 
     const newJobs = [
-      // Battery line jobs
-      { job_code: 'JOB-BATT-INSP',   name: 'Cell Visual Inspection',      job_type_id: jtMap['INSPECTION'], standard_time: 180 },
-      { job_code: 'JOB-BATT-VOLT',   name: 'Cell Voltage Check',          job_type_id: jtMap['TESTING'],    standard_time: 120 },
-      { job_code: 'JOB-BATT-BUILD',  name: 'Build Battery Pack',          job_type_id: jtMap['ASSEMBLY'],   standard_time: 600 },
-      { job_code: 'JOB-BATT-WELD',   name: 'Spot Weld Cell Tabs',         job_type_id: jtMap['ASSEMBLY'],   standard_time: 480 },
-      { job_code: 'JOB-BATT-CHG',    name: 'Initial Charge Cycle',        job_type_id: jtMap['TESTING'],    standard_time: 900 },
-      { job_code: 'JOB-BATT-CAP',    name: 'Capacity Test',               job_type_id: jtMap['TESTING'],    standard_time: 480 },
-      { job_code: 'JOB-BATT-FQC',    name: 'Battery Final QC Check',      job_type_id: jtMap['INSPECTION'], standard_time: 180 },
+      // ── Battery Assembly jobs ─────────────────────────────────────────────
+      { job_code: 'JOB-BATT-INSP',     name: 'Cell Visual Inspection',       job_type_id: jtMap['INSPECTION'], standard_time:  180 },
+      { job_code: 'JOB-BATT-VOLT',     name: 'Cell Voltage Check',           job_type_id: jtMap['TESTING'],    standard_time:  120 },
+      { job_code: 'JOB-BATT-BUILD',    name: 'Build Battery Pack',           job_type_id: jtMap['ASSEMBLY'],   standard_time:  600 },
+      { job_code: 'JOB-BATT-WELD',     name: 'Spot Weld Cell Tabs',          job_type_id: jtMap['ASSEMBLY'],   standard_time:  480 },
+      { job_code: 'JOB-BATT-CHG',      name: 'Initial Charge Cycle',         job_type_id: jtMap['TESTING'],    standard_time:  900 },
+      { job_code: 'JOB-BATT-CAP',      name: 'Capacity Test',                job_type_id: jtMap['TESTING'],    standard_time:  480 },
+      { job_code: 'JOB-BATT-FQC',      name: 'Battery Final QC Check',       job_type_id: jtMap['INSPECTION'], standard_time:  180 },
 
-      // Charging & Testing line jobs
-      { job_code: 'JOB-TST-FULLCHG', name: 'Full Charge Test',            job_type_id: jtMap['TESTING'],    standard_time: 720 },
-      { job_code: 'JOB-TST-DISCHARGE',name: 'Discharge Test',             job_type_id: jtMap['TESTING'],    standard_time: 600 },
-      { job_code: 'JOB-TST-ELEC-SF', name: 'Electrical Safety Verify',   job_type_id: jtMap['TESTING'],    standard_time: 300 },
-      { job_code: 'JOB-TST-SPEED',   name: 'Speed Performance Test',      job_type_id: jtMap['TESTING'],    standard_time: 480 },
-      { job_code: 'JOB-TST-RANGE',   name: 'Range Estimation Test',       job_type_id: jtMap['TESTING'],    standard_time: 360 },
+      // ── Charging & Testing jobs ───────────────────────────────────────────
+      { job_code: 'JOB-TST-FULLCHG',   name: 'Full Charge Test',             job_type_id: jtMap['TESTING'],    standard_time:  720 },
+      { job_code: 'JOB-TST-DISCHARGE', name: 'Discharge Test',               job_type_id: jtMap['TESTING'],    standard_time:  600 },
+      { job_code: 'JOB-TST-ELEC-SF',   name: 'Electrical Safety Verify',     job_type_id: jtMap['TESTING'],    standard_time:  300 },
+      { job_code: 'JOB-TST-SPEED',     name: 'Speed Performance Test',       job_type_id: jtMap['TESTING'],    standard_time:  480 },
+      { job_code: 'JOB-TST-RANGE',     name: 'Range Estimation Test',        job_type_id: jtMap['TESTING'],    standard_time:  360 },
 
-      // Rework line jobs
-      { job_code: 'JOB-RWK-DIAG',    name: 'Defect Root Cause Analysis',  job_type_id: jtMap['INSPECTION'], standard_time: 300 },
-      { job_code: 'JOB-RWK-ELEC',    name: 'Electrical Rework',           job_type_id: jtMap['ASSEMBLY'],   standard_time: 480 },
-      { job_code: 'JOB-RWK-MECH',    name: 'Mechanical Rework',           job_type_id: jtMap['ASSEMBLY'],   standard_time: 360 },
-      { job_code: 'JOB-RWK-VER',     name: 'Post-Rework Verification',    job_type_id: jtMap['INSPECTION'], standard_time: 240 },
+      // ── Rework jobs ───────────────────────────────────────────────────────
+      { job_code: 'JOB-RWK-DIAG',      name: 'Defect Root Cause Analysis',   job_type_id: jtMap['INSPECTION'], standard_time:  300 },
+      { job_code: 'JOB-RWK-ELEC',      name: 'Electrical Rework',            job_type_id: jtMap['ASSEMBLY'],   standard_time:  480 },
+      { job_code: 'JOB-RWK-MECH',      name: 'Mechanical Rework',            job_type_id: jtMap['ASSEMBLY'],   standard_time:  360 },
+      { job_code: 'JOB-RWK-VER',       name: 'Post-Rework Verification',     job_type_id: jtMap['INSPECTION'], standard_time:  240 },
 
-      // Incoming QC line jobs
-      { job_code: 'JOB-INQC-COUNT',  name: 'Quantity Count Check',        job_type_id: jtMap['INSPECTION'], standard_time: 180 },
-      { job_code: 'JOB-INQC-VIS',    name: 'Visual Damage Inspection',    job_type_id: jtMap['INSPECTION'], standard_time: 240 },
-      { job_code: 'JOB-INQC-SAMP',   name: 'Random Sample Measurement',  job_type_id: jtMap['INSPECTION'], standard_time: 300 },
-      { job_code: 'JOB-INQC-STORE',  name: 'Putaway to Storage Location', job_type_id: jtMap['SYSTEM'],     standard_time: 180 },
+      // ── Painting Primer jobs ──────────────────────────────────────────────
+      { job_code: 'JOB-CLEAN-SURF',    name: 'Surface Cleaning & Degreasing',job_type_id: jtMap['PAINTING'],   standard_time:  300 },
+      { job_code: 'JOB-SPRAY-PRM',     name: 'Primer Spray Application',     job_type_id: jtMap['PAINTING'],   standard_time:  360 },
+      { job_code: 'JOB-OVEN-PRM',      name: 'Oven Drying Primer',           job_type_id: jtMap['OVEN'],       standard_time:  900 },
+      { job_code: 'JOB-QC-PRM',        name: 'Primer Quality Check',         job_type_id: jtMap['INSPECTION'], standard_time:  180 },
 
-      // Material Handling line jobs
-      { job_code: 'JOB-MAT-PICK',    name: 'Pick Material by BOM',        job_type_id: jtMap['SYSTEM'],     standard_time: 240 },
-      { job_code: 'JOB-MAT-STAGE',   name: 'Stage Material to Line',      job_type_id: jtMap['ASSEMBLY'],   standard_time: 180 },
-      { job_code: 'JOB-MAT-ISSUE',   name: 'Issue Material to Production', job_type_id: jtMap['SYSTEM'],    standard_time: 120 },
+      // ── Painting Color jobs ───────────────────────────────────────────────
+      { job_code: 'JOB-SPRAY-COL',     name: 'Color Base Coat Spray',        job_type_id: jtMap['PAINTING'],   standard_time:  480 },
+      { job_code: 'JOB-OVEN-COL',      name: 'Oven Drying Color Coat',       job_type_id: jtMap['OVEN'],       standard_time: 1200 },
+      { job_code: 'JOB-QC-COL',        name: 'Color Defect Inspection',      job_type_id: jtMap['INSPECTION'], standard_time:  240 },
+
+      // ── Painting Color Coat (clear coat / top coat) jobs ──────────────────
+      { job_code: 'JOB-CLEAN-FNL',     name: 'Final Surface Cleaning',       job_type_id: jtMap['PAINTING'],   standard_time:  180 },
+      { job_code: 'JOB-SPRAY-COAT',    name: 'Clear Coat Spray Application', job_type_id: jtMap['PAINTING'],   standard_time:  360 },
+      { job_code: 'JOB-OVEN-COAT',     name: 'Oven Drying Clear Coat',       job_type_id: jtMap['OVEN'],       standard_time: 1080 },
+      { job_code: 'JOB-INSP-THK',      name: 'Paint Thickness Measurement',  job_type_id: jtMap['INSPECTION'], standard_time:  180 },
+      { job_code: 'JOB-INSP-VIS',      name: 'Visual Paint Inspection',      job_type_id: jtMap['INSPECTION'], standard_time:  180 },
+
+      // ── Incoming QC jobs ──────────────────────────────────────────────────
+      { job_code: 'JOB-INQC-COUNT',    name: 'Quantity Count Check',         job_type_id: jtMap['INSPECTION'], standard_time:  180 },
+      { job_code: 'JOB-INQC-VIS',      name: 'Visual Damage Inspection',     job_type_id: jtMap['INSPECTION'], standard_time:  240 },
+      { job_code: 'JOB-INQC-SAMP',     name: 'Random Sample Measurement',    job_type_id: jtMap['INSPECTION'], standard_time:  300 },
+      { job_code: 'JOB-INQC-STORE',    name: 'Putaway to Storage Location',  job_type_id: jtMap['SYSTEM'],     standard_time:  180 },
+
+      // ── Material Handling jobs ────────────────────────────────────────────
+      { job_code: 'JOB-MAT-PICK',      name: 'Pick Material by BOM',         job_type_id: jtMap['SYSTEM'],     standard_time:  240 },
+      { job_code: 'JOB-MAT-STAGE',     name: 'Stage Material to Line',       job_type_id: jtMap['ASSEMBLY'],   standard_time:  180 },
+      { job_code: 'JOB-MAT-ISSUE',     name: 'Issue Material to Production', job_type_id: jtMap['SYSTEM'],     standard_time:  120 },
     ].map((j) => ({ ...j, active: true, ...ts }));
 
     await queryInterface.bulkInsert('s_jobs', newJobs, { ignoreDuplicates: true });
 
-    // ── 3. Assign jobs to new stations ────────────────────────────────────────
+    // ── 3. Station Jobs ───────────────────────────────────────────────────────
 
     const allStations = await q(`SELECT id, station_code FROM s_stations WHERE deleted_at IS NULL`);
     const allJobs     = await q(`SELECT id, job_code FROM s_jobs WHERE deleted_at IS NULL`);
@@ -135,57 +166,55 @@ export default {
 
     const newStationJobs = [
       // Battery Assembly
-      sj('ST-BATT-CELL',  'JOB-BATT-INSP',    1),
-      sj('ST-BATT-CELL',  'JOB-BATT-VOLT',    2),
-      sj('ST-BATT-ASSY',  'JOB-BATT-BUILD',   1),
-      sj('ST-BATT-ASSY',  'JOB-BATT-WELD',    2),
-      sj('ST-BATT-TEST',  'JOB-BATT-CHG',     1),
-      sj('ST-BATT-TEST',  'JOB-BATT-CAP',     2),
-      sj('ST-BATT-QC',    'JOB-BATT-FQC',     1),
+      sj('ST-BATT-CELL',  'JOB-BATT-INSP',      1), sj('ST-BATT-CELL',  'JOB-BATT-VOLT',      2),
+      sj('ST-BATT-ASSY',  'JOB-BATT-BUILD',     1), sj('ST-BATT-ASSY',  'JOB-BATT-WELD',      2),
+      sj('ST-BATT-TEST',  'JOB-BATT-CHG',       1), sj('ST-BATT-TEST',  'JOB-BATT-CAP',       2),
+      sj('ST-BATT-QC',    'JOB-BATT-FQC',       1),
 
       // Charging & Testing
-      sj('ST-TST-CHG',    'JOB-TST-FULLCHG',  1),
-      sj('ST-TST-CHG',    'JOB-TST-DISCHARGE', 2),
-      sj('ST-TST-ELEC',   'JOB-TST-ELEC-SF',  1),
-      sj('ST-TST-PERF',   'JOB-TST-SPEED',    1),
-      sj('ST-TST-PERF',   'JOB-TST-RANGE',    2),
+      sj('ST-TST-CHG',    'JOB-TST-FULLCHG',    1), sj('ST-TST-CHG',    'JOB-TST-DISCHARGE',  2),
+      sj('ST-TST-ELEC',   'JOB-TST-ELEC-SF',    1), sj('ST-TST-PERF',   'JOB-TST-SPEED',      1),
+      sj('ST-TST-PERF',   'JOB-TST-RANGE',      2),
 
       // Rework
-      sj('ST-RWK-DIAG',   'JOB-RWK-DIAG',     1),
-      sj('ST-RWK-REPAIR', 'JOB-RWK-ELEC',     1),
-      sj('ST-RWK-REPAIR', 'JOB-RWK-MECH',     2),
-      sj('ST-RWK-VERIFY', 'JOB-RWK-VER',      1),
+      sj('ST-RWK-DIAG',   'JOB-RWK-DIAG',       1), sj('ST-RWK-REPAIR', 'JOB-RWK-ELEC',       1),
+      sj('ST-RWK-REPAIR', 'JOB-RWK-MECH',       2), sj('ST-RWK-VERIFY', 'JOB-RWK-VER',        1),
 
-      // Incoming QC
-      sj('ST-INQC-RECV',  'JOB-INQC-COUNT',   1),
-      sj('ST-INQC-RECV',  'JOB-INQC-VIS',     2),
-      sj('ST-INQC-SAMP',  'JOB-INQC-SAMP',    1),
-      sj('ST-INQC-STCK',  'JOB-INQC-STORE',   1),
+      // Painting Primer
+      sj('ST-PRM-CLEAN',  'JOB-CLEAN-SURF',     1), sj('ST-PRM-SPRAY',  'JOB-SPRAY-PRM',      1),
+      sj('ST-PRM-OVEN',   'JOB-OVEN-PRM',       1), sj('ST-PRM-QC',     'JOB-QC-PRM',         1),
 
-      // Material Handling
-      sj('ST-MAT-PICK',   'JOB-MAT-PICK',     1),
-      sj('ST-MAT-PREP',   'JOB-MAT-STAGE',    1),
-      sj('ST-MAT-ISSUE',  'JOB-MAT-ISSUE',    1),
-    ].filter((r) => r.station_id && r.job_id); // skip if station/job not found
+      // Painting Color
+      sj('ST-COL-SPRAY',  'JOB-SPRAY-COL',      1), sj('ST-COL-OVEN',   'JOB-OVEN-COL',       1),
+      sj('ST-COL-QC',     'JOB-QC-COL',         1),
+
+      // Painting Color Coat
+      sj('ST-COAT-CLEAN', 'JOB-CLEAN-FNL',      1), sj('ST-COAT-SPRAY', 'JOB-SPRAY-COAT',     1),
+      sj('ST-COAT-OVEN',  'JOB-OVEN-COAT',      1), sj('ST-COAT-THK',   'JOB-INSP-THK',       1),
+      sj('ST-COAT-VIS',   'JOB-INSP-VIS',       1),
+
+      // Incoming QC & Material Handling
+      sj('ST-INQC-RECV',  'JOB-INQC-COUNT',     1), sj('ST-INQC-RECV',  'JOB-INQC-VIS',       2),
+      sj('ST-INQC-SAMP',  'JOB-INQC-SAMP',      1), sj('ST-INQC-STCK',  'JOB-INQC-STORE',     1),
+      sj('ST-MAT-PICK',   'JOB-MAT-PICK',       1), sj('ST-MAT-PREP',   'JOB-MAT-STAGE',      1),
+      sj('ST-MAT-ISSUE',  'JOB-MAT-ISSUE',      1),
+    ].filter((r) => r.station_id && r.job_id);
 
     await queryInterface.bulkInsert('s_station_jobs', newStationJobs, { ignoreDuplicates: true });
 
-    // ── 4. Positions (skip if exists) ─────────────────────────────────────────
+    // ── 4. Positions ──────────────────────────────────────────────────────────
 
     await queryInterface.bulkInsert('s_employee_positions', [
-      { name: 'Group Leader',  description: 'Leads and coordinates group members', ...ts },
-      { name: 'Operator',      description: 'Runs production process at workstations', ...ts },
-      { name: 'Quality Check', description: 'Inspects production output quality', ...ts },
-      { name: 'Technician',    description: 'Maintains and repairs production machinery', ...ts },
+      { name: 'Group Leader',  description: 'Leads and coordinates group members',         ...ts },
+      { name: 'Operator',      description: 'Runs production process at workstations',     ...ts },
+      { name: 'Quality Check', description: 'Inspects production output quality',          ...ts },
+      { name: 'Technician',    description: 'Maintains and repairs production machinery',  ...ts },
     ], { ignoreDuplicates: true });
 
-    const positions = await q(
-      `SELECT id, name FROM s_employee_positions
-       WHERE name IN ('Group Leader','Operator','Quality Check','Technician')`
-    );
+    const positions = await q(`SELECT id, name FROM s_employee_positions`);
     const posMap = Object.fromEntries(positions.map((p) => [p.name, p.id]));
 
-    // ── 5. FOREMAN role & users (one per line) ────────────────────────────────
+    // ── 5. FOREMAN role & users ───────────────────────────────────────────────
 
     await queryInterface.bulkInsert('s_roles', [
       { name: 'FOREMAN', division_id: null, status: true, ...ts },
@@ -197,52 +226,32 @@ export default {
 
     const passwordHash = await bcrypt.hash('foreman123', 10);
 
-    // One foreman per line (14 lines total)
     const lineConfigs = [
-      { code: 'ASSY-FRM',  label: 'frm'  },
-      { code: 'ASSY-BATT', label: 'batt' },
-      { code: 'ASSY-ELEC', label: 'elec' },
-      { code: 'ASSY-FNL',  label: 'fnl'  },
-      { code: 'ASSY-TEST', label: 'test' },
-      { code: 'ASSY-QC',   label: 'qc'   },
-      { code: 'ASSY-RWK',  label: 'rwk'  },
-      { code: 'PAINT-PRM', label: 'prm'  },
-      { code: 'PAINT-COL', label: 'col'  },
-      { code: 'PAINT-COAT',label: 'coat' },
-      { code: 'WH-INQC',   label: 'inqc' },
-      { code: 'WH-MAT',    label: 'mat'  },
-      { code: 'WH-PACK',   label: 'pack' },
-      { code: 'WH-FG',     label: 'fg'   },
+      { code: 'ASSY-FRM',   label: 'frm'  }, { code: 'ASSY-BATT',  label: 'batt' },
+      { code: 'ASSY-ELEC',  label: 'elec' }, { code: 'ASSY-FNL',   label: 'fnl'  },
+      { code: 'ASSY-TEST',  label: 'test' }, { code: 'ASSY-QC',    label: 'qc'   },
+      { code: 'ASSY-RWK',   label: 'rwk'  }, { code: 'PAINT-PRM',  label: 'prm'  },
+      { code: 'PAINT-COL',  label: 'col'  }, { code: 'PAINT-COAT', label: 'coat' },
+      { code: 'WH-INQC',    label: 'inqc' }, { code: 'WH-MAT',     label: 'mat'  },
+      { code: 'WH-PACK',    label: 'pack' }, { code: 'WH-FG',      label: 'fg'   },
     ];
 
     const foremanEmails = lineConfigs.map((l) => `foreman.${l.label}@factory.local`);
-
-    // Insert only foremen that don't exist yet
-    const existingEmails = await q(
-      `SELECT email FROM s_users WHERE email = ANY(ARRAY[${foremanEmails.map((e) => `'${e}'`).join(',')}])`
-    );
+    const existingEmails = await q(`SELECT email FROM s_users WHERE email = ANY(ARRAY[${foremanEmails.map((e) => `'${e}'`).join(',')}])`);
     const existingSet = new Set(existingEmails.map((r) => r.email));
 
     const newForemen = foremanEmails
       .filter((email) => !existingSet.has(email))
-      .map((email) => ({
-        email,
-        password:   passwordHash,
-        role_id:    foremanRole.id,
-        active:     true,
-        ...ts,
-      }));
+      .map((email) => ({ email, password: passwordHash, role_id: foremanRole.id, active: true, ...ts }));
 
     if (newForemen.length > 0) {
       await queryInterface.bulkInsert('s_users', newForemen);
     }
 
-    const foremanRows = await q(
-      `SELECT id, email FROM s_users WHERE email = ANY(ARRAY[${foremanEmails.map((e) => `'${e}'`).join(',')}])`
-    );
+    const foremanRows = await q(`SELECT id, email FROM s_users WHERE email = ANY(ARRAY[${foremanEmails.map((e) => `'${e}'`).join(',')}])`);
     const foremanMap = Object.fromEntries(foremanRows.map((r) => [r.email, r.id]));
 
-    // ── 6. Employee Groups — one per line ─────────────────────────────────────
+    // ── 6. Employee Groups ────────────────────────────────────────────────────
 
     const groupsToInsert = lineConfigs
       .map((l) => ({
@@ -257,127 +266,108 @@ export default {
 
     await queryInterface.bulkInsert('s_employee_groups', groupsToInsert, { ignoreDuplicates: true });
 
-    const groupRows = await q(
-      `SELECT id, name FROM s_employee_groups
-       WHERE name = ANY(ARRAY[${groupsToInsert.map((g) => `'${g.name}'`).join(',')}])`
-    );
+    const groupRows = await q(`SELECT id, name FROM s_employee_groups`);
     const groupMap = Object.fromEntries(groupRows.map((g) => [g.name, g.id]));
 
-    // ── 7. Members — 1 Group Leader + 4 Operators + 1 QC + 1 Technician each ─
+    // ── 7. New Flow: Employees & Group Members ────────────────────────────────
+    
+    const employeesToInsert = [];
+    const relationMappings = [];
 
-    const membersToInsert = [];
-
-    lineConfigs.forEach((l, li) => {
+    lineConfigs.forEach((l) => {
       const groupName = `Group ${l.label.toUpperCase()}`;
       const groupId   = groupMap[groupName];
       if (!groupId) return;
+      const lbl = l.label.toUpperCase();
 
-      const base = li * 7 + 1; // unique employee numbers per group
+      // Define personal data structure
+      const squad = [
+        { code: `EMP-${lbl}-001`, name: `Leader ${lbl}`,     position: 'Group Leader' },
+        { code: `EMP-${lbl}-002`, name: `Operator A ${lbl}`, position: 'Operator' },
+        { code: `EMP-${lbl}-003`, name: `Operator B ${lbl}`, position: 'Operator' },
+        { code: `EMP-${lbl}-004`, name: `Operator C ${lbl}`, position: 'Operator' },
+        { code: `EMP-${lbl}-005`, name: `Operator D ${lbl}`, position: 'Operator' },
+        { code: `EMP-${lbl}-006`, name: `QC ${lbl}`,         position: 'Quality Check' },
+        { code: `EMP-${lbl}-007`, name: `Tech ${lbl}`,       position: 'Technician' },
+      ];
 
-      membersToInsert.push(
-        // Group Leader (= foreman, no separate member entry needed for ops count,
-        //  but kept for org chart completeness)
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-001`, name: `Leader ${l.label.toUpperCase()}`,   position_id: posMap['Group Leader'],  skill_level: 4, active: true, ...ts },
-        // Operators
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-002`, name: `Operator A ${l.label.toUpperCase()}`, position_id: posMap['Operator'],      skill_level: 3, active: true, ...ts },
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-003`, name: `Operator B ${l.label.toUpperCase()}`, position_id: posMap['Operator'],      skill_level: 3, active: true, ...ts },
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-004`, name: `Operator C ${l.label.toUpperCase()}`, position_id: posMap['Operator'],      skill_level: 2, active: true, ...ts },
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-005`, name: `Operator D ${l.label.toUpperCase()}`, position_id: posMap['Operator'],      skill_level: 2, active: true, ...ts },
-        // QC
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-006`, name: `QC ${l.label.toUpperCase()}`,        position_id: posMap['Quality Check'], skill_level: 3, active: true, ...ts },
-        // Technician
-        { group_id: groupId, employee_code: `EMP-${l.label.toUpperCase()}-007`, name: `Tech ${l.label.toUpperCase()}`,      position_id: posMap['Technician'],    skill_level: 3, active: true, ...ts },
-      );
+      squad.forEach((member) => {
+        // 1. Prepare data for s_employees (dengan qr_token)
+        employeesToInsert.push({
+          employee_code: member.code,
+          name:          member.name,
+          position_id:   posMap[member.position],
+          qr_token:      `QR-${member.code}`,  // <-- PENAMBAHAN QR TOKEN DISINI
+          active:        true,
+          ...ts
+        });
+
+        // 2. Prepare mapping relation for s_employee_group_members
+        relationMappings.push({
+          group_id:      groupId,
+          employee_code: member.code,
+          active:        true,
+          ...ts
+        });
+      });
     });
 
+    // Bulk Insert master data karyawan (s_employees)
+    await queryInterface.bulkInsert('s_employees', employeesToInsert, { ignoreDuplicates: true });
+
+    // Tarik data karyawan yang baru saja diinsert untuk mendapatkan ID-nya
+    const insertedEmployees = await q(`SELECT id, employee_code FROM s_employees WHERE employee_code LIKE 'EMP-%'`);
+    const empIdMap = Object.fromEntries(insertedEmployees.map((e) => [e.employee_code, e.id]));
+
+    // Map relasi group_id dengan employee_id
+    const membersToInsert = relationMappings
+      .map(rel => ({
+        group_id:    rel.group_id,
+        employee_id: empIdMap[rel.employee_code],
+        active:      rel.active,
+        created_at:  rel.created_at,
+        updated_at:  rel.updated_at
+      }))
+      .filter(m => m.employee_id); // validasi pastikan ID ditemukan
+
+    // Bulk Insert tabel relasi (s_employee_group_members)
     await queryInterface.bulkInsert('s_employee_group_members', membersToInsert, { ignoreDuplicates: true });
 
-    // ── 8. Delivery Orders — spread across parts 1-12 ─────────────────────────
-    // Assumes delivery_plans, spo_details exist (from previous seeder)
-    // We add 4 more DOs with varied parts to support multi-line plan testing
+    // ── Summary ───────────────────────────────────────────────────────────────
 
-    const existingDOs = await q(`SELECT COUNT(*) as cnt FROM s_delivery_orders`);
-    const doCount     = parseInt(existingDOs[0].cnt);
-
-    if (doCount < 6) {
-      // Only insert if not enough DOs for testing
-      console.log('[Seeder] Skipping DO insert — run delivery order seeder first');
-    }
-
-    // ── 9. Line Capacity Params — pre-populate for all lines ─────────────────
-    // Computed from station/job data above. Max takt time is set conservatively.
-    // Users can recalculate from the UI after this seeder runs.
-
-    const lineCapacityDefaults = [
-      { code: 'ASSY-FRM',   working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 660  }, // bottleneck: Frame Alignment (300+360)
-      { code: 'ASSY-BATT',  working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 1080 }, // bottleneck: Battery Charge Test (900+180 → CHG station)
-      { code: 'ASSY-ELEC',  working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 840  }, // bottleneck: Motor Install (420+120)
-      { code: 'ASSY-FNL',   working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 540  }, // bottleneck: Brake Assembly (240+180+120)
-      { code: 'ASSY-TEST',  working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 3, max_takt: 1320 }, // bottleneck: Charging (720+600)
-      { code: 'ASSY-QC',    working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 3, max_takt: 780  }, // bottleneck: Road Test (480+300)
-      { code: 'ASSY-RWK',   working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 3, max_takt: 840  }, // bottleneck: Repair (480+360)
-      { code: 'PAINT-PRM',  working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 3, max_takt: 900  }, // bottleneck: Oven Primer
-      { code: 'PAINT-COL',  working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 3, max_takt: 1200 }, // bottleneck: Oven Color
-      { code: 'PAINT-COAT', working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 3, max_takt: 1080 }, // bottleneck: Oven Coat
-      { code: 'WH-INQC',    working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 420  }, // bottleneck: Sample Inspection (300+120)
-      { code: 'WH-MAT',     working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 420  }, // bottleneck: Material Picking (240+180)
-      { code: 'WH-PACK',    working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 4, max_takt: 600  }, // bottleneck: Packing Process (240+360)
-      { code: 'WH-FG',      working_days: 22, shifts: 1, hrs: 7, efficiency: 0.85, overtime: 0, manpower: 2, max_takt: 180  }, // bottleneck: FG Transfer (120+60)
-    ];
-
-    const capacityRows = lineCapacityDefaults
-      .map((lc) => ({
-        line_id:                         findLine(lines, lc.code),
-        default_working_days:            lc.working_days,
-        default_shifts_per_day:          lc.shifts,
-        default_working_hours_per_shift: lc.hrs,
-        default_efficiency_factor:       lc.efficiency,
-        default_overtime_hours:          lc.overtime,
-        default_manpower:                lc.manpower,
-        default_max_takt_time:           lc.max_takt,
-        ...ts,
-      }))
-      .filter((r) => r.line_id);
-
-    // Upsert — skip lines that already have params
-    for (const row of capacityRows) {
-      const existing = await q(
-        `SELECT id FROM s_line_capacity_params WHERE line_id = ${row.line_id}`
-      );
-      if (existing.length === 0) {
-        await queryInterface.bulkInsert('s_line_capacity_params', [row]);
-      }
-    }
-
-    console.log('[Seeder] All 14 lines now have stations, jobs, employee groups, and capacity params.');
+    const paintLines = ['PAINT-PRM', 'PAINT-COL', 'PAINT-COAT'];
+    console.log(`[Seeder] All 14 lines now have stations, jobs, and station_jobs.`);
+    console.log(`[Seeder] Refactored Employees inserted to s_employees and mapped to groups.`);
+    console.log(`[Seeder] Painting lines (${paintLines.join(', ')}) have:`);
+    console.log(`         PAINT-PRM  → bottleneck ST-PRM-OVEN  (JOB-OVEN-PRM  = 900s)`);
+    console.log(`         PAINT-COL  → bottleneck ST-COL-OVEN  (JOB-OVEN-COL  = 1200s)`);
+    console.log(`         PAINT-COAT → bottleneck ST-COAT-OVEN (JOB-OVEN-COAT = 1080s)`);
+    console.log(`[Seeder] Re-run shift-calendars seeder to recalculate capacity params for painting lines.`);
   },
 
   async down(queryInterface) {
-    // Remove in reverse FK order
+    // Remove in reverse FK order (Child -> Parent)
 
-    await queryInterface.sequelize.query(`
-      DELETE FROM s_line_capacity_params
-      WHERE line_id IN (SELECT id FROM s_lines WHERE line_code IN (
-        'ASSY-FRM','ASSY-BATT','ASSY-ELEC','ASSY-FNL','ASSY-TEST',
-        'ASSY-QC','ASSY-RWK','PAINT-PRM','PAINT-COL','PAINT-COAT',
-        'WH-INQC','WH-MAT','WH-PACK','WH-FG'
-      ))
-    `);
-
+    // 1. Delete skills (jika ada) menggunakan employee_id dari s_employees
     await queryInterface.sequelize.query(`
       DELETE FROM s_employee_skills
-      WHERE member_id IN (
-        SELECT m.id FROM s_employee_group_members m
-        JOIN s_employee_groups g ON m.group_id = g.id
-        WHERE g.name LIKE 'Group %'
+      WHERE employee_id IN (
+        SELECT id FROM s_employees WHERE employee_code LIKE 'EMP-%'
       )
     `);
 
+    // 2. Delete data dari tabel junction (s_employee_group_members)
     await queryInterface.sequelize.query(`
       DELETE FROM s_employee_group_members
       WHERE group_id IN (SELECT id FROM s_employee_groups WHERE name LIKE 'Group %')
     `);
 
+    // 3. Delete master karyawan (s_employees) yang di-generate seeder
+    await queryInterface.sequelize.query(`
+      DELETE FROM s_employees WHERE employee_code LIKE 'EMP-%'
+    `);
+
+    // 4. Delete data groups
     await queryInterface.sequelize.query(`
       DELETE FROM s_employee_groups WHERE name LIKE 'Group %'
     `);
@@ -388,26 +378,41 @@ export default {
       `DELETE FROM s_users WHERE email IN (${emails})`
     );
 
-    await queryInterface.sequelize.query(`
-      DELETE FROM s_station_jobs WHERE station_id IN (
-        SELECT id FROM s_stations WHERE station_code IN (
-          'ST-BATT-CELL','ST-BATT-ASSY','ST-BATT-TEST','ST-BATT-QC',
-          'ST-TST-CHG','ST-TST-ELEC','ST-TST-PERF',
-          'ST-RWK-DIAG','ST-RWK-REPAIR','ST-RWK-VERIFY',
-          'ST-INQC-RECV','ST-INQC-SAMP','ST-INQC-STCK',
-          'ST-MAT-PICK','ST-MAT-PREP','ST-MAT-ISSUE'
-        )
-      )
-    `);
+    const allNewStationCodes = [
+      'ST-BATT-CELL','ST-BATT-ASSY','ST-BATT-TEST','ST-BATT-QC',
+      'ST-TST-CHG','ST-TST-ELEC','ST-TST-PERF',
+      'ST-RWK-DIAG','ST-RWK-REPAIR','ST-RWK-VERIFY',
+      'ST-PRM-CLEAN','ST-PRM-SPRAY','ST-PRM-OVEN','ST-PRM-QC',
+      'ST-COL-SPRAY','ST-COL-OVEN','ST-COL-QC',
+      'ST-COAT-CLEAN','ST-COAT-SPRAY','ST-COAT-OVEN','ST-COAT-THK','ST-COAT-VIS',
+      'ST-INQC-RECV','ST-INQC-SAMP','ST-INQC-STCK',
+      'ST-MAT-PICK','ST-MAT-PREP','ST-MAT-ISSUE',
+    ].map((c) => `'${c}'`).join(',');
 
-    await queryInterface.sequelize.query(`
-      DELETE FROM s_stations WHERE station_code IN (
-        'ST-BATT-CELL','ST-BATT-ASSY','ST-BATT-TEST','ST-BATT-QC',
-        'ST-TST-CHG','ST-TST-ELEC','ST-TST-PERF',
-        'ST-RWK-DIAG','ST-RWK-REPAIR','ST-RWK-VERIFY',
-        'ST-INQC-RECV','ST-INQC-SAMP','ST-INQC-STCK',
-        'ST-MAT-PICK','ST-MAT-PREP','ST-MAT-ISSUE'
-      )
-    `);
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_station_jobs WHERE station_id IN (
+        SELECT id FROM s_stations WHERE station_code IN (${allNewStationCodes})
+      )`
+    );
+
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_stations WHERE station_code IN (${allNewStationCodes})`
+    );
+
+    const allNewJobCodes = [
+      'JOB-BATT-INSP','JOB-BATT-VOLT','JOB-BATT-BUILD','JOB-BATT-WELD',
+      'JOB-BATT-CHG','JOB-BATT-CAP','JOB-BATT-FQC',
+      'JOB-TST-FULLCHG','JOB-TST-DISCHARGE','JOB-TST-ELEC-SF','JOB-TST-SPEED','JOB-TST-RANGE',
+      'JOB-RWK-DIAG','JOB-RWK-ELEC','JOB-RWK-MECH','JOB-RWK-VER',
+      'JOB-CLEAN-SURF','JOB-SPRAY-PRM','JOB-OVEN-PRM','JOB-QC-PRM',
+      'JOB-SPRAY-COL','JOB-OVEN-COL','JOB-QC-COL',
+      'JOB-CLEAN-FNL','JOB-SPRAY-COAT','JOB-OVEN-COAT','JOB-INSP-THK','JOB-INSP-VIS',
+      'JOB-INQC-COUNT','JOB-INQC-VIS','JOB-INQC-SAMP','JOB-INQC-STORE',
+      'JOB-MAT-PICK','JOB-MAT-STAGE','JOB-MAT-ISSUE',
+    ].map((c) => `'${c}'`).join(',');
+
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_jobs WHERE job_code IN (${allNewJobCodes})`
+    );
   },
 };

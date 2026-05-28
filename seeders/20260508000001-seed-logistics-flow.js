@@ -2,7 +2,7 @@ export default {
   async up(queryInterface, Sequelize) {
     const timestamp = { created_at: new Date('2026-05-17T07:00:00Z'), updated_at: new Date('2026-05-17T07:00:00Z') };
 
-    // Synchronize auto-increment sequences with existing max table IDs in PostgreSQL
+    // Synchronize auto-increment sequences
     try {
       await queryInterface.sequelize.query(`
         SELECT setval('s_sales_purchase_orders_id_seq', COALESCE((SELECT MAX(id) FROM s_sales_purchase_orders), 1), true);
@@ -16,178 +16,175 @@ export default {
       // Ignore if not postgresql or sequences do not exist yet
     }
 
+    // ─── Date anchors ─────────────────────────────────────────────────────────
+    // Batch A : 14–17 Mei  (4 tanggal × 3 DO = 12 DO? → pakai 10, loop)
+    // Batch B : 28–31 Mei
+    // Batch C : 15–18 Juni
+    // Batch D : 27–30 Juni
+    // Batch E : 13–16 Juli
+    // Batch F : 27–31 Juli
+    const d = (isoStr) => new Date(isoStr);
+
+    const batchDates = {
+      A: ['2026-05-14','2026-05-15','2026-05-16','2026-05-17'],
+      B: ['2026-05-28','2026-05-29','2026-05-30','2026-05-31'],
+      C: ['2026-06-15','2026-06-16','2026-06-17','2026-06-18'],
+      D: ['2026-06-27','2026-06-28','2026-06-29','2026-06-30'],
+      E: ['2026-07-13','2026-07-14','2026-07-15','2026-07-16'],
+      F: ['2026-07-27','2026-07-28','2026-07-29','2026-07-30','2026-07-31'],
+    };
+
+    // ─── Helper: build N evenly-spread dates from an anchor array ─────────────
+    const spreadDates = (anchors, count) => {
+      const out = [];
+      for (let i = 0; i < count; i++) out.push(anchors[i % anchors.length]);
+      return out;
+    };
+
+    // Total 60 entries (10 per batch × 6 batch)
+    const batches = [
+      { key: 'A', anchors: batchDates.A, count: 10 },
+      { key: 'B', anchors: batchDates.B, count: 10 },
+      { key: 'C', anchors: batchDates.C, count: 10 },
+      { key: 'D', anchors: batchDates.D, count: 10 },
+      { key: 'E', anchors: batchDates.E, count: 10 },
+      { key: 'F', anchors: batchDates.F, count: 10 },
+    ];
+
+    const allEntries = []; // { shipmentDate, batchKey, localIdx, globalIdx }
+    let globalIdx = 1;
+    for (const batch of batches) {
+      const dates = spreadDates(batch.anchors, batch.count);
+      for (let i = 0; i < batch.count; i++) {
+        allEntries.push({ shipmentDate: dates[i], batchKey: batch.key, localIdx: i + 1, globalIdx: globalIdx++ });
+      }
+    }
+
+    const TOTAL = allEntries.length; // 60
+
     // =========================
     // SALES PURCHASE ORDERS
     // =========================
-    const spoData = [];
+    const spoData = allEntries.map((e) => ({
+      spo_number: `SPO-2026-${String(e.globalIdx).padStart(4, '0')}`,
+      customer_id: ((e.globalIdx - 1) % 6) + 1,
+      spr_id: null,
+      shipping_address: `Alamat Customer ${e.globalIdx}`,
+      spo_date: d(`${e.shipmentDate}T08:00:00Z`),
+      delivery_due_date: d(`${e.shipmentDate}T08:00:00Z`),
+      status: 'Approved',
+      created_by: 1,
+      ...timestamp,
+    }));
 
-    for (let i = 1; i <= 10; i++) {
-      spoData.push({
-        spo_number: `SPO-2026-${String(i).padStart(4, '0')}`,
-        customer_id: ((i - 1) % 6) + 1,
-        spr_id: null,
-        shipping_address: `Alamat Customer ${i}`,
-        spo_date: new Date('2026-05-17T08:00:00Z'),
-        delivery_due_date: new Date(new Date('2026-05-17T08:00:00Z').getTime() + i * 86400000),
-        status: 'Approved',
-        created_by: 1,
-        ...timestamp
-      });
-    }
-
-    const insertedSPOs = await queryInterface.bulkInsert(
-      's_sales_purchase_orders',
-      spoData,
-      {
-        returning: true,
-      }
-    );
+    const insertedSPOs = await queryInterface.bulkInsert('s_sales_purchase_orders', spoData, { returning: true });
 
     // =========================
     // SPO DETAILS
     // =========================
-    const spoDetailData = [];
+    const spoDetailData = allEntries.map((e, idx) => ({
+      spo_id: insertedSPOs[idx].id,
+      part_id: ((e.globalIdx - 1) % 10) + 1,
+      ordered_qty: 100 + e.globalIdx * 10,
+      sent_qty: 20 + e.globalIdx * 5,
+      last_shipment_date: d(`${e.shipmentDate}T11:00:00Z`),
+      status: 'Open',
+      ...timestamp,
+    }));
 
-    for (let i = 1; i <= 10; i++) {
-      spoDetailData.push({
-        spo_id: insertedSPOs[i - 1].id,
-        part_id: i,
-        ordered_qty: 100 + i * 10,
-        sent_qty: 20 + i * 5,
-        last_shipment_date: new Date('2026-05-17T11:00:00Z'),
-        status: 'Open',
-        ...timestamp
-      });
-    }
-
-    const insertedSPODetails = await queryInterface.bulkInsert(
-      's_sales_purchase_order_details',
-      spoDetailData,
-      {
-        returning: true,
-      }
-    );
+    const insertedSPODetails = await queryInterface.bulkInsert('s_sales_purchase_order_details', spoDetailData, { returning: true });
 
     // =========================
     // DELIVERY PLANS
     // =========================
-    const deliveryPlanData = [];
     const dockTimeSlots = {};
 
-    for (let i = 1; i <= 10; i++) {
-      const dayOffset = i % 3;
-      const dockId = ((i - 1) % 3) + 1;
-      const scheduledTime = new Date('2026-05-17').getTime() + dayOffset * 86400000;
+    const deliveryPlanData = allEntries.map((e, idx) => {
+      const dockId   = ((e.globalIdx - 1) % 3) + 1;
+      const slotKey  = `${dockId}-${e.shipmentDate}`;
+      if (dockTimeSlots[slotKey] === undefined) dockTimeSlots[slotKey] = 8;
+      const startHour = dockTimeSlots[slotKey];
+      const endHour   = startHour + 2;
+      // Cap at 18:00 to avoid midnight overflow, then reset
+      dockTimeSlots[slotKey] = endHour >= 18 ? 8 : endHour;
 
-      if (dockTimeSlots[`${dockId}-${dayOffset}`] === undefined) {
-        dockTimeSlots[`${dockId}-${dayOffset}`] = 8; // start from 08:00
-      }
-      const startHour = dockTimeSlots[`${dockId}-${dayOffset}`];
-      const endHour = startHour + 2; // each plan is 2 hours slot
-      dockTimeSlots[`${dockId}-${dayOffset}`] = endHour;
+      return {
+        dp_number:      `DP-2026-${String(e.globalIdx).padStart(4, '0')}`,
+        scheduled_date: d(`${e.shipmentDate}T00:00:00Z`),
+        time_start:     `${String(startHour).padStart(2, '0')}:00:00`,
+        time_end:       `${String(endHour).padStart(2, '0')}:00:00`,
+        warehouse_id:   ((e.globalIdx - 1) % 3) + 1,
+        dock_id:        dockId,
+        destination:    `Destination Address ${e.globalIdx}`,
+        status:         'Scheduled',
+        created_by:     1,
+        ...timestamp,
+      };
+    });
 
-      const timeStartStr = `${String(startHour).padStart(2, '0')}:00:00`;
-      const timeEndStr = `${String(endHour).padStart(2, '0')}:00:00`;
-
-      deliveryPlanData.push({
-        dp_number: `DP-2026-${String(i).padStart(4, '0')}`,
-        scheduled_date: new Date(scheduledTime),
-        time_start: timeStartStr,
-        time_end: timeEndStr,
-        warehouse_id: ((i - 1) % 3) + 1,
-        dock_id: dockId,
-        destination: `Destination Address ${i}`,
-        status: 'Scheduled',
-        created_by: 1,
-        ...timestamp
-      });
-    }
-
-    const insertedPlans = await queryInterface.bulkInsert(
-      's_delivery_plans',
-      deliveryPlanData,
-      {
-        returning: true,
-      }
-    );
+    const insertedPlans = await queryInterface.bulkInsert('s_delivery_plans', deliveryPlanData, { returning: true });
 
     // =========================
     // DELIVERY PLAN DETAILS
     // =========================
-    const deliveryPlanDetailData = [];
+    const deliveryPlanDetailData = allEntries.map((e, idx) => ({
+      delivery_plan_id: insertedPlans[idx].id,
+      spo_detail_id:    insertedSPODetails[idx].id,
+      planned_qty:      50 + e.globalIdx * 5,
+      ...timestamp,
+    }));
 
-    for (let i = 1; i <= 10; i++) {
-      deliveryPlanDetailData.push({
-        delivery_plan_id: insertedPlans[i - 1].id,
-        spo_detail_id: insertedSPODetails[i - 1].id,
-        planned_qty: 50 + i * 5,
-        ...timestamp
-      });
-    }
-
-    const insertedPlanDetails = await queryInterface.bulkInsert(
-      's_delivery_plan_details',
-      deliveryPlanDetailData,
-      {
-        returning: true,
-      }
-    );
+    const insertedPlanDetails = await queryInterface.bulkInsert('s_delivery_plan_details', deliveryPlanDetailData, { returning: true });
 
     // =========================
     // DELIVERY ORDERS
+    // Status logic per batch:
+    //   7 pertama Scheduled, 3 terakhir In Transit
     // =========================
-    const deliveryOrderData = [];
+    const resolveStatus = (batchKey, localIdx) => {
+      return localIdx <= 7 ? 'Scheduled' : 'In Transit';
+    };
 
-    for (let i = 1; i <= 10; i++) {
-      const shipmentTime = new Date('2026-05-17').getTime() + (i % 3) * 86400000;
-      const deliveryStatus = i <= 7 ? 'Delivered' : 'In Transit';
-      const receivedAt = deliveryStatus === 'Delivered' ? new Date(shipmentTime + 4 * 3600000) : null;
+    const deliveryOrderData = allEntries.map((e, idx) => {
+      const status     = resolveStatus(e.batchKey, e.localIdx);
+      const shipTime   = d(`${e.shipmentDate}T07:00:00Z`);
+      const receivedAt = status === 'Scheduled' ? new Date(shipTime.getTime() + 4 * 3600000) : null;
 
-      deliveryOrderData.push({
-        do_number: `DO-2026-${String(i).padStart(4, '0')}`,
-        delivery_plan_id: insertedPlans[i - 1].id,
-        customer_id: ((i - 1) % 6) + 1,
-        vehicle_id: ((i - 1) % 5) + 1,
-        driver_id: ((i - 1) % 5) + 1,
-        shipment_date: new Date(shipmentTime),
-        delivery_status: deliveryStatus,
-        proof_of_delivery: deliveryStatus === 'Delivered' ? JSON.stringify([`/uploads/pod-dummy-${i}.jpg`]) : null,
-        notes: `Pengiriman batch ${i}`,
-        created_by: 1,
-        received_at: receivedAt,
-        ...timestamp
-      });
-    }
+      return {
+        do_number:        `DO-2026-${String(e.globalIdx).padStart(4, '0')}`,
+        delivery_plan_id: insertedPlans[idx].id,
+        customer_id:      ((e.globalIdx - 1) % 6) + 1,
+        vehicle_id:       ((e.globalIdx - 1) % 5) + 1,
+        driver_id:        ((e.globalIdx - 1) % 5) + 1,
+        shipment_date:    shipTime,
+        delivery_status:  status,
+        proof_of_delivery: status === 'Scheduled' ? `/uploads/pod-dummy-${e.globalIdx}.jpg` : null,
+        notes:            `Pengiriman batch ${e.batchKey}-${e.localIdx}`,
+        created_by:       1,
+        received_at:      receivedAt,
+        ...timestamp,
+      };
+    });
 
-    const insertedOrders = await queryInterface.bulkInsert(
-      's_delivery_orders',
-      deliveryOrderData,
-      {
-        returning: true,
-      }
-    );
+    const insertedOrders = await queryInterface.bulkInsert('s_delivery_orders', deliveryOrderData, { returning: true });
 
     // =========================
     // DELIVERY ORDER DETAILS
     // =========================
-    const deliveryOrderDetailData = [];
+    const deliveryOrderDetailData = allEntries.map((e, idx) => {
+      const status    = resolveStatus(e.batchKey, e.localIdx);
+      const sentQty   = 40 + e.globalIdx * 5;
+      return {
+        delivery_order_id:      insertedOrders[idx].id,
+        delivery_plan_detail_id: insertedPlanDetails[idx].id,
+        sent_qty:               sentQty,
+        received_qty:           status === 'Scheduled' ? sentQty : null,
+        notes:                  `Detail shipment ${e.batchKey}-${e.localIdx}`,
+        ...timestamp,
+      };
+    });
 
-    for (let i = 1; i <= 10; i++) {
-      deliveryOrderDetailData.push({
-        delivery_order_id: insertedOrders[i - 1].id,
-        delivery_plan_detail_id: insertedPlanDetails[i - 1].id,
-        sent_qty: 40 + i * 5,
-        received_qty: i <= 7 ? 40 + i * 5 : null,
-        notes: `Detail shipment ${i}`,
-        ...timestamp
-      });
-    }
-
-    await queryInterface.bulkInsert(
-      's_delivery_order_details',
-      deliveryOrderDetailData,
-      {}
-    );
+    await queryInterface.bulkInsert('s_delivery_order_details', deliveryOrderDetailData, {});
   },
 
   async down(queryInterface, Sequelize) {

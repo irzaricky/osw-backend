@@ -132,7 +132,7 @@ class WarehouseAnalyticsModule extends BaseModule {
           COALESCE(SUM(stock.used_capacity), 0)::int AS used_capacity,
           CASE
             WHEN COALESCE(SUM(b.capacity), 0) > 0
-            THEN ROUND((COALESCE(SUM(stock.used_capacity), 0)::decimal / SUM(b.capacity)::decimal) * 100, 2)
+            THEN ROUND((COALESCE(SUM(stock.used_capacity), 0)::decimal / SUM(b.capacity)::decimal) * 100, 4)
             ELSE 0
           END AS utilization_percentage
         FROM s_warehouse_bins b
@@ -598,7 +598,7 @@ async inventoryValue(req) {
 
     const categoryRows = await db.sequelize.query(`
       SELECT
-        part.part_category,
+        part.part_type_code,
         COUNT(ws.id)::int AS total_kanban,
         COALESCE(SUM(COALESCE(pkg.capacity, 1)), 0)::int AS total_pcs,
         COALESCE(
@@ -617,7 +617,7 @@ async inventoryValue(req) {
       LEFT JOIN s_warehouse_bins b
         ON b.id = ws.bin_id
       ${stockWhereClause}
-      GROUP BY part.part_category
+      GROUP BY part.part_type_code
       ORDER BY inventory_value DESC
     `, {
       replacements,

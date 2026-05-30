@@ -14,25 +14,27 @@ export default {
       return count;
     }
 
-    // ── Helper: calcNetMinutes (identik dgn backend line-capacity.js) ──────
-    // Net = SUM(PRODUCTIVE) - SUM(BREAK), support lintas tengah malam.
+    // ── Helper: calcNetMinutes (Diperbaiki agar sinkron dengan data shift baru) ──────
+    // Net = Hanya SUM(PRODUCTIVE). BREAK tidak mengurangi lagi karena tidak overlap.
     function calcNetMinutes(shiftRows) {
       let productive = 0;
-      let breakTime  = 0;
       for (const s of shiftRows) {
-        const [sh, sm] = s.start_time.split(':').map(Number);
-        const [eh, em] = s.end_time.split(':').map(Number);
-        let start = sh * 60 + sm;
-        let end   = eh * 60 + em;
-        if (end <= start) end += 24 * 60; // overnight
-        const duration = end - start;
-        if (s.category === 'PRODUCTIVE') productive += duration;
-        else if (s.category === 'BREAK')  breakTime  += duration;
+        // Hanya hitung jika kategorinya PRODUCTIVE
+        if (s.category === 'PRODUCTIVE') {
+          const [sh, sm] = s.start_time.split(':').map(Number);
+          const [eh, em] = s.end_time.split(':').map(Number);
+          let start = sh * 60 + sm;
+          let end   = eh * 60 + em;
+          if (end <= start) end += 24 * 60; // Antisipasi lintas tengah malam (Shift 3)
+          
+          const duration = end - start;
+          productive += duration;
+        }
       }
-      return Math.max(0, productive - breakTime);
+      return Math.max(0, productive);
     }
 
-    // NON_OPERATOR_POSITIONS — sama persis dengan konstanta di backend
+    // NON_OPERATOR_POSITIONS — konstanta pembatas manpower
     const NON_OPERATOR_POSITIONS = ['Group Leader', 'Foreman'];
 
     // ── 1. Ambil data lines ────────────────────────────────────────────────
@@ -46,9 +48,6 @@ export default {
     }
 
     // ── 2. Ambil SEMUA segment shift REGULAR ──────────────────────────────
-    // Backend: per baris s_shift_calendars → join ke satu SShifts (satu segment).
-    // Agar calcNetMinutes mendapat semua segment, tiap segment harus punya
-    // baris sendiri di s_shift_calendars.
     const allRegularShifts = await queryInterface.sequelize.query(
       `SELECT id, shift_number, start_time::text, end_time::text, category
        FROM s_shifts
@@ -63,21 +62,17 @@ export default {
     console.log(`ℹ️  ${allRegularShifts.length} segment shift REGULAR (tiap segment = 1 row calendar/hari).`);
 
     // ── 3. Hitung shifts_per_day & working_hours_per_shift ─────────────────
-    // Simulasi persis resolveShiftCalendarParams untuk 1 hari kerja tipikal:
-    //   regularShifts = semua segment (karena semua shift jalan tiap hari)
-    //   shifts_per_day = jumlah shift_number unik
-    //   working_hours_per_shift = avgNetMinPerDay / 60 / shifts_per_day
     const shiftsPerDay       = new Set(allRegularShifts.map(s => s.shift_number)).size;
     const netMinPerDay       = calcNetMinutes(allRegularShifts);
+    // Menghasilkan rata-rata jam kerja bersih yang logis (~7.33 jam per shift)
     const workingHrsPerShift = parseFloat((netMinPerDay / 60 / shiftsPerDay).toFixed(2));
     console.log(`ℹ️  shifts_per_day=${shiftsPerDay}, net_min/day=${netMinPerDay}, working_hrs_per_shift=${workingHrsPerShift}`);
 
     // ── 4. Hitung actual manpower & max_takt_time per line ─────────────────
-    const lineActualMap = {}; // line_id → { manpower, max_takt }
+    const lineActualMap = {}; 
 
     for (const line of lines) {
       // ── Manpower: query member aktif beserta nama posisinya ───────────────
-      // PENYESUAIAN: JOIN ke s_employees lalu ke s_employee_positions
       const members = await queryInterface.sequelize.query(
         `SELECT m.id, p.name AS position_name
          FROM s_employee_group_members m
@@ -99,17 +94,16 @@ export default {
       }).length;
 
       // ── Max Takt Time: hitung per station, ambil tertinggi ────────────────
-      // Station aktif → job aktif → sum standard_time → max
       const stationTaktTimes = await queryInterface.sequelize.query(
         `SELECT st.id AS station_id,
                 COALESCE(SUM(j.standard_time), 0) AS takt_time
          FROM s_stations st
          LEFT JOIN s_station_jobs sj ON sj.station_id = st.id
-                                     AND sj.active = true
-                                     AND sj.deleted_at IS NULL
+                                      AND sj.active = true
+                                      AND sj.deleted_at IS NULL
          LEFT JOIN s_jobs j          ON j.id = sj.job_id
-                                     AND j.active = true
-                                     AND j.deleted_at IS NULL
+                                      AND j.active = true
+                                      AND j.deleted_at IS NULL
          WHERE st.line_id    = ${line.id}
            AND st.status     = true
            AND st.deleted_at IS NULL
@@ -220,8 +214,8 @@ export default {
           default_working_hours_per_shift: workingHrsPerShift,
           default_efficiency_factor:       0.85,
           default_overtime_hours:          0,
-          default_manpower:                actual.manpower,   // dari _getLineSummary
-          default_max_takt_time:           actual.max_takt,   // dari _getLineSummary
+          default_manpower:                actual.manpower,
+          default_max_takt_time:           actual.max_takt,
           created_at:                      now,
           updated_at:                      now,
         });

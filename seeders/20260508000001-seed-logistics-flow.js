@@ -17,31 +17,23 @@ export default {
     }
 
     // ─── Date anchors ─────────────────────────────────────────────────────────
-    // Batch A : 14–17 Mei  (4 tanggal × 3 DO = 12 DO? → pakai 10, loop)
-    // Batch B : 28–31 Mei
-    // Batch C : 15–18 Juni
-    // Batch D : 27–30 Juni
-    // Batch E : 13–16 Juli
-    // Batch F : 27–31 Juli
     const d = (isoStr) => new Date(isoStr);
 
     const batchDates = {
       A: ['2026-05-14','2026-05-15','2026-05-16','2026-05-17'],
       B: ['2026-05-28','2026-05-29','2026-05-30','2026-05-31'],
-      C: ['2026-06-15','2026-06-16','2026-06-17','2026-06-18'],
-      D: ['2026-06-27','2026-06-28','2026-06-29','2026-06-30'],
-      E: ['2026-07-13','2026-07-14','2026-07-15','2026-07-16'],
-      F: ['2026-07-27','2026-07-28','2026-07-29','2026-07-30','2026-07-31'],
+      C: ['2026-06-15','2026-06-16','2026-06-17','2026-06-18'], // Juni
+      D: ['2026-06-27','2026-06-28','2026-06-29','2026-06-30'], // Juni
+      E: ['2026-07-13','2026-07-14','2026-07-15','2026-07-16'], // Juli
+      F: ['2026-07-27','2026-07-28','2026-07-29','2026-07-30','2026-07-31'], // Juli
     };
 
-    // ─── Helper: build N evenly-spread dates from an anchor array ─────────────
     const spreadDates = (anchors, count) => {
       const out = [];
       for (let i = 0; i < count; i++) out.push(anchors[i % anchors.length]);
       return out;
     };
 
-    // Total 60 entries (10 per batch × 6 batch)
     const batches = [
       { key: 'A', anchors: batchDates.A, count: 10 },
       { key: 'B', anchors: batchDates.B, count: 10 },
@@ -51,7 +43,7 @@ export default {
       { key: 'F', anchors: batchDates.F, count: 10 },
     ];
 
-    const allEntries = []; // { shipmentDate, batchKey, localIdx, globalIdx }
+    const allEntries = []; 
     let globalIdx = 1;
     for (const batch of batches) {
       const dates = spreadDates(batch.anchors, batch.count);
@@ -60,7 +52,43 @@ export default {
       }
     }
 
-    const TOTAL = allEntries.length; // 60
+    // =========================================================================
+    // MAPPING QUANTITY LOGIC (KHUSUS JUNI & JULI)
+    // =========================================================================
+    const qtyMap = allEntries.map((e) => {
+      // Jika Bulan Juni (C, D) atau Juli (E, F)
+      if (['C', 'D', 'E', 'F'].includes(e.batchKey)) {
+        let baseOrdered = 50;
+        
+        if (['C', 'D'].includes(e.batchKey)) {
+          // Juni (Peak Season): Kuantitas berkisar 80 s.d 150 unit
+          baseOrdered = 80 + ((e.globalIdx * 7) % 71);
+        } else {
+          // Juli: Kuantitas berkisar 50 s.d 110 unit
+          baseOrdered = 50 + ((e.globalIdx * 11) % 61);
+        }
+
+        // Distribusi turunan kuantitas harian yang logis
+        const planned = Math.ceil(baseOrdered * 0.8);        // 80% masuk rencana pengiriman harian
+        const sent = planned;                                // 100% rencana berhasil dimuat ke truk
+        const historicalSent = Math.floor(baseOrdered * 0.2); // Sisa histori pengiriman PO sebelumnya
+
+        return {
+          ordered: baseOrdered,
+          historicalSent: historicalSent,
+          planned: planned,
+          sent: sent
+        };
+      } 
+      
+      // JIKA BULAN MEI: Tetap menggunakan rumus perhitungan asli bawaan Anda
+      return {
+        ordered: 100 + e.globalIdx * 10,
+        historicalSent: 20 + e.globalIdx * 5,
+        planned: 50 + e.globalIdx * 5,
+        sent: 40 + e.globalIdx * 5
+      };
+    });
 
     // =========================
     // SALES PURCHASE ORDERS
@@ -85,8 +113,8 @@ export default {
     const spoDetailData = allEntries.map((e, idx) => ({
       spo_id: insertedSPOs[idx].id,
       part_id: ((e.globalIdx - 1) % 10) + 1,
-      ordered_qty: 100 + e.globalIdx * 10,
-      sent_qty: 20 + e.globalIdx * 5,
+      ordered_qty: qtyMap[idx].ordered,          // MODIFIKASI: Kondisional per bulan
+      sent_qty: qtyMap[idx].historicalSent,      // MODIFIKASI: Kondisional per bulan
       last_shipment_date: d(`${e.shipmentDate}T11:00:00Z`),
       status: 'Open',
       ...timestamp,
@@ -105,7 +133,6 @@ export default {
       if (dockTimeSlots[slotKey] === undefined) dockTimeSlots[slotKey] = 8;
       const startHour = dockTimeSlots[slotKey];
       const endHour   = startHour + 2;
-      // Cap at 18:00 to avoid midnight overflow, then reset
       dockTimeSlots[slotKey] = endHour >= 18 ? 8 : endHour;
 
       return {
@@ -130,7 +157,7 @@ export default {
     const deliveryPlanDetailData = allEntries.map((e, idx) => ({
       delivery_plan_id: insertedPlans[idx].id,
       spo_detail_id:    insertedSPODetails[idx].id,
-      planned_qty:      50 + e.globalIdx * 5,
+      planned_qty:      qtyMap[idx].planned,     // MODIFIKASI: Kondisional per bulan
       ...timestamp,
     }));
 
@@ -138,8 +165,6 @@ export default {
 
     // =========================
     // DELIVERY ORDERS
-    // Status logic per batch:
-    //   7 pertama Scheduled, 3 terakhir In Transit
     // =========================
     const resolveStatus = (batchKey, localIdx) => {
       return localIdx <= 7 ? 'Scheduled' : 'In Transit';
@@ -173,7 +198,7 @@ export default {
     // =========================
     const deliveryOrderDetailData = allEntries.map((e, idx) => {
       const status    = resolveStatus(e.batchKey, e.localIdx);
-      const sentQty   = 40 + e.globalIdx * 5;
+      const sentQty   = qtyMap[idx].sent;       // MODIFIKASI: Kondisional per bulan
       return {
         delivery_order_id:      insertedOrders[idx].id,
         delivery_plan_detail_id: insertedPlanDetails[idx].id,

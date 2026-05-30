@@ -98,42 +98,35 @@ const includeMrpDetails = {
 async function generateMrpNumber(transaction) {
   const now = new Date();
 
-  // Prefix bulan berjalan untuk format baru: "MRP-2026-06"
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const monthPrefix = `MRP-${yyyy}-${mm}`;
 
-  // Prefix format lama: "MRP-202606" (YYYYMM, 6 digit)
   const legacyPrefix = `MRP-${yyyy}${mm}`;
 
-  // Ambil semua nomor bulan ini dari kedua format, paranoid:false
   const rows = await SMrp.findAll({
     attributes: ['number'],
     where: {
       [Op.or]: [
-        { number: { [Op.like]: `${monthPrefix}-%` } },   // format baru:  MRP-YYYY-MM-*
-        { number: { [Op.like]: `${legacyPrefix}%--%` } }, // format lama:  MRP-YYYYMMDD-*
+        { number: { [Op.like]: `${monthPrefix}-%` } }, 
+        { number: { [Op.like]: `${legacyPrefix}%--%` } }, 
       ],
     },
-    paranoid: false,             // sertakan soft-deleted agar urutan tidak loncat
+    paranoid: false,
     transaction,
-    lock: transaction.LOCK.UPDATE, // row-level lock, cegah race condition concurrent create
+    lock: transaction.LOCK.UPDATE,
   });
 
-  // Parse semua sequence yang ditemukan, ambil yang terbesar
   let maxSeq = 0;
   for (const row of rows) {
     const parts = row.number.split('-');
-    // Kedua format punya sequence di segmen TERAKHIR setelah split('-')
-    // MRP-2026-06-003    → parts[-1] = '003'
-    // MRP-20260601-0003  → parts[-1] = '0003'
     const lastSegment = parts[parts.length - 1];
     const seq = parseInt(lastSegment, 10);
     if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
   }
 
   const nextSeq = String(maxSeq + 1).padStart(3, '0');
-  return `${monthPrefix}-${nextSeq}`; // e.g. "MRP-2026-06-001"
+  return `${monthPrefix}-${nextSeq}`;
 }
 
 // ============================================================
@@ -145,20 +138,6 @@ async function generateMrpNumber(transaction) {
 async function getWarehouseStockByParts(partIds) {
   if (!partIds || partIds.length === 0) return {};
 
-  // ============================================================
-  // Chain relasi warehouse stock → part_id:
-  //
-  // t_warehouse_stock (ws)
-  //   └── wo_item_label_id → t_work_order_storing_item_label (woil)
-  //         └── label_id   → t_part_labels (pl) → part_id  ✅
-  //
-  // Stok dihitung dari t_warehouse_stock_log:
-  //   is_placement = true  → barang MASUK  (+qty_per_kanban)
-  //   is_placement = false → barang KELUAR (-qty_per_kanban)
-  //
-  // Hanya menghitung stok yang masih ada di warehouse
-  // (ws.deleted_at IS NULL = belum keluar/dipindah)
-  // ============================================================
   const rows = await sequelize.query(
     `
     SELECT
@@ -189,7 +168,6 @@ async function getWarehouseStockByParts(partIds) {
     }
   );
 
-  // Ubah ke map: { part_id → stock_qty }
   const stockMap = {};
   for (const row of rows) {
     stockMap[row.part_id] = parseFloat(row.stock_qty) || 0;
@@ -210,7 +188,6 @@ async function getWarehouseStockByParts(partIds) {
 //   result       — Map<part_id → { ...fields, qty }> akumulasi
 // ============================================================
 async function explodeBom(bomId, qtyMultiplier = 1, visited = new Set(), result = new Map()) {
-  // Guard: circular reference
   if (visited.has(bomId)) return result;
   visited.add(bomId);
 
@@ -233,29 +210,26 @@ async function explodeBom(bomId, qtyMultiplier = 1, visited = new Set(), result 
 
     const qtyRequired = parseFloat(detail.qty_required || 0);
     const scrapPct = parseFloat(detail.scrap_percentage || 0);
-    // qty efektif di level ini (sudah memperhitungkan scrap)
     const effectiveQty = qtyRequired * (1 + scrapPct / 100) * qtyMultiplier;
 
     const typeCode = (rawPart.part_type_code || '').toUpperCase();
 
     if (typeCode === 'RAW') {
-      // ✅ Ketemu RAW — akumulasikan ke result
       const existing = result.get(rawPart.id);
       if (existing) {
         existing.qty += effectiveQty;
       } else {
         result.set(rawPart.id, {
           part_id: rawPart.id,
-          bom_id: bomId,          // BOM langsung yang mengandung komponen ini
+          bom_id: bomId,
           qty: effectiveQty,
           part: rawPart.toJSON(),
         });
       }
     } else if (detail.child_bom_id) {
-      // ⬇️  Bukan RAW tapi punya child BOM — telusuri lebih dalam
       await explodeBom(detail.child_bom_id, effectiveQty, visited, result);
     }
-    // Part bukan RAW dan tidak punya child_bom_id → di-skip
+    // Part bukan RAW dan tidak punya child_bom_id di-skip
   }
 
   return result;
@@ -390,7 +364,6 @@ class MRPModule extends BaseModule {
         };
       }
 
-      // Map: product_part_id → qty_request
       const productQtyMap = {};
       for (const d of sprDetails) {
         productQtyMap[d.part_id] = d.qty || 0;
@@ -473,7 +446,7 @@ class MRPModule extends BaseModule {
       // Kenapa per-produk, bukan sekali untuk semua bom_id?
       //   → Karena setiap produk bisa punya qty berbeda di SPR,
       //     dan kita butuh mengalikan qty BOM dengan qty produk.
-      const rawMaterialAccum = new Map(); // Map<part_id → { part_id, bom_id, qty, part }>
+      const rawMaterialAccum = new Map();
 
       for (const partId of productPartIds) {
         const topBom = bomByProductPartId[partId];
@@ -482,17 +455,15 @@ class MRPModule extends BaseModule {
         const qtyProduct = productQtyMap[partId] || 0;
         if (qtyProduct <= 0) continue;
 
-        // Jalankan explosion: visited & result di-share dalam satu produk,
-        // tapi di-reset antar produk agar tidak tumpang tindih circular detection.
+        
         const productResult = await explodeBom(topBom.id, qtyProduct, new Set(), new Map());
 
-        // Gabungkan hasil per-produk ke akumulasi global
+        
         for (const [rawPartId, item] of productResult.entries()) {
           const existing = rawMaterialAccum.get(rawPartId);
           if (existing) {
             existing.qty += item.qty;
           } else {
-            // Simpan bom_id BOM utama (top-level) agar referensi di detail tetap ke BOM header
             rawMaterialAccum.set(rawPartId, {
               ...item,
               bom_id: topBom.id,
@@ -825,14 +796,14 @@ class MRPModule extends BaseModule {
         return { status: false, message: 'IDs wajib diisi dan tidak boleh kosong', code: 400 };
       }
 
-      if (!action || !['approve', 'reject'].includes(action)) {
+      if (!action || !['Approve', 'Reject'].includes(action)) {
         await transaction.rollback();
-        return { status: false, message: "Action harus 'approve' atau 'reject'", code: 400 };
+        return { status: false, message: "Action harus 'Approve' atau 'Reject'", code: 400 };
       }
 
-      if (action === 'reject' && !notes) {
+      if (action === 'Reject' && !notes) {
         await transaction.rollback();
-        return { status: false, message: 'Alasan penolakan (notes) wajib diisi saat reject', code: 400 };
+        return { status: false, message: 'Alasan penolakan (notes) wajib diisi saat Reject', code: 400 };
       }
 
       // Ambil semua MRP yang diminta, pastikan statusnya Submitted
@@ -846,14 +817,14 @@ class MRPModule extends BaseModule {
         return { status: false, message: 'Tidak ada MRP Submitted yang ditemukan dari IDs yang diberikan', code: 404 };
       }
 
-      const newStatus = action === 'approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
+      const newStatus = action === 'Approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
       const foundIds = mrps.map((m) => m.id);
 
       await SMrp.update(
         {
           status: newStatus,
           approved_by: user_id,
-          ...(action === 'reject' ? { rejected_notes: notes } : {}),
+          ...(action === 'Reject' ? { rejected_notes: notes } : {}),
         },
         { where: { id: { [Op.in]: foundIds } }, transaction }
       );
@@ -892,14 +863,14 @@ class MRPModule extends BaseModule {
       const { action, notes } = req.body;
       const user_id = req.user?.id;
 
-      if (!action || !['approve', 'reject'].includes(action)) {
+      if (!action || !['Approve', 'Reject'].includes(action)) {
         await transaction.rollback();
-        return { status: false, message: "Action harus 'approve' atau 'reject'", code: 400 };
+        return { status: false, message: "Action harus 'Approve' atau 'Reject'", code: 400 };
       }
 
-      if (action === 'reject' && !notes) {
+      if (action === 'Reject' && !notes) {
         await transaction.rollback();
-        return { status: false, message: 'Alasan penolakan (notes) wajib diisi saat reject', code: 400 };
+        return { status: false, message: 'Alasan penolakan (notes) wajib diisi saat Reject', code: 400 };
       }
 
       const mrp = await SMrp.findByPk(id, { transaction });
@@ -910,13 +881,13 @@ class MRPModule extends BaseModule {
         return { status: false, message: `Hanya MRP Submitted yang bisa di-review. Status: ${mrp.status}`, code: 400 };
       }
 
-      const newStatus = action === 'approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
+      const newStatus = action === 'Approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
 
       await mrp.update(
         {
           status: newStatus,
           approved_by: user_id,
-          ...(action === 'reject' ? { rejected_notes: notes } : {}),
+          ...(action === 'Reject' ? { rejected_notes: notes } : {}),
         },
         { transaction }
       );

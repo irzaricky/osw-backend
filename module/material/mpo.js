@@ -60,7 +60,7 @@ class MPOModule extends BaseModule {
     async getDropdownStatuses(req) {
         return {
             status: true,
-            data: ['draft', 'submitted', 'approved', 'rejected']
+            data: ['Draft', 'Submitted', 'Approved', 'Rejected']
         };
     }
 
@@ -83,7 +83,7 @@ class MPOModule extends BaseModule {
                 }),
                 db.SMrp.findAll({
                     where: {
-                        status: 'approved'
+                        status: 'Approved'
                         // Sama — source tetap tampil di dropdown, part yang sudah
                         // di-MPO-kan akan di-exclude saat getSourceData dipanggil.
                     },
@@ -216,10 +216,20 @@ class MPOModule extends BaseModule {
                         include: [{
                             model: SParts,
                             as: 'part',
-                            attributes: ['id', 'part_number', 'part_name', 'price', 'supplier_id', 'weight'],
+                            attributes: ['id', 'part_number', 'part_name', 'price', 'weight'],
                             include: [
                                 { model: db.SUom, as: 'uom', attributes: ['id', 'name', 'code'] },
-                                { model: SSuppliers, as: 'supplier', attributes: ['id', 'supplier_code', 'name'] }
+                                // [M2M] Ambil semua supplier yang bisa handle part ini
+                                // via tabel junction s_part_suppliers (as: 'suppliers')
+                                {
+                                    model: SSuppliers,
+                                    as: 'suppliers',
+                                    attributes: ['id', 'supplier_code', 'name'],
+                                    through: {
+                                        model: db.SPartSuppliers,
+                                        attributes: ['is_primary']
+                                    }
+                                }
                             ]
                         }]
                     }]
@@ -263,17 +273,27 @@ class MPOModule extends BaseModule {
                 };
             } else {
                 const mrp = await db.SMrp.findOne({
-                    where: { id: source_id, status: 'approved' },
+                    where: { id: source_id, status: 'Approved' },
                     include: [{
                         model: db.SMrpDetail,
                         as: 'details',
                         include: [{
                             model: SParts,
                             as: 'part',
-                            attributes: ['id', 'part_number', 'part_name', 'price', 'supplier_id', 'weight'],
+                            attributes: ['id', 'part_number', 'part_name', 'price', 'weight'],
                             include: [
                                 { model: db.SUom, as: 'uom', attributes: ['id', 'name', 'code'] },
-                                { model: SSuppliers, as: 'supplier', attributes: ['id', 'supplier_code', 'name'] }
+                                // [M2M] Ambil semua supplier yang bisa handle part ini
+                                // via tabel junction s_part_suppliers (as: 'suppliers')
+                                {
+                                    model: SSuppliers,
+                                    as: 'suppliers',
+                                    attributes: ['id', 'supplier_code', 'name'],
+                                    through: {
+                                        model: db.SPartSuppliers,
+                                        attributes: ['is_primary']
+                                    }
+                                }
                             ]
                         }]
                     }]
@@ -536,7 +556,7 @@ class MPOModule extends BaseModule {
                 sourceNumber = sourceRecord.number;
             } else {
                 sourceRecord = await db.SMrp.findOne({
-                    where: { id: source_id, status: 'approved' },
+                    where: { id: source_id, status: 'Approved' },
                     include: [{ model: db.SMrpDetail, as: 'details', attributes: ['part_id'] }],
                     transaction: t
                 });

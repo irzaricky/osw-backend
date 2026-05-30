@@ -322,7 +322,11 @@ async function getDropdownMpo(req) {
   const result = [];
 
   for (const r of rows) {
-    const remainingMap = await getRemainingQtyMap(r.id);  // ← Syarat ke-2
+    // Syarat ke-4: Jika user sedang edit MDO yang terikat ke mpo_id tertentu,
+    // pastikan MPO itu selalu muncul di dropdown meski sudah tidak ada sisa.
+    const isCurrentlyEdited = mpo_id && String(r.id) === String(mpo_id);
+
+    const remainingMap = await getRemainingQtyMap(r.id);
 
     // Kumpulkan parts yang masih punya sisa ke dalam array `details`
     const details = [];
@@ -339,21 +343,18 @@ async function getDropdownMpo(req) {
       }
     }
 
-    // ── 4. Filter: tampilkan MPO jika...
-    //    a) masih ada sisa barang (details.length > 0), ATAU
-    //    b) ini adalah MPO yang sedang aktif diedit user (mpo_id dari query)
-    //       → Syarat ke-4: jangan hilangkan MPO yang sedang dipakai
-    const isCurrentlyEdited = mpo_id && String(r.id) === String(mpo_id);
+    // ── 4. Filter ketat: HANYA tampilkan MPO yang masih memiliki remaining_qty > 0
+    //    pada setidaknya 1 part. Pengecualian: MPO yang sedang diedit user
+    //    (via query param mpo_id) tetap ditampilkan agar tidak hilang dari dropdown.
+    if (details.length === 0 && !isCurrentlyEdited) continue; // ← MPO sudah habis, skip
 
-    if (details.length > 0 || isCurrentlyEdited) {
-      result.push({
-        id: r.id,
-        number: r.number,
-        description: r.description,
-        supplier_name: r.supplier?.name ?? null,
-        details,           // ← Syarat ke-3: `details` WAJIB di dalam object MPO
-      });
-    }
+    result.push({
+      id: r.id,
+      number: r.number,
+      description: r.description,
+      supplier_name: r.supplier?.name ?? null,
+      details, // ← Syarat ke-3: `details` WAJIB di dalam object MPO
+    });
   }
 
   return { status: true, data: result };
@@ -374,9 +375,28 @@ async function getDropdownWarehouses(req) {
 }
 
 /**
+ * Generate array waktu statis dari jam 06:00 s/d 18:00 dengan interval 30 menit.
+ * Contoh output: ['06:00', '06:30', '07:00', ..., '18:00']
+ */
+function generateStaticTimeSlots() {
+  const slots = [];
+  for (let h = 6; h <= 18; h++) {
+    slots.push(`${String(h).padStart(2, '0')}:00`);
+    if (h < 18) slots.push(`${String(h).padStart(2, '0')}:30`);
+  }
+  return slots;
+}
+
+/**
  * Ambil daftar loading dock yang:
  * 1. Berada di area milik Main Material Warehouse (warehouse_id: 1)
- * 2. Masih kosong / belum dibooking pada target_date yang dipilih
+ * 2. Setiap dock dilengkapi `slots` array berisi waktu 06:00–18:00 (interval 30 menit)
+ *    dengan flag `available: false` jika slot tersebut sudah dibooking pada tanggal yang dipilih.
+ *
+ * PERUBAHAN v3:
+ * - Tidak lagi mengandalkan `dock.slots` dari DB (yang bisa kosong/undefined).
+ * - Menggunakan `generateStaticTimeSlots()` untuk generate array waktu secara konsisten.
+ * - `bookedMap[dock_id]` berisi Set berisi string waktu yang sudah terpakai (non-draft, non-cancelled, non-rejected).
  */
 async function getDropdownDocks(req) {
   const { date, exclude_id } = req.query;
@@ -393,35 +413,64 @@ async function getDropdownDocks(req) {
     return { status: true, data: [] }; // belum ada area di warehouse material
   }
 
-  // ── 3. Dock yang sudah dibooking pada tanggal tersebut ───────────────────
+  // ── 2. Dock yang sudah dibooking pada tanggal tersebut ───────────────────
+  //    Status cancelled dan rejected tidak dianggap booked.
+  //    Draft JUGA mengunci slot (aturan bisnis v3).
   const bookedRecords = await SMaterialDeliveryOrder.findAll({
     where: {
       target_date: date,
-      status: { [Op.notIn]: ['draft'] },
+      status: { [Op.notIn]: ['cancelled', 'rejected'] },
       dock_id: { [Op.ne]: null },
+      target_time: { [Op.ne]: null },
       ...(exclude_id ? { id: { [Op.ne]: exclude_id } } : {}),
     },
     attributes: ['dock_id', 'target_time'],
   });
 
+  // bookedMap[dock_id] → Set<string> berisi target_time yang sudah terpakai
   const bookedMap = {};
   for (const m of bookedRecords) {
     if (!bookedMap[m.dock_id]) bookedMap[m.dock_id] = new Set();
-    bookedMap[m.dock_id].add(m.target_time);
+    // Normalisasi: simpan hanya HH:mm (5 karakter) agar konsisten dengan slot string
+    const normalizedTime = m.target_time ? String(m.target_time).substring(0, 5) : null;
+    if (normalizedTime) bookedMap[m.dock_id].add(normalizedTime);
   }
 
-  // ── 4. Ambil dock khusus dari area material warehouse ────────────────────
+  // ── 3. Ambil dock khusus dari area Raw Materials warehouse ──────────────────
+  //    Filter berantai dengan required: true di setiap level agar Sequelize
+  //    benar-benar membuang (INNER JOIN) baris yang tidak cocok kategori.
   const docks = await SDocks.findAll({
     where: { area_id: { [Op.in]: materialAreaIds } },
     include: [
       {
         model: SWarehouseAreas,
         as: 'area',
+        required: true,
         attributes: ['id', 'name', 'warehouse_id'],
+        include: [
+          {
+            model: SWarehouses,
+            as: 'warehouse',
+            required: true,
+            attributes: ['id', 'name'],
+            include: [
+              {
+                model: db.RefWarehouseCategories,
+                as: 'category',
+                required: true,
+                where: { name: 'Raw Materials' },
+                attributes: ['id', 'name'],
+              },
+            ],
+          },
+        ],
       },
     ],
     order: [['name', 'ASC']],
   });
+
+  // ── 4. Generate slot statis dan tandai availability ──────────────────────
+  const staticSlots = generateStaticTimeSlots();
 
   const data = docks.map((dock) => ({
     id: dock.id,
@@ -429,10 +478,10 @@ async function getDropdownDocks(req) {
     area: dock.area
       ? { id: dock.area.id, name: dock.area.name, warehouse_id: dock.area.warehouse_id }
       : null,
-    slots: dock.slots?.map((slot) => ({
-      time: slot,
-      available: !(bookedMap[dock.id]?.has(slot)),
-    })) ?? [],
+    slots: staticSlots.map((time) => ({
+      time,
+      available: !(bookedMap[dock.id]?.has(time)),
+    })),
   }));
 
   return { status: true, data };
@@ -442,23 +491,29 @@ async function getDropdownVehicles(req) {
   const { date, exclude_id } = req.query;
   if (!date) return { status: false, message: 'Parameter date wajib diisi.' };
 
-  // Kendaraan yang sudah dipakai pada tanggal tersebut
+  // Kendaraan yang sudah dipakai pada tanggal tersebut.
+  // Draft JUGA mengunci kendaraan (aturan bisnis v3).
   const usedVehicleIds = (
     await SMaterialDeliveryOrder.findAll({
       where: {
         target_date: date,
-        status: { [Op.notIn]: ['draft'] },
+        status: { [Op.notIn]: ['cancelled', 'rejected'] },
         ...(exclude_id ? { id: { [Op.ne]: exclude_id } } : {}),
       },
       attributes: ['vehicle_id'],
     })
   ).map((r) => r.vehicle_id).filter(Boolean);
 
-  const where = {};
+  // Filter wajib:
+  //  • status: true               → kendaraan aktif (tidak dinonaktifkan di master)
+  //  • availability_status: 'Available' → tidak sedang rusak / keluar / dipakai pihak lain
+  //  • id NOT IN usedVehicleIds   → belum dijadwalkan MDO lain di hari yang sama
+  const where = {
+    status: true,
+    availability_status: 'Available',
+  };
   if (usedVehicleIds.length) where.id = { [Op.notIn]: usedVehicleIds };
 
-  // Tidak ada filter status di sini — semua kendaraan yang belum terpakai
-  // di hari tersebut harus muncul, tanpa memandang field status kendaraan.
   const vehicles = await SVehicles.findAll({
     where,
     include: [{ model: db.RefVehicleType, as: 'vehicle_type', attributes: ['id', 'name', 'load_capacity'] }],
@@ -473,35 +528,58 @@ async function getDropdownVehicles(req) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /preview-split?mpo_id=&vehicle_id=&exclude_mdo_id=
+ * previewSplit — bisa dipanggil via GET maupun POST.
  *
- * Menghitung qty yang akan dimasukkan ke 1 MDO baru berdasarkan:
- *  - Sisa qty tiap part dari MPO (belum ter-cover MDO lain)
- *  - Kapasitas kendaraan (load_capacity dalam kg)
+ * Mode A — GET /preview-split?mpo_id=&vehicle_id= (tanpa body details)
+ *   Menghitung qty yang disarankan berdasarkan sisa qty MPO × kapasitas kendaraan.
+ *   Dipakai saat pertama kali vehicle dipilih sebelum user menyentuh detail.
  *
- * Logika pembagian:
- *  1. Hitung total berat dari semua sisa qty: total_weight = SUM(remaining_qty × weight)
- *  2. Jika total_weight <= load_capacity → masukkan semua sisa qty (truk cukup)
- *  3. Jika total_weight > load_capacity → hitung ratio = load_capacity / total_weight
- *     lalu qty tiap part = FLOOR(remaining_qty × ratio), dengan minimum 1 jika remaining_qty > 0.
- *     (pembulatan ke bawah agar berat tidak pernah melebihi kapasitas)
+ * Mode B — POST /preview-split (dengan body { mpo_id, vehicle_id, details[] })
+ *   Frontend mengirim details = [{ part_id, qty }] yang mencerminkan kondisi
+ *   form saat ini (item yang diceklis + qty yang diubah user).
+ *   Backend MEMPRIORITASKAN array ini untuk menghitung total berat aktual,
+ *   sehingga indikator kapasitas langsung bereaksi saat user mengubah Qty.
  *
- * Response juga menyertakan:
- *  - suggested_qty_details[]: detail yang sudah dihitung
- *  - remaining_after[]: sisa qty di MPO setelah MDO ini dibuat
- *  - is_fully_covered: apakah MDO ini sudah menutup semua sisa MPO
- *  - total_weight_kg: total berat MDO ini
- *  - vehicle_capacity_kg: kapasitas kendaraan
- *  - capacity_usage_pct: persentase kapasitas terpakai
- *  - warnings[]: peringatan (misal part belum punya weight)
+ * Response menyertakan:
+ *  - total_weight_kg        : total berat berdasarkan details aktual (Mode B)
+ *                             atau suggested (Mode A)
+ *  - vehicle_capacity_kg    : kapasitas kendaraan
+ *  - capacity_usage_pct     : persentase kapasitas terpakai
+ *  - has_null_weight        : true jika ada part dengan weight null/0
+ *  - suggested_qty_details[]
+ *  - remaining_after[]
+ *  - is_fully_covered
+ *  - warnings[]
  */
 async function previewSplit(req) {
-  const { mpo_id, vehicle_id, exclude_mdo_id } = req.query;
+  const mpo_id         = req.body?.mpo_id         ?? req.query?.mpo_id;
+  const vehicle_id     = req.body?.vehicle_id     ?? req.query?.vehicle_id;
+  const exclude_mdo_id = req.body?.exclude_mdo_id ?? req.query?.exclude_mdo_id ?? null;
+
+  let frontendDetails = null;
+
+  if (Array.isArray(req.body?.details) && req.body.details.length > 0) {
+    frontendDetails = req.body.details.map((item) => ({
+      part_id: String(item.part_id),
+      qty: Number(item.qty) || 0,
+    }));
+  } else if (req.query?.details) {
+    try {
+      const parsed = JSON.parse(req.query.details);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        frontendDetails = parsed.map((item) => ({
+          part_id: String(item.part_id),
+          qty: Number(item.qty) || 0,
+        }));
+      }
+    } catch (err) {
+      console.error('previewSplit: Gagal parse query param details:', err);
+    }
+  }
 
   if (!mpo_id || !vehicle_id)
     return { status: false, message: 'Parameter mpo_id dan vehicle_id wajib diisi.' };
 
-  // Ambil vehicle & kapasitasnya
   const vehicle = await SVehicles.findOne({
     where: { id: vehicle_id, status: true },
     include: [{ model: RefVehicleType, as: 'vehicle_type' }],
@@ -512,23 +590,111 @@ async function previewSplit(req) {
   if (capacity <= 0)
     return { status: false, message: 'Kapasitas kendaraan tidak valid (load_capacity = 0).' };
 
-  // Ambil sisa qty dari MPO
-  const remainingMap = await getRemainingQtyMap(mpo_id, exclude_mdo_id ?? null);
+  const remainingMap = await getRemainingQtyMap(mpo_id, exclude_mdo_id);
   if (remainingMap.size === 0)
     return { status: false, message: 'MPO tidak ditemukan atau tidak memiliki detail.' };
 
-  // Cek apakah semua sisa sudah 0 (MPO sudah fully covered)
   const hasRemaining = [...remainingMap.values()].some((v) => v.remaining_qty > 0);
   if (!hasRemaining)
     return { status: false, message: 'Semua qty pada MPO ini sudah ter-cover oleh MDO yang ada.' };
 
-  // Hitung total berat dari sisa qty
   const warnings = [];
+  let hasNullWeight = false;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // MODE B: Frontend mengirim details — hitung berat berdasarkan qty form
+  // ══════════════════════════════════════════════════════════════════════════
+  if (frontendDetails) {
+    const liveDetailsMap = {};
+    frontendDetails.forEach((item) => {
+      liveDetailsMap[String(item.part_id)] = Number(item.qty) || 0;
+    });
+
+    const allPartIds = [...remainingMap.keys()];
+    const parts = await SParts.findAll({
+      where: { id: allPartIds },
+      attributes: ['id', 'part_number', 'part_name', 'weight'],
+    });
+    const partMap = new Map(parts.map((p) => [p.id, p]));
+
+    let actualTotalWeight = 0;
+    const suggestedDetails = [];
+
+    for (const [partId, rem] of remainingMap) {
+      const part = partMap.get(partId) ?? rem.part;
+      const weight = parseFloat(part?.weight ?? 0);
+      const weightMissing = !part?.weight || parseFloat(part.weight) <= 0;
+
+      let calculate_qty;
+      const partIdStr = String(partId);
+      if (liveDetailsMap[partIdStr] !== undefined) {
+        calculate_qty = liveDetailsMap[partIdStr];
+      } else {
+        calculate_qty = 0;
+      }
+
+      if (weightMissing && calculate_qty > 0) {
+        hasNullWeight = true;
+        warnings.push(
+          `Part ${part?.part_number ?? partId} belum memiliki data berat (weight). Dianggap 0 kg.`
+        );
+      }
+
+      const subtotal = calculate_qty * weight;
+      actualTotalWeight += subtotal;
+
+      if (calculate_qty > 0) {
+        suggestedDetails.push({
+          part_id: partId,
+          part,
+          ordered_qty:        rem.ordered_qty  ?? null,
+          covered_qty:        rem.covered_qty  ?? null,
+          remaining_qty:      rem.remaining_qty ?? null,
+          suggested_qty:      calculate_qty,
+          weight_per_unit_kg: weight,
+          subtotal_weight_kg: parseFloat(subtotal.toFixed(3)),
+        });
+      }
+    }
+
+    return {
+      status: true,
+      data: {
+        vehicle: {
+          id: vehicle.id,
+          vehicle_code: vehicle.vehicle_code,
+          plate_number: vehicle.plate_number,
+          vehicle_type: vehicle.vehicle_type?.name,
+          capacity_kg: capacity,
+        },
+        suggested_qty_details: suggestedDetails,
+        remaining_after: [],          // tidak relevan di mode live-preview
+        is_fully_covered: false,      // tidak relevan di mode live-preview
+        total_weight_kg: parseFloat(actualTotalWeight.toFixed(3)),
+        vehicle_capacity_kg: capacity,
+        capacity_usage_pct: capacity > 0
+          ? parseFloat(((actualTotalWeight / capacity) * 100).toFixed(2))
+          : 0,
+        has_null_weight: hasNullWeight,
+        warnings,
+      },
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // MODE A: Tidak ada frontend details — hitung berdasarkan sisa qty MPO
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Hitung total berat dari sisa qty
   let totalWeightRemaining = 0;
   for (const [, v] of remainingMap) {
     if (v.remaining_qty <= 0) continue;
     const w = parseFloat(v.part?.weight ?? 0);
-    if (!v.part?.weight) warnings.push(`Part ${v.part?.part_number} belum memiliki data berat (weight). Dianggap 0 kg.`);
+    const weightMissing = !v.part?.weight || parseFloat(v.part.weight) <= 0;
+    if (weightMissing) {
+      hasNullWeight = true;
+      warnings.push(`Part ${v.part?.part_number} belum memiliki data berat (weight). Dianggap 0 kg.`);
+    }
     totalWeightRemaining += v.remaining_qty * w;
   }
 
@@ -537,7 +703,6 @@ async function previewSplit(req) {
     ? capacity / totalWeightRemaining
     : 1;
 
-  // Susun suggested details
   const suggestedDetails = [];
   const remainingAfter = [];
   let actualTotalWeight = 0;
@@ -548,7 +713,6 @@ async function previewSplit(req) {
       continue;
     }
 
-    // Floor agar berat tidak melewati kapasitas; minimal 1 jika ada sisa
     const suggestedQty = ratio < 1
       ? Math.max(1, Math.floor(v.remaining_qty * ratio))
       : v.remaining_qty;
@@ -594,6 +758,7 @@ async function previewSplit(req) {
       capacity_usage_pct: capacity > 0
         ? parseFloat(((actualTotalWeight / capacity) * 100).toFixed(2))
         : 0,
+      has_null_weight: hasNullWeight,
       warnings,
     },
   };
@@ -623,10 +788,48 @@ async function list(req) {
         attributes: ['id', 'vehicle_code', 'plate_number'],
         include: [{ model: RefVehicleType, as: 'vehicle_type', attributes: ['name', 'load_capacity'] }],
       },
+      // ── TAMBAHAN: sertakan detail MDO beserta berat part ─────────────────────
+      {
+        model: TMaterialDeliveryOrderDetail,
+        as: 'mdo_details',
+        attributes: ['id', 'part_id', 'qty'],
+        include: [
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['id', 'weight'],
+          },
+        ],
+      },
     ],
     order: [['created_at', 'DESC']],
     limit: parseInt(limit),
     offset,
+    distinct: true, // hindari count ganda akibat JOIN ke detail
+  });
+
+  // ── Injeksi properti kapasitas ke masing-masing baris (sama seperti detail()) ─
+  const enrichedRows = rows.map((row) => {
+    const details = (row.mdo_details ?? []).map((d) => ({
+      qty: d.qty,
+      part: d.part,
+      part_id: d.part_id,
+    }));
+
+    const { total_weight_kg, has_missing_weight, missing_weight_parts } = calcTotalWeight(details);
+    const capacity = parseFloat(row.vehicle?.vehicle_type?.load_capacity ?? 0);
+
+    return {
+      ...row.toJSON(),
+      total_weight_kg,
+      vehicle_capacity_kg: capacity || null,
+      capacity_usage_pct: capacity > 0
+        ? parseFloat(((total_weight_kg / capacity) * 100).toFixed(2))
+        : null,
+      warnings: has_missing_weight
+        ? [`Part berikut belum memiliki data berat: ${missing_weight_parts.join(', ')}`]
+        : [],
+    };
   });
 
   return {
@@ -636,7 +839,7 @@ async function list(req) {
       page: parseInt(page),
       limit: parseInt(limit),
       total_pages: Math.ceil(count / parseInt(limit)),
-      rows,
+      rows: enrichedRows,
     },
   };
 }
@@ -719,46 +922,44 @@ async function create(req) {
     details = [],
   } = req.body;
 
-  // ── Validasi input dasar ──────────────────────────────────────────────────
   if (!mpo_id) return { status: false, message: 'mpo_id wajib diisi.' };
   if (!target_date) return { status: false, message: 'target_date wajib diisi.' };
   if (!details.length) return { status: false, message: 'Detail MDO tidak boleh kosong.' };
 
-  // ── Validasi MPO ──────────────────────────────────────────────────────────
   const mpo = await SMaterialPurchaseOrder.findOne({ where: { id: mpo_id, status: 'approved' } });
   if (!mpo) return { status: false, message: 'MPO tidak ditemukan atau belum berstatus approved.' };
 
-  // ── Validasi vehicle ──────────────────────────────────────────────────────
   if (vehicle_id) {
-    const conflict = await SMaterialDeliveryOrder.findOne({
+    const vehicleConflict = await SMaterialDeliveryOrder.findOne({
       where: {
         vehicle_id,
         target_date,
-        status: { [Op.notIn]: ['draft'] },
+        status: { [Op.notIn]: ['cancelled', 'rejected'] },
       },
     });
-    if (conflict)
-      return { status: false, message: `Kendaraan sudah digunakan oleh MDO ${conflict.number} pada tanggal tersebut.` };
+    if (vehicleConflict)
+      return {
+        status: false,
+        message: `Double-booking! Kendaraan sudah dijadwalkan pada MDO ${vehicleConflict.number} di tanggal dan waktu yang sama. Pilih kendaraan lain atau ubah jadwal.`,
+      };
   }
 
-  // ── Validasi konflik dock ────────────────────────────────────────────────
   if (dock_id && target_date && target_time) {
     const dockConflict = await SMaterialDeliveryOrder.findOne({
       where: {
         dock_id,
         target_date,
         target_time,
-        status: { [Op.notIn]: ['draft'] },
+        status: { [Op.notIn]: ['cancelled', 'rejected'] },
       },
     });
     if (dockConflict)
       return {
         status: false,
-        message: `Dock sudah dibooking oleh MDO ${dockConflict.number} pada tanggal dan waktu yang sama.`,
+        message: `Double-booking! Dock sudah dibooking oleh MDO ${dockConflict.number} pada tanggal dan slot waktu yang sama. Pilih dock lain atau ubah slot waktu.`,
       };
   }
 
-  // ── Ambil vehicle untuk validasi kapasitas ────────────────────────────────
   let capacity = Infinity;
   if (vehicle_id) {
     const vehicle = await SVehicles.findOne({
@@ -769,7 +970,6 @@ async function create(req) {
     capacity = parseFloat(vehicle.vehicle_type?.load_capacity ?? Infinity);
   }
 
-  // ── Validasi remaining qty & berat ───────────────────────────────────────
   const remainingMap = await getRemainingQtyMap(mpo_id);
   let totalWeight = 0;
   const errors = [];
@@ -793,10 +993,10 @@ async function create(req) {
   if (totalWeight > capacity)
     return {
       status: false,
-      message: `Total berat muatan (${totalWeight.toFixed(2)} kg) melebihi kapasitas kendaraan (${capacity} kg). Kurangi qty atau gunakan kendaraan lain.`,
+      httpCode: 400,
+      message: `Total muatan melebihi kapasitas maksimal kendaraan! (${totalWeight.toFixed(2)} kg > ${capacity} kg). Kurangi qty atau pilih kendaraan lain.`,
     };
 
-  // ── Simpan ke DB (transaction) ────────────────────────────────────────────
   const t = await sequelize.transaction();
   try {
     const number = await generateMdoNumber(target_date);
@@ -857,21 +1057,26 @@ async function update(req) {
   const finalDate = target_date ?? mdo.target_date;
   const finalVehicleId = vehicle_id ?? mdo.vehicle_id;
 
-  // Validasi konflik vehicle (kecuali MDO ini sendiri)
+  // Validasi double-booking vehicle (kecuali MDO ini sendiri)
+  // Draft JUGA memblokir (aturan bisnis v3).
   if (finalVehicleId) {
     const conflict = await SMaterialDeliveryOrder.findOne({
       where: {
         vehicle_id: finalVehicleId,
         target_date: finalDate,
-        status: { [Op.notIn]: ['draft'] },
+        status: { [Op.notIn]: ['cancelled', 'rejected'] },
         id: { [Op.ne]: id },
       },
     });
     if (conflict)
-      return { status: false, message: `Kendaraan sudah digunakan oleh MDO ${conflict.number} pada tanggal tersebut.` };
+      return {
+        status: false,
+        message: `Double-booking! Kendaraan sudah dijadwalkan pada MDO ${conflict.number} di tanggal yang sama. Pilih kendaraan lain atau ubah jadwal.`,
+      };
   }
 
-  // Validasi konflik dock (kecuali MDO ini sendiri)
+  // Validasi double-booking dock + slot waktu (kecuali MDO ini sendiri)
+  // Draft JUGA memblokir slot dock (aturan bisnis v3).
   const finalDockId = dock_id ?? mdo.dock_id;
   const finalTime = target_time ?? mdo.target_time;
   if (finalDockId && finalDate && finalTime) {
@@ -880,14 +1085,14 @@ async function update(req) {
         dock_id: finalDockId,
         target_date: finalDate,
         target_time: finalTime,
-        status: { [Op.notIn]: ['draft'] },
+        status: { [Op.notIn]: ['cancelled', 'rejected'] },
         id: { [Op.ne]: id },
       },
     });
     if (dockConflict)
       return {
         status: false,
-        message: `Dock sudah dibooking oleh MDO ${dockConflict.number} pada tanggal dan waktu yang sama.`,
+        message: `Double-booking! Dock sudah dibooking oleh MDO ${dockConflict.number} pada tanggal dan slot waktu yang sama. Pilih dock lain atau ubah slot waktu.`,
       };
   }
 
@@ -920,7 +1125,8 @@ async function update(req) {
   if (totalWeight > capacity)
     return {
       status: false,
-      message: `Total berat (${totalWeight.toFixed(2)} kg) melebihi kapasitas kendaraan (${capacity} kg).`,
+      httpCode: 400,
+      message: `Total muatan melebihi kapasitas maksimal kendaraan! (${totalWeight.toFixed(2)} kg > ${capacity} kg). Kurangi qty atau pilih kendaraan lain.`,
     };
 
   const t = await sequelize.transaction();

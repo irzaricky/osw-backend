@@ -11,6 +11,7 @@ const {
   SUsers,
   SUserDetail,
   SSuppliers,
+  SDefects,
   SWarehouses,
   RefReceivingStatus,
   TMaterialReceiving,
@@ -196,7 +197,7 @@ class GoodReceiptModule extends BaseModule {
           {
             model: TMaterialReceivingItem,
             as: 'items',
-            attributes: ['id'],
+            attributes: ['id', 'quantity_checked_at', 'quality_checked_at'],
             include: [
               {
                 model: TMaterialDeliveryOrderDetail,
@@ -262,7 +263,7 @@ class GoodReceiptModule extends BaseModule {
                         model: TNgTicketQuantity,
                         as: 'quantity',
                         required: false,
-                        attributes: ['expected_quantity', 'actual_quantity']
+                        attributes: ['expected_qty', 'actual_qty']
                       },
                       {
                         model: TNgTicketQuality,
@@ -323,6 +324,15 @@ class GoodReceiptModule extends BaseModule {
             submitted_at: item.quality_checked_at || null
           },
           quantity_labels:labels.filter((x) => x.quantity_checked_at)
+            .sort(
+              (a, b) =>
+                new Date(
+                  b.quantity_checked_at
+                ) -
+                new Date(
+                  a.quantity_checked_at
+                )
+            )
             .map((label) => ({
               id: label.id,
               label_number: label.label?.label_number || null,
@@ -334,6 +344,15 @@ class GoodReceiptModule extends BaseModule {
             })
           ),
           quality_labels: labels.filter((x) => x.quality_checked_at)
+            .sort(
+              (a, b) =>
+                new Date(
+                  b.quality_checked_at
+                ) -
+                new Date(
+                  a.quality_checked_at
+                )
+            )
             .map((label) => ({
               id: label.id,
               label_number: label.label?.label_number || null,
@@ -343,7 +362,7 @@ class GoodReceiptModule extends BaseModule {
                   id: quality.id,
                   defect_id: quality.defect?.id || null,
                   defect_name: quality.defect?.name || null,
-                  image: quality.image
+                  image: quality.image ? `${process.env.SITE_URL}${quality.image}` : null
                 })
               ),
               ng_ticket_number: label.ng_ticket?.ng_ticket_number || null,

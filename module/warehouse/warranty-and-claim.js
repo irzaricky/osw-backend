@@ -26,7 +26,7 @@ class WarrantyAndClaimModule extends BaseModule {
       const { limit, page, offset } = helper.getPagination(params);
 
       const { count, rows: ngTickets } = await TNgTicket.findAndCountAll({
-        attributes: ['id', 'ng_ticket_number', 'created_at'],
+        attributes: ['id', 'ng_ticket_number', 'createdAt'],
         include: [
           {
             model: TMaterialReceivingItemLabel,
@@ -98,6 +98,7 @@ class WarrantyAndClaimModule extends BaseModule {
             model: TNgTicketQuality,
             as: 'qualities',
             required: false,
+            separate: true,
             attributes: ['id', 'image'],
             include: [
               {
@@ -109,7 +110,7 @@ class WarrantyAndClaimModule extends BaseModule {
             ]
           }
         ],
-        order: [['created_at', 'DESC']],
+        order: [['createdAt', 'DESC']],
         limit,
         offset,
         distinct: true,
@@ -158,7 +159,7 @@ class WarrantyAndClaimModule extends BaseModule {
           defects = (item.qualities || [])
             .map((q) => ({
               id: q.defect?.id || null,
-              name: q.defect?.name || null,
+              defect_name: q.defect?.name || null,
               image: q.image ? `${process.env.SITE_URL}${q.image}` : null
             }));
 
@@ -172,15 +173,16 @@ class WarrantyAndClaimModule extends BaseModule {
         return {
           id: item.id,
           ng_ticket_number: item.ng_ticket_number,
+          label_number: mrItemLabel?.label?.label_number || null,
           category: isQuantityNG ? 'Quantity' : 'Quality',
-          mpo_number: mpo?.number || null,
-          mdo_number: mdo?.number || null,
           part_number: part?.part_number || null,
           part_name: part?.part_name || null,
           supplier,
           rejected_info: rejectedInfo,
-          defects,
-          created_at: item.created_at
+          mpo_number: mpo?.number || null,
+          mdo_number: mdo?.number || null,
+          created_at: item.createdAt,
+          defects
         };
       }));
 

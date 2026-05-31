@@ -8,7 +8,6 @@ const router = express.Router()
 router.get(
   '/dropdown',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await partsModule.dropdown(req, res);
   }

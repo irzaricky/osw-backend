@@ -520,7 +520,10 @@ class SDOModule extends BaseModule {
                   {
                     model: SSalesPurchaseOrderDetails,
                     as: 'spoDetail',
-                    include: [{ model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name', 'package_id'] }]
+                    include: [
+                      { model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name', 'package_id'] },
+                      { model: SSalesPurchaseOrders, as: 'order', attributes: ['id', 'status', 'spo_number'] }
+                    ]
                   }
                 ]
               }
@@ -583,19 +586,23 @@ class SDOModule extends BaseModule {
 
       const { notes, details } = validation.value;
 
-      // Handle proof_of_delivery file upload
-      const file = req.files.proof_of_delivery;
-      const ext = path.extname(file.name);
-      const fileName = `${sdo.do_number.replace(/\//g, '-')}_${Date.now()}${ext}`;
-      const uploadDir = path.join(__dirname, '../../public/uploads/pod');
+      // Handle proof_of_delivery file upload (supporting single or multiple files)
+      const podFiles = Array.isArray(req.files.proof_of_delivery)
+        ? req.files.proof_of_delivery
+        : [req.files.proof_of_delivery];
 
+      const uploadDir = path.join(__dirname, '../../public/uploads/pod');
       if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-      const uploadPath = path.join(uploadDir, fileName);
-      await file.mv(uploadPath);
-
-      const proofUrl = `/uploads/pod/${fileName}`;
-
+      const proofUrls = [];
+      for (let i = 0; i < podFiles.length; i++) {
+        const file = podFiles[i];
+        const ext = path.extname(file.name);
+        const fileName = `${sdo.do_number.replace(/\//g, '-')}_${Date.now()}_${i}${ext}`;
+        const uploadPath = path.join(uploadDir, fileName);
+        await file.mv(uploadPath);
+        proofUrls.push(`/uploads/pod/${fileName}`);
+      }
       // Update each detail's received_qty and notes, validating bounds
       for (const item of details) {
         const doDetail = sdo.details.find(d => d.id === item.delivery_order_detail_id);
@@ -741,9 +748,25 @@ class SDOModule extends BaseModule {
       await sdo.update({
         delivery_status: finalStatus,
         notes: notes ?? sdo.notes,
-        proof_of_delivery: proofUrl,
+        proof_of_delivery: proofUrls,
         received_at: new Date()
       }, { transaction: t });
+
+      // Transition parent SPOs from Locked to Processing when SDO finishes
+      const spoIds = new Set();
+      sdo.details.forEach(detail => {
+        const spo = detail.planDetail?.spoDetail?.order;
+        if (spo) {
+          spoIds.add(spo.id);
+        }
+      });
+
+      for (const spoId of spoIds) {
+        const spoObj = await SSalesPurchaseOrders.findByPk(spoId, { transaction: t });
+        if (spoObj && spoObj.status === 'Locked') {
+          await spoObj.update({ status: 'Processing' }, { transaction: t });
+        }
+      }
 
       // Check if all SDOs for this SDP are Delivered → mark SDP as Shipped
       const pendingSDOs = await SDeliveryOrders.count({

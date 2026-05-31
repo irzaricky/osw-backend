@@ -43,7 +43,7 @@ export default (sequelize) => {
       defaultValue: 'Created'
     },
     proof_of_delivery: {
-      type: DataTypes.STRING(255),
+      type: DataTypes.JSON,
       allowNull: true
     },
     notes: {

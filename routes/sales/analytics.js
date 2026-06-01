@@ -40,4 +40,9 @@ router.get('/forecast', session.sessionChecker, session.permissionChecker(['Supe
   return helper.sendResponse(res, await analytics.getForecastAnalytics(req));
 });
 
+// GET /sales/analytics/spr
+router.get('/spr', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return helper.sendResponse(res, await analytics.getSprAnalytics(req));
+});
+
 export default router;

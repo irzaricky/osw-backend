@@ -12,7 +12,7 @@ const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesForecasts, SSalesForecastDetails,
   SDocks, SWarehouses, SCustomers, SVehicles, SUserDetail,
-  SParts
+  SParts, SSalesPurchaseRequests, SSalesPurchaseRequestLogs
 } = db;
 
 class AnalyticsModule extends BaseModule {
@@ -841,6 +841,165 @@ class AnalyticsModule extends BaseModule {
           },
           trends: trendsList,
           top_products: topProducts
+        }
+      };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  /**
+   * GET /sales/analytics/spr
+   * Returns SPR Analytics KPI cards, status breakdown, and funnel metrics
+   */
+  async getSprAnalytics(req) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date 
+        ? dayjs(start_date).format('YYYY-MM-DD') 
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date 
+        ? dayjs(end_date).format('YYYY-MM-DD') 
+        : dayjs().format('YYYY-MM-DD');
+
+      // 1. Total Active SPRs (status: 'Submitted')
+      const activeSprsCount = await SSalesPurchaseRequests.count({
+        where: {
+          status: 'Submitted',
+          request_date: { [Op.between]: [startDateStr, endDateStr] }
+        }
+      });
+
+      // 2. Avg Approval Time
+      const approvedSprs = await SSalesPurchaseRequests.findAll({
+        where: {
+          status: 'Approved',
+          request_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        include: [{
+          model: SSalesPurchaseRequestLogs,
+          as: 'logs',
+          attributes: ['status', 'created_at']
+        }]
+      });
+
+      let totalApprovalTimeMs = 0;
+      let approvedCount = 0;
+
+      for (const spr of approvedSprs) {
+        const approvedLog = spr.logs.find(l => l.status === 'Approved');
+        const submittedLog = spr.logs.find(l => l.status === 'Submitted');
+
+        if (approvedLog) {
+          const end = dayjs(approvedLog.created_at);
+          const start = submittedLog ? dayjs(submittedLog.created_at) : dayjs(spr.created_at);
+          const diff = end.diff(start);
+          if (diff > 0) {
+            totalApprovalTimeMs += diff;
+            approvedCount++;
+          }
+        }
+      }
+
+      const avgApprovalTimeHours = approvedCount > 0 
+        ? helper.round((totalApprovalTimeMs / approvedCount) / 3600000, 2) 
+        : 0;
+
+      // 3. SPR Rejection Rate (%)
+      const totalSprCount = await SSalesPurchaseRequests.count({
+        where: {
+          request_date: { [Op.between]: [startDateStr, endDateStr] }
+        }
+      });
+
+      const rejectedSprCount = await SSalesPurchaseRequests.count({
+        where: {
+          status: 'Rejected',
+          request_date: { [Op.between]: [startDateStr, endDateStr] }
+        }
+      });
+
+      const rejectionRate = totalSprCount > 0 
+        ? helper.round((rejectedSprCount / totalSprCount) * 100, 2) 
+        : 0;
+
+      // 4. Status Breakdown
+      const statusBreakdownRaw = await SSalesPurchaseRequests.findAll({
+        where: {
+          request_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        attributes: [
+          'status',
+          [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count']
+        ],
+        group: ['status'],
+        raw: true
+      });
+
+      const statusBreakdown = {
+        Draft: 0,
+        Submitted: 0,
+        Approved: 0,
+        Rejected: 0
+      };
+      for (const item of statusBreakdownRaw) {
+        if (statusBreakdown[item.status] !== undefined) {
+          statusBreakdown[item.status] = parseInt(item.count, 10);
+        }
+      }
+
+      // 5. Pipeline Funnel
+      const sprsForFunnel = await SSalesPurchaseRequests.findAll({
+        where: {
+          request_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        include: [{
+          model: SSalesPurchaseOrders,
+          as: 'orders',
+          attributes: ['id']
+        }]
+      });
+
+      let funnelCreated = sprsForFunnel.length;
+      let funnelSubmitted = 0;
+      let funnelApproved = 0;
+      let funnelSPO = 0;
+
+      for (const spr of sprsForFunnel) {
+        if (['Submitted', 'Approved', 'Rejected'].includes(spr.status)) {
+          funnelSubmitted++;
+        }
+        if (spr.status === 'Approved') {
+          funnelApproved++;
+          if (spr.orders && spr.orders.length > 0) {
+            funnelSPO++;
+          }
+        }
+      }
+
+      const pipelineFunnel = [
+        { stage: 'Draft Created', count: funnelCreated },
+        { stage: 'Submitted', count: funnelSubmitted },
+        { stage: 'Approved', count: funnelApproved },
+        { stage: 'SPO Created', count: funnelSPO }
+      ];
+
+      return {
+        status: true,
+        data: {
+          date_range: {
+            start: startDateStr,
+            end: endDateStr
+          },
+          kpis: {
+            active_sprs: activeSprsCount,
+            avg_approval_time: avgApprovalTimeHours,
+            rejection_rate: rejectionRate
+          },
+          status_breakdown: statusBreakdown,
+          pipeline_funnel: pipelineFunnel
         }
       };
     } catch (error) {

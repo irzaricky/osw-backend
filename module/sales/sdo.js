@@ -18,7 +18,8 @@ const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesPurchaseOrders, SSalesPurchaseOrderDetails,
   SVehicles, SCustomers, SParts, SUsers, SUserDetail,
-  SPackages, RefVehicleType, SRoles
+  SPackages, RefVehicleType, SRoles, SWarehouseAreas,
+  TWorkOrderStoring, TWorkOrderStoringItem
 } = db;
 
 class SDOModule extends BaseModule {
@@ -378,6 +379,133 @@ class SDOModule extends BaseModule {
         notes: null
       }));
       await SDeliveryOrderDetails.bulkCreate(sdoDetailRecords, { transaction: t });
+
+      // Group details by resolved warehouse area ID
+      const detailsByArea = {};
+      for (const planDetail of sdp.details) {
+        const part = planDetail.spoDetail?.part;
+        if (!part) continue;
+
+        let areaId = null;
+
+        // 1. Check existing warehouse stock location
+        const stockArea = await db.sequelize.query(`
+          SELECT a.id AS area_id
+          FROM t_warehouse_stock ws
+          JOIN s_warehouse_bins b ON b.id = ws.bin_id AND b.deleted_at IS NULL
+          JOIN s_warehouse_areas a ON a.id = b.area_id AND a.deleted_at IS NULL
+          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+          JOIN t_part_labels pl ON pl.id = wil.label_id AND pl.deleted_at IS NULL
+          WHERE pl.part_id = :part_id
+            AND a.warehouse_id = :warehouse_id
+          LIMIT 1
+        `, {
+          replacements: { part_id: part.id, warehouse_id: sdp.warehouse_id },
+          type: QueryTypes.SELECT,
+          transaction: t
+        });
+
+        if (stockArea && stockArea.length > 0) {
+          areaId = stockArea[0].area_id;
+        }
+
+        // 2. Fallback to model name
+        if (!areaId) {
+          if (part.model_name === 'VOLT') {
+            const area = await db.SWarehouseAreas.findOne({
+              where: { warehouse_id: sdp.warehouse_id, area_code: 'AREA-VOLT' },
+              transaction: t
+            });
+            if (area) areaId = area.id;
+          } else if (part.model_name === 'ECO') {
+            const area = await db.SWarehouseAreas.findOne({
+              where: { warehouse_id: sdp.warehouse_id, area_code: 'AREA-ECO' },
+              transaction: t
+            });
+            if (area) areaId = area.id;
+          }
+        }
+
+        // 3. Absolute fallback to the first area in the warehouse
+        if (!areaId) {
+          const area = await db.SWarehouseAreas.findOne({
+            where: { warehouse_id: sdp.warehouse_id },
+            order: [['id', 'ASC']],
+            transaction: t
+          });
+          if (area) areaId = area.id;
+        }
+
+        // Handle case where we still couldn't resolve any area
+        if (!areaId) {
+          throw new Error(`Could not resolve a warehouse area for part ${part.part_number} under warehouse ID ${sdp.warehouse_id}`);
+        }
+
+        const capacity = part.package?.capacity || 1;
+        const totalKanban = Math.ceil(planDetail.planned_qty / capacity);
+
+        if (!detailsByArea[areaId]) {
+          detailsByArea[areaId] = [];
+        }
+        detailsByArea[areaId].push({
+          part_id: part.id,
+          total_kanban: totalKanban
+        });
+      }
+
+      // Generate a Draft Take Out Work Order for each warehouse area represented in the DO details
+      const dateStr = dayjs().format('YYMMDD');
+      for (const areaIdStr in detailsByArea) {
+        const areaId = Number(areaIdStr);
+        const items = detailsByArea[areaId];
+
+        // Generate a unique work order number with prefix 'WO-F-YYMMDD-' (Finish Goods)
+        const woPrefix = `WO-F-${dateStr}-`;
+        const lastWO = await TWorkOrderStoring.findOne({
+          where: {
+            wo_number: {
+              [Op.like]: `${woPrefix}%`
+            }
+          },
+          order: [['wo_number', 'DESC']],
+          transaction: t
+        });
+
+        let nextNumber = 1;
+        if (lastWO) {
+          const lastSeq = parseInt(lastWO.wo_number.split('-').pop(), 10);
+          if (!isNaN(lastSeq)) {
+            nextNumber = lastSeq + 1;
+          }
+        }
+        const woNumber = `${woPrefix}${String(nextNumber).padStart(3, '0')}`;
+
+        // Create the Work Order
+        const wo = await TWorkOrderStoring.create({
+          wo_number: woNumber,
+          wo_category: 'Take Out',
+          ref_doc_id: null,
+          ref_doc_number: sdo.do_number,
+          ref_doc_name: 'Sales Delivery Order',
+          wo_date: new Date(),
+          wo_description: `Automatically generated for SDO ${sdo.do_number}`,
+          wo_type_id: 3, // Finish Good
+          warehouse_area_id: areaId,
+          wo_status_id: 1, // Draft
+          created_by: currentUser.id
+        }, { transaction: t });
+
+        // Bulk create the storing items
+        const storingItems = items.map(item => ({
+          wo_id: wo.id,
+          part_id: item.part_id,
+          total_kanban: item.total_kanban,
+          is_scanned_in: false,
+          is_scanned_out: false
+        }));
+
+        await TWorkOrderStoringItem.bulkCreate(storingItems, { transaction: t });
+      }
 
       // Update SDP status → Scheduled
       await sdp.update({ status: 'Scheduled' }, { transaction: t });

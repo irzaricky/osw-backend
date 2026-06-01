@@ -1277,103 +1277,81 @@ class AnalyticsModule extends BaseModule {
       const slaTotal = on_time + delayed;
       const on_time_rate = slaTotal > 0 ? helper.round(on_time / slaTotal, 4) : 0;
 
-      // 4. Forecast vs SPO (Last 6 Months)
-      const monthsList = [];
-      for (let i = 5; i >= 0; i--) {
-        monthsList.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
-      }
-
-      const forecasts = await SSalesForecasts.findAll({
-        where: {
-          status: { [Op.notIn]: ['Draft', 'Rejected'] }
-        },
-        include: [{
-          model: SSalesForecastDetails,
-          as: 'details',
-          attributes: ['forecast_qty']
-        }],
-        attributes: ['id', 'forecast_type', 'start_period', 'end_period']
-      });
-
-      const windowStart = dayjs().subtract(5, 'month').startOf('month').format('YYYY-MM-DD');
-      const windowEnd = dayjs().endOf('month').format('YYYY-MM-DD');
-
-      const sposForForecast = await SSalesPurchaseOrders.findAll({
-        where: {
-          spo_date: { [Op.between]: [windowStart, windowEnd] }
-        },
-        include: [{
-          model: SSalesPurchaseOrderDetails,
-          as: 'details',
-          attributes: ['ordered_qty']
-        }]
-      });
-
-      const forecastVsSpoResult = {};
-      for (const month of monthsList) {
-        forecastVsSpoResult[month] = { month, forecast_target: 0, spo_actual: 0 };
-      }
-
-      const typeMonthMap = { 'Yearly': 12, 'Half-Year': 6, '4-Month': 4 };
-      for (const forecast of forecasts) {
-        const divisor = typeMonthMap[forecast.forecast_type] || 12;
-        let totalQty = 0;
-        for (const d of (forecast.details || [])) {
-          totalQty += d.forecast_qty || 0;
-        }
-        const monthlyShare = helper.round(totalQty / divisor, 2);
-
-        for (const month of monthsList) {
-          const monthStart = dayjs(month + '-01');
-          const monthEnd = monthStart.endOf('month');
-          const forecastStart = dayjs(forecast.start_period);
-          const forecastEnd = dayjs(forecast.end_period);
-          if (monthStart.isBefore(forecastEnd) && monthEnd.isAfter(forecastStart)) {
-            forecastVsSpoResult[month].forecast_target += monthlyShare;
-          }
-        }
-      }
-
-      for (const spo of sposForForecast) {
-        const month = dayjs(spo.spo_date).format('YYYY-MM');
-        if (forecastVsSpoResult[month]) {
-          for (const d of (spo.details || [])) {
-            forecastVsSpoResult[month].spo_actual += d.ordered_qty || 0;
-          }
-        }
-      }
-
-      for (const month of monthsList) {
-        forecastVsSpoResult[month].forecast_target = helper.round(forecastVsSpoResult[month].forecast_target, 0);
-      }
-      const forecastVsSpoList = monthsList.map(m => forecastVsSpoResult[m]);
-
-      // 5. Top Customers by Qty
-      const sposForCustomers = await SSalesPurchaseOrders.findAll({
-        where: {
-          spo_date: { [Op.between]: [startDateStr, endDateStr] }
-        },
+      // 4. Quantity Deficits (Sent vs Received Qty comparison grouped by part name)
+      const sdoDetails = await SDeliveryOrderDetails.findAll({
         include: [
-          { model: SCustomers, as: 'customer', attributes: ['id', 'name'] },
-          { model: SSalesPurchaseOrderDetails, as: 'details', attributes: ['ordered_qty'] }
+          {
+            model: SDeliveryOrders,
+            as: 'deliveryOrder',
+            where: {
+              shipment_date: {
+                [Op.between]: [startDateStr, endDateStr]
+              }
+            },
+            attributes: []
+          },
+          {
+            model: SDeliveryPlanDetails,
+            as: 'planDetail',
+            include: [{
+              model: SSalesPurchaseOrderDetails,
+              as: 'spoDetail',
+              include: [{
+                model: SParts,
+                as: 'part',
+                attributes: ['part_name']
+              }]
+            }]
+          }
         ]
       });
 
-      const customerMap = {};
-      for (const spo of sposForCustomers) {
-        if (!spo.customer) continue;
-        const cid = spo.customer.id;
-        if (!customerMap[cid]) {
-          customerMap[cid] = { customer_id: cid, customer_name: spo.customer.name, total_ordered_qty: 0 };
-        }
-        for (const d of (spo.details || [])) {
-          customerMap[cid].total_ordered_qty += d.ordered_qty || 0;
-        }
-      }
+      const deficitsMap = {};
+      for (const detail of sdoDetails) {
+        const partName = detail.planDetail?.spoDetail?.part?.part_name || 'Unknown';
+        const sent = detail.sent_qty || 0;
+        const received = detail.received_qty || 0;
 
-      const topCustomersList = Object.values(customerMap)
-        .sort((a, b) => b.total_ordered_qty - a.total_ordered_qty)
-        .slice(0, 5);
+        if (!deficitsMap[partName]) {
+          deficitsMap[partName] = {
+            part_name: partName,
+            total_sent: 0,
+            total_received: 0
+          };
+        }
+        deficitsMap[partName].total_sent += sent;
+        deficitsMap[partName].total_received += received;
+      }
+      const quantity_deficits = Object.values(deficitsMap);
+
+      // 5. Driver Performance Leaderboard
+      const driverSdos = await SDeliveryOrders.findAll({
+        where: {
+          delivery_status: 'Delivered',
+          shipment_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        },
+        include: [{
+          model: SUserDetail,
+          as: 'driver',
+          attributes: ['full_name']
+        }]
+      });
+
+      const driverMap = {};
+      for (const sdo of driverSdos) {
+        const driverName = sdo.driver?.full_name || 'Unknown Driver';
+        if (!driverMap[driverName]) {
+          driverMap[driverName] = {
+            driver_name: driverName,
+            completed_sdos: 0
+          };
+        }
+        driverMap[driverName].completed_sdos++;
+      }
+      const driver_performance = Object.values(driverMap)
+        .sort((a, b) => b.completed_sdos - a.completed_sdos);
 
       return {
         status: true,
@@ -1383,7 +1361,6 @@ class AnalyticsModule extends BaseModule {
             end: endDateStr
           },
           kpis: {
-            total_spos: totalSpos,
             total_ordered_qty: totalOrderedQty,
             total_sent_qty: totalSentQty,
             on_time: on_time,
@@ -1391,8 +1368,8 @@ class AnalyticsModule extends BaseModule {
             on_time_rate: on_time_rate
           },
           sdo_status_counts: sdoCounts,
-          forecast_vs_spo: forecastVsSpoList,
-          top_customers: topCustomersList
+          quantity_deficits: quantity_deficits,
+          driver_performance: driver_performance
         }
       };
     } catch (error) {

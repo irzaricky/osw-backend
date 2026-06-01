@@ -45,4 +45,9 @@ router.get('/spr', session.sessionChecker, session.permissionChecker(['Superadmi
   return helper.sendResponse(res, await analytics.getSprAnalytics(req));
 });
 
+// GET /sales/analytics/spo
+router.get('/spo', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return helper.sendResponse(res, await analytics.getSpoAnalytics(req));
+});
+
 export default router;

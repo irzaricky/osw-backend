@@ -1007,6 +1007,182 @@ class AnalyticsModule extends BaseModule {
       return { status: false, message: 'Internal server error', code: 500 };
     }
   }
+
+  /**
+   * GET /sales/analytics/spo
+   * Returns SPO Analytics KPI cards, status breakdown, top customers, and monthly trends
+   */
+  async getSpoAnalytics(req) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date 
+        ? dayjs(start_date).format('YYYY-MM-DD') 
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date 
+        ? dayjs(end_date).format('YYYY-MM-DD') 
+        : dayjs().format('YYYY-MM-DD');
+
+      // 1. Total Ordered Items & Fulfillment Rate (exclude Draft/Rejected)
+      const totalOrderedResult = await SSalesPurchaseOrderDetails.findOne({
+        include: [{
+          model: SSalesPurchaseOrders,
+          as: 'order',
+          where: {
+            spo_date: { [Op.between]: [startDateStr, endDateStr] },
+            status: { [Op.notIn]: ['Draft', 'Rejected'] }
+          },
+          attributes: []
+        }],
+        attributes: [
+          [db.sequelize.fn('SUM', db.sequelize.col('ordered_qty')), 'total_ordered'],
+          [db.sequelize.fn('SUM', db.sequelize.col('sent_qty')), 'total_sent']
+        ],
+        raw: true
+      });
+      const totalOrdered = parseInt(totalOrderedResult?.total_ordered || 0, 10);
+      const totalSent = parseInt(totalOrderedResult?.total_sent || 0, 10);
+      const fulfillmentRate = totalOrdered > 0 ? helper.round((totalSent / totalOrdered) * 100, 2) : 0;
+
+      // 2. Active Customers
+      const activeCustomersResult = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        attributes: [
+          [db.sequelize.fn('DISTINCT', db.sequelize.col('customer_id')), 'customer_id']
+        ],
+        raw: true
+      });
+      const activeCustomers = activeCustomersResult.length;
+
+      // 3. Status Breakdown
+      const statusBreakdownRaw = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        attributes: [
+          'status',
+          [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count']
+        ],
+        group: ['status'],
+        raw: true
+      });
+
+      const statusBreakdown = {
+        Draft: 0,
+        Submitted: 0,
+        Locked: 0,
+        Processing: 0,
+        Completed: 0,
+        Rejected: 0
+      };
+      for (const item of statusBreakdownRaw) {
+        if (statusBreakdown[item.status] !== undefined) {
+          statusBreakdown[item.status] = parseInt(item.count, 10);
+        }
+      }
+
+      // 4. Top Customers
+      const topCustomersRaw = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        include: [
+          {
+            model: SCustomers,
+            as: 'customer',
+            attributes: ['name']
+          },
+          {
+            model: SSalesPurchaseOrderDetails,
+            as: 'details',
+            attributes: ['ordered_qty']
+          }
+        ]
+      });
+
+      const customerMap = {};
+      for (const spo of topCustomersRaw) {
+        const custName = spo.customer?.name || `Customer #${spo.customer_id}`;
+        const custId = spo.customer_id;
+        let qty = 0;
+        if (spo.details) {
+          for (const d of spo.details) {
+            qty += d.ordered_qty || 0;
+          }
+        }
+        if (!customerMap[custId]) {
+          customerMap[custId] = { customer_id: custId, customer_name: custName, total_ordered_qty: 0 };
+        }
+        customerMap[custId].total_ordered_qty += qty;
+      }
+
+      const topCustomers = Object.values(customerMap)
+        .sort((a, b) => b.total_ordered_qty - a.total_ordered_qty)
+        .slice(0, 5);
+
+      // 5. Monthly Order Trends
+      const trendsMap = {};
+      let currentMonth = dayjs(startDateStr).startOf('month');
+      const endMonth = dayjs(endDateStr).startOf('month');
+      while (currentMonth.isBefore(endMonth) || currentMonth.isSame(endMonth)) {
+        const mStr = currentMonth.format('YYYY-MM');
+        trendsMap[mStr] = {
+          month: mStr,
+          ordered_qty: 0,
+          sent_qty: 0
+        };
+        currentMonth = currentMonth.add(1, 'month');
+      }
+
+      const sposForTrends = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        include: [{
+          model: SSalesPurchaseOrderDetails,
+          as: 'details',
+          attributes: ['ordered_qty', 'sent_qty']
+        }]
+      });
+
+      for (const spo of sposForTrends) {
+        const mStr = dayjs(spo.spo_date).format('YYYY-MM');
+        if (trendsMap[mStr]) {
+          if (spo.details) {
+            for (const d of spo.details) {
+              trendsMap[mStr].ordered_qty += d.ordered_qty || 0;
+              trendsMap[mStr].sent_qty += d.sent_qty || 0;
+            }
+          }
+        }
+      }
+
+      const monthlyTrends = Object.values(trendsMap).sort((a, b) => a.month.localeCompare(b.month));
+
+      return {
+        status: true,
+        data: {
+          date_range: {
+            start: startDateStr,
+            end: endDateStr
+          },
+          kpis: {
+            total_ordered_items: totalOrdered,
+            fulfillment_rate: fulfillmentRate,
+            active_customers: activeCustomers
+          },
+          status_breakdown: statusBreakdown,
+          top_customers: topCustomers,
+          monthly_trends: monthlyTrends
+        }
+      };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
 }
 
 export default new AnalyticsModule();

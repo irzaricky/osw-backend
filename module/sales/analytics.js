@@ -750,22 +750,21 @@ class AnalyticsModule extends BaseModule {
         }
       }
 
-      let totalAccuracySum = 0;
-      let accuracyCount = 0;
+      let totalAbsError = 0;
+      let totalForecast = 0;
 
       for (const key in groups) {
         const g = groups[key];
-        if (g.fixQty > 0) {
-          for (const temp of g.tempDetails) {
-            const error = Math.abs(g.fixQty - temp.qty) / Math.max(g.fixQty, temp.qty);
-            const accuracy = (1 - error) * 100;
-            totalAccuracySum += accuracy;
-            accuracyCount++;
-          }
-        }
+        totalAbsError += Math.abs(g.fixQty - g.tempQty);
+        totalForecast += g.tempQty;
       }
 
-      const accuracyRate = accuracyCount > 0 ? helper.round(totalAccuracySum / accuracyCount, 2) : 100;
+      let accuracyRate = 0;
+      if (totalForecast > 0) {
+        const rate = (1 - (totalAbsError / totalForecast)) * 100;
+        accuracyRate = helper.round(Math.max(0, rate), 2);
+      }
+
 
       // 4. Forecast vs Actual Trends (Line Chart)
       const trendsMap = {};
@@ -885,26 +884,31 @@ class AnalyticsModule extends BaseModule {
         }]
       });
 
-      let totalApprovalTimeMs = 0;
+      let totalApprovalTimeSec = 0;
       let approvedCount = 0;
 
       for (const spr of approvedSprs) {
         const approvedLog = spr.logs.find(l => l.status === 'Approved');
         const submittedLog = spr.logs.find(l => l.status === 'Submitted');
 
-        if (approvedLog) {
+        if (approvedLog && approvedLog.created_at) {
           const end = dayjs(approvedLog.created_at);
-          const start = submittedLog ? dayjs(submittedLog.created_at) : dayjs(spr.created_at);
-          const diff = end.diff(start);
-          if (diff > 0) {
-            totalApprovalTimeMs += diff;
-            approvedCount++;
+          const start = submittedLog && submittedLog.created_at 
+            ? dayjs(submittedLog.created_at) 
+            : (spr.created_at ? dayjs(spr.created_at) : null);
+
+          if (start && start.isValid() && end.isValid()) {
+            const diffSec = end.diff(start, 'second');
+            if (diffSec > 0) {
+              totalApprovalTimeSec += diffSec;
+              approvedCount++;
+            }
           }
         }
       }
 
       const avgApprovalTimeHours = approvedCount > 0 
-        ? helper.round((totalApprovalTimeMs / approvedCount) / 3600000, 2) 
+        ? helper.round((totalApprovalTimeSec / approvedCount) / 3600, 2) 
         : 0;
 
       // 3. SPR Rejection Rate (%)

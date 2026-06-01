@@ -25,7 +25,37 @@ const {
 class SDOModule extends BaseModule {
   async getDropdownVehicles(req) {
     try {
+      const { date, time_start, time_end } = req.query;
+      const where = { status: true };
+
+      if (date && time_start && time_end) {
+        const busyVehicles = await SDeliveryOrders.findAll({
+          include: [{
+            model: SDeliveryPlans,
+            as: 'deliveryPlan',
+            required: true,
+            where: {
+              scheduled_date: date,
+              time_start: { [Op.lt]: time_end },
+              time_end: { [Op.gt]: time_start }
+            }
+          }],
+          where: {
+            vehicle_id: { [Op.ne]: null },
+            delivery_status: { [Op.notIn]: ['Cancelled'] }
+          },
+          attributes: ['vehicle_id'],
+          raw: true
+        });
+
+        const busyVehicleIds = busyVehicles.map(v => v.vehicle_id);
+        if (busyVehicleIds.length > 0) {
+          where.id = { [Op.notIn]: busyVehicleIds };
+        }
+      }
+
       const data = await SVehicles.findAll({
+        where,
         attributes: ['id', ['plate_number', 'license_plate'], 'vehicle_type_id'],
         include: [{
           model: RefVehicleType,
@@ -43,7 +73,37 @@ class SDOModule extends BaseModule {
 
   async getDropdownDrivers(req) {
     try {
+      const { date, time_start, time_end } = req.query;
+      const where = {};
+
+      if (date && time_start && time_end) {
+        const busyDrivers = await SDeliveryOrders.findAll({
+          include: [{
+            model: SDeliveryPlans,
+            as: 'deliveryPlan',
+            required: true,
+            where: {
+              scheduled_date: date,
+              time_start: { [Op.lt]: time_end },
+              time_end: { [Op.gt]: time_start }
+            }
+          }],
+          where: {
+            driver_id: { [Op.ne]: null },
+            delivery_status: { [Op.notIn]: ['Cancelled'] }
+          },
+          attributes: ['driver_id'],
+          raw: true
+        });
+
+        const busyDriverIds = busyDrivers.map(d => d.driver_id);
+        if (busyDriverIds.length > 0) {
+          where.user_id = { [Op.notIn]: busyDriverIds };
+        }
+      }
+
       const data = await SUserDetail.findAll({
+        where,
         attributes: ['user_id', 'full_name', 'employee_number'],
         include: [{
           model: SUsers,
@@ -602,25 +662,42 @@ class SDOModule extends BaseModule {
   }
 
   async startDelivery(req) {
+    const t = await db.sequelize.transaction();
     try {
       const { id } = req.params;
-      const sdo = await SDeliveryOrders.findByPk(id);
-      if (!sdo) return { status: false, message: 'Delivery Order not found', code: 404 };
+      const sdo = await SDeliveryOrders.findByPk(id, { transaction: t });
+      if (!sdo) {
+        await t.rollback();
+        return { status: false, message: 'Delivery Order not found', code: 404 };
+      }
 
       if (sdo.delivery_status !== 'Loading') {
+        await t.rollback();
         return { status: false, message: 'Delivery can only be started when status is "Loading"', code: 400 };
       }
 
       if (!sdo.dispatch_approved_by) {
+        await t.rollback();
         return { status: false, message: 'Cannot start delivery: Dispatch must be approved by a Supervisor first', code: 400 };
       }
 
       await sdo.update({
         delivery_status: 'In Transit'
-      });
+      }, { transaction: t });
 
+      if (sdo.vehicle_id) {
+        await SVehicles.update({
+          availability_status: 'In Transit'
+        }, {
+          where: { id: sdo.vehicle_id },
+          transaction: t
+        });
+      }
+
+      await t.commit();
       return { status: true, message: 'Delivery started and status updated to In Transit', data: sdo };
     } catch (error) {
+      await t.rollback();
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
     }
@@ -879,6 +956,15 @@ class SDOModule extends BaseModule {
         proof_of_delivery: proofUrls,
         received_at: new Date()
       }, { transaction: t });
+
+      if (sdo.vehicle_id) {
+        await SVehicles.update({
+          availability_status: 'Available'
+        }, {
+          where: { id: sdo.vehicle_id },
+          transaction: t
+        });
+      }
 
       // Transition parent SPOs from Locked to Processing when SDO finishes
       const spoIds = new Set();

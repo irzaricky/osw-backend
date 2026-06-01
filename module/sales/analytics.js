@@ -1,5 +1,5 @@
 import db from '../../models/index.js';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import dayjs from 'dayjs';
 import ExcelJS from 'exceljs';
 import helper from '../../class/helper.class.js';
@@ -25,11 +25,11 @@ class AnalyticsModule extends BaseModule {
       const { start_date, end_date } = req.query;
 
       // Default last 30 days in WIB timezone
-      const startDateStr = start_date 
-        ? dayjs(start_date).format('YYYY-MM-DD') 
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
         : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-      const endDateStr = end_date 
-        ? dayjs(end_date).format('YYYY-MM-DD') 
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
         : dayjs().format('YYYY-MM-DD');
 
       // 1. Total SPOs count and ordered items quantity
@@ -283,11 +283,11 @@ class AnalyticsModule extends BaseModule {
     try {
       const { start_date, end_date } = req.query;
 
-      const startDateStr = start_date 
-        ? dayjs(start_date).format('YYYY-MM-DD') 
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
         : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-      const endDateStr = end_date 
-        ? dayjs(end_date).format('YYYY-MM-DD') 
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
         : dayjs().format('YYYY-MM-DD');
 
       const sdos = await SDeliveryOrders.findAll({
@@ -335,7 +335,7 @@ class AnalyticsModule extends BaseModule {
       // 2. Data Grid Header Definitions
       const headerRow = worksheet.getRow(5);
       headerRow.height = 25;
-      
+
       const columns = [
         { header: 'No. DO', key: 'do_number', width: 22 },
         { header: 'Planned Date', key: 'plan_date', width: 18 },
@@ -386,11 +386,11 @@ class AnalyticsModule extends BaseModule {
           }
         }
 
-        const planDate = sdo.shipment_date 
-          ? dayjs(sdo.shipment_date).format('DD/MM/YYYY') 
+        const planDate = sdo.shipment_date
+          ? dayjs(sdo.shipment_date).format('DD/MM/YYYY')
           : '-';
-        const recvDate = sdo.received_at 
-          ? dayjs(sdo.received_at).format('DD/MM/YYYY HH:mm') 
+        const recvDate = sdo.received_at
+          ? dayjs(sdo.received_at).format('DD/MM/YYYY HH:mm')
           : '-';
 
         const rowData = {
@@ -421,7 +421,7 @@ class AnalyticsModule extends BaseModule {
             left: { style: 'thin', color: { argb: 'E5E7EB' } },
             right: { style: 'thin', color: { argb: 'E5E7EB' } }
           };
-          
+
           // Alignment overrides
           if ([1, 2, 3, 5, 7].includes(col)) {
             cell.alignment = { vertical: 'middle', horizontal: 'center' };
@@ -471,7 +471,7 @@ class AnalyticsModule extends BaseModule {
       // 4. Send Response Binary Stream
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=SDO_Shipment_Report_${startDateStr}_${endDateStr}.xlsx`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
@@ -670,11 +670,11 @@ class AnalyticsModule extends BaseModule {
     try {
       const { start_date, end_date } = req.query;
 
-      const startDateStr = start_date 
-        ? dayjs(start_date).format('YYYY-MM-DD') 
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
         : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-      const endDateStr = end_date 
-        ? dayjs(end_date).format('YYYY-MM-DD') 
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
         : dayjs().format('YYYY-MM-DD');
 
       // 1. Total Forecasted Volume
@@ -707,47 +707,79 @@ class AnalyticsModule extends BaseModule {
       });
 
       // 3. Forecast Accuracy Rate & Trends
-      const details = await SSalesForecastDetails.findAll({
-        where: {
-          period_date: {
-            [Op.between]: [startDateStr, endDateStr]
-          }
-        },
-        include: [{
-          model: SSalesForecasts,
-          as: 'forecast',
-          where: { status: 'Approved' },
-          attributes: ['customer_id', 'forecast_type']
-        }],
-        attributes: ['part_id', 'period_date', 'qty_status', 'forecast_qty']
+      const replacements = { startDate: startDateStr, endDate: endDateStr };
+
+      const actuals = await db.sequelize.query(`
+        SELECT 
+          f.customer_id::int,
+          d.part_id::int,
+          d.period_date,
+          SUM(d.forecast_qty)::int as fix_qty
+        FROM s_sales_forecast_details d
+        JOIN s_sales_forecasts f ON d.forecast_id = f.id
+        WHERE d.qty_status = 'Fix' 
+          AND f.status = 'Approved'
+          AND d.period_date BETWEEN :startDate AND :endDate
+        GROUP BY f.customer_id, d.part_id, d.period_date
+      `, {
+        replacements,
+        type: QueryTypes.SELECT
+      });
+
+      const forecasts = await db.sequelize.query(`
+        SELECT DISTINCT ON (f.customer_id, (snap->>'part_id')::integer, (snap->>'period_date')::date)
+          f.customer_id::int,
+          (snap->>'part_id')::integer as part_id,
+          (snap->>'period_date')::date as period_date,
+          (snap->>'forecast_qty')::integer as temporary_qty
+        FROM s_sales_forecast_logs l
+        JOIN s_sales_forecasts f ON l.forecast_id = f.id
+        CROSS JOIN LATERAL json_array_elements(
+          CASE 
+            WHEN json_typeof(l.details_snapshot) = 'string' THEN (l.details_snapshot#>>'{}')::json 
+            ELSE l.details_snapshot 
+          END
+        ) as snap
+        WHERE l.details_snapshot IS NOT NULL
+          AND f.status = 'Approved'
+          AND (snap->>'qty_status') = 'Temporary'
+          AND l.created_at < DATE_TRUNC('month', (snap->>'period_date')::date)
+          AND (snap->>'period_date')::date BETWEEN :startDate AND :endDate
+        ORDER BY f.customer_id, (snap->>'part_id')::integer, (snap->>'period_date')::date, l.created_at DESC
+      `, {
+        replacements,
+        type: QueryTypes.SELECT
       });
 
       const groups = {};
-      for (const d of details) {
-        if (!d.forecast) continue;
-        const custId = d.forecast.customer_id;
-        const partId = d.part_id;
-        const pDate = dayjs(d.period_date).format('YYYY-MM-DD');
-        const key = `${custId}:${partId}:${pDate}`;
+      for (const act of actuals) {
+        const key = `${act.customer_id}:${act.part_id}:${act.period_date}`;
         if (!groups[key]) {
           groups[key] = {
-            customer_id: custId,
-            part_id: partId,
-            period_date: pDate,
+            customer_id: act.customer_id,
+            part_id: act.part_id,
+            period_date: act.period_date,
             fixQty: 0,
-            tempQty: 0,
-            tempDetails: []
+            tempQty: 0
           };
         }
-        if (d.qty_status === 'Fix') {
-          groups[key].fixQty += d.forecast_qty || 0;
-        } else if (d.qty_status === 'Temporary') {
-          groups[key].tempQty += d.forecast_qty || 0;
-          groups[key].tempDetails.push({
-            qty: d.forecast_qty || 0,
-            forecast_type: d.forecast.forecast_type
-          });
+        groups[key].fixQty += act.fix_qty || 0;
+      }
+
+      for (const fc of forecasts) {
+        const key = `${fc.customer_id}:${fc.part_id}:${fc.period_date}`;
+        const pDateStr = dayjs(fc.period_date).format('YYYY-MM-DD');
+        const grpKey = `${fc.customer_id}:${fc.part_id}:${pDateStr}`;
+        if (!groups[grpKey]) {
+          groups[grpKey] = {
+            customer_id: fc.customer_id,
+            part_id: fc.part_id,
+            period_date: pDateStr,
+            fixQty: 0,
+            tempQty: 0
+          };
         }
+        groups[grpKey].tempQty += fc.temporary_qty || 0;
       }
 
       let totalAbsError = 0;
@@ -764,7 +796,6 @@ class AnalyticsModule extends BaseModule {
         const rate = (1 - (totalAbsError / totalForecast)) * 100;
         accuracyRate = helper.round(Math.max(0, rate), 2);
       }
-
 
       // 4. Forecast vs Actual Trends (Line Chart)
       const trendsMap = {};
@@ -856,11 +887,11 @@ class AnalyticsModule extends BaseModule {
     try {
       const { start_date, end_date } = req.query;
 
-      const startDateStr = start_date 
-        ? dayjs(start_date).format('YYYY-MM-DD') 
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
         : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-      const endDateStr = end_date 
-        ? dayjs(end_date).format('YYYY-MM-DD') 
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
         : dayjs().format('YYYY-MM-DD');
 
       // 1. Total Active SPRs (status: 'Submitted')
@@ -893,8 +924,8 @@ class AnalyticsModule extends BaseModule {
 
         if (approvedLog && approvedLog.created_at) {
           const end = dayjs(approvedLog.created_at);
-          const start = submittedLog && submittedLog.created_at 
-            ? dayjs(submittedLog.created_at) 
+          const start = submittedLog && submittedLog.created_at
+            ? dayjs(submittedLog.created_at)
             : (spr.created_at ? dayjs(spr.created_at) : null);
 
           if (start && start.isValid() && end.isValid()) {
@@ -907,8 +938,8 @@ class AnalyticsModule extends BaseModule {
         }
       }
 
-      const avgApprovalTimeHours = approvedCount > 0 
-        ? helper.round((totalApprovalTimeSec / approvedCount) / 3600, 2) 
+      const avgApprovalTimeHours = approvedCount > 0
+        ? helper.round((totalApprovalTimeSec / approvedCount) / 3600, 2)
         : 0;
 
       // 3. SPR Rejection Rate (%)
@@ -925,8 +956,8 @@ class AnalyticsModule extends BaseModule {
         }
       });
 
-      const rejectionRate = totalSprCount > 0 
-        ? helper.round((rejectedSprCount / totalSprCount) * 100, 2) 
+      const rejectionRate = totalSprCount > 0
+        ? helper.round((rejectedSprCount / totalSprCount) * 100, 2)
         : 0;
 
       // 4. Status Breakdown
@@ -984,7 +1015,7 @@ class AnalyticsModule extends BaseModule {
       }
 
       const pipelineFunnel = [
-        { stage: 'Draft Created', count: funnelCreated },
+        { stage: 'Draft', count: funnelCreated },
         { stage: 'Submitted', count: funnelSubmitted },
         { stage: 'Approved', count: funnelApproved },
         { stage: 'SPO Created', count: funnelSPO }
@@ -1020,11 +1051,11 @@ class AnalyticsModule extends BaseModule {
     try {
       const { start_date, end_date } = req.query;
 
-      const startDateStr = start_date 
-        ? dayjs(start_date).format('YYYY-MM-DD') 
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
         : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-      const endDateStr = end_date 
-        ? dayjs(end_date).format('YYYY-MM-DD') 
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
         : dayjs().format('YYYY-MM-DD');
 
       // 1. Total Ordered Items & Fulfillment Rate (exclude Draft/Rejected)
@@ -1196,11 +1227,11 @@ class AnalyticsModule extends BaseModule {
     try {
       const { start_date, end_date } = req.query;
 
-      const startDateStr = start_date 
-        ? dayjs(start_date).format('YYYY-MM-DD') 
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
         : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-      const endDateStr = end_date 
-        ? dayjs(end_date).format('YYYY-MM-DD') 
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
         : dayjs().format('YYYY-MM-DD');
 
       // 1. Fetch SPOs for KPIs

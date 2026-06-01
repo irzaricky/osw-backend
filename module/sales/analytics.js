@@ -11,7 +11,8 @@ const {
   SDeliveryOrders, SDeliveryOrderDetails,
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesForecasts, SSalesForecastDetails,
-  SDocks, SWarehouses, SCustomers, SVehicles, SUserDetail
+  SDocks, SWarehouses, SCustomers, SVehicles, SUserDetail,
+  SParts
 } = db;
 
 class AnalyticsModule extends BaseModule {
@@ -655,6 +656,193 @@ class AnalyticsModule extends BaseModule {
         .slice(0, 5);
 
       return { status: true, data: topCustomers };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  /**
+   * GET /sales/analytics/forecast
+   * Returns Forecast Analytics KPI cards and trends
+   */
+  async getForecastAnalytics(req) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date 
+        ? dayjs(start_date).format('YYYY-MM-DD') 
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date 
+        ? dayjs(end_date).format('YYYY-MM-DD') 
+        : dayjs().format('YYYY-MM-DD');
+
+      // 1. Total Forecasted Volume
+      const totalVolumeResult = await SSalesForecastDetails.findOne({
+        where: {
+          period_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        },
+        include: [{
+          model: SSalesForecasts,
+          as: 'forecast',
+          where: { status: 'Approved' },
+          attributes: []
+        }],
+        attributes: [
+          [db.sequelize.fn('SUM', db.sequelize.col('forecast_qty')), 'total_volume']
+        ],
+        raw: true
+      });
+      const totalVolume = parseInt(totalVolumeResult?.total_volume || 0, 10);
+
+      // 2. Total Active Versions
+      const activeVersionsCount = await SSalesForecasts.count({
+        where: {
+          status: { [Op.in]: ['Draft', 'Submitted'] },
+          start_period: { [Op.lte]: endDateStr },
+          end_period: { [Op.gte]: startDateStr }
+        }
+      });
+
+      // 3. Forecast Accuracy Rate & Trends
+      const details = await SSalesForecastDetails.findAll({
+        where: {
+          period_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        },
+        include: [{
+          model: SSalesForecasts,
+          as: 'forecast',
+          where: { status: 'Approved' },
+          attributes: ['customer_id', 'forecast_type']
+        }],
+        attributes: ['part_id', 'period_date', 'qty_status', 'forecast_qty']
+      });
+
+      const groups = {};
+      for (const d of details) {
+        if (!d.forecast) continue;
+        const custId = d.forecast.customer_id;
+        const partId = d.part_id;
+        const pDate = dayjs(d.period_date).format('YYYY-MM-DD');
+        const key = `${custId}:${partId}:${pDate}`;
+        if (!groups[key]) {
+          groups[key] = {
+            customer_id: custId,
+            part_id: partId,
+            period_date: pDate,
+            fixQty: 0,
+            tempQty: 0,
+            tempDetails: []
+          };
+        }
+        if (d.qty_status === 'Fix') {
+          groups[key].fixQty += d.forecast_qty || 0;
+        } else if (d.qty_status === 'Temporary') {
+          groups[key].tempQty += d.forecast_qty || 0;
+          groups[key].tempDetails.push({
+            qty: d.forecast_qty || 0,
+            forecast_type: d.forecast.forecast_type
+          });
+        }
+      }
+
+      let totalAccuracySum = 0;
+      let accuracyCount = 0;
+
+      for (const key in groups) {
+        const g = groups[key];
+        if (g.fixQty > 0) {
+          for (const temp of g.tempDetails) {
+            const error = Math.abs(g.fixQty - temp.qty) / Math.max(g.fixQty, temp.qty);
+            const accuracy = (1 - error) * 100;
+            totalAccuracySum += accuracy;
+            accuracyCount++;
+          }
+        }
+      }
+
+      const accuracyRate = accuracyCount > 0 ? helper.round(totalAccuracySum / accuracyCount, 2) : 100;
+
+      // 4. Forecast vs Actual Trends (Line Chart)
+      const trendsMap = {};
+      let currentMonth = dayjs(startDateStr).startOf('month');
+      const endMonth = dayjs(endDateStr).startOf('month');
+      while (currentMonth.isBefore(endMonth) || currentMonth.isSame(endMonth)) {
+        const mStr = currentMonth.format('YYYY-MM');
+        trendsMap[mStr] = {
+          month: mStr,
+          temporary_qty: 0,
+          fix_qty: 0
+        };
+        currentMonth = currentMonth.add(1, 'month');
+      }
+
+      for (const key in groups) {
+        const g = groups[key];
+        const mStr = dayjs(g.period_date).format('YYYY-MM');
+        if (trendsMap[mStr]) {
+          trendsMap[mStr].fix_qty += g.fixQty;
+          trendsMap[mStr].temporary_qty += g.tempQty;
+        }
+      }
+      const trendsList = Object.values(trendsMap).sort((a, b) => a.month.localeCompare(b.month));
+
+      // 5. Top Forecasted Products (Bar Chart)
+      const topProductsResult = await SSalesForecastDetails.findAll({
+        where: {
+          period_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        },
+        include: [
+          {
+            model: SSalesForecasts,
+            as: 'forecast',
+            where: { status: 'Approved' },
+            attributes: []
+          },
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['part_number', 'part_name']
+          }
+        ],
+        attributes: [
+          'part_id',
+          [db.sequelize.fn('SUM', db.sequelize.col('forecast_qty')), 'total_qty']
+        ],
+        group: ['part_id', 'part.id', 'part.part_number', 'part.part_name'],
+        order: [[db.sequelize.fn('SUM', db.sequelize.col('forecast_qty')), 'DESC']],
+        limit: 5
+      });
+
+      const topProducts = topProductsResult.map(item => ({
+        part_id: item.part_id,
+        part_number: item.part?.part_number || '-',
+        part_name: item.part?.part_name || '-',
+        total_qty: parseInt(item.getDataValue('total_qty') || 0, 10)
+      }));
+
+      return {
+        status: true,
+        data: {
+          date_range: {
+            start: startDateStr,
+            end: endDateStr
+          },
+          kpis: {
+            total_volume: totalVolume,
+            active_versions: activeVersionsCount,
+            accuracy_rate: accuracyRate
+          },
+          trends: trendsList,
+          top_products: topProducts
+        }
+      };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };

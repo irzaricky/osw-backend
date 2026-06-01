@@ -35,4 +35,9 @@ router.get('/top-customers', session.sessionChecker, session.permissionChecker([
   return helper.sendResponse(res, await analytics.getTopCustomers(req));
 });
 
+// GET /sales/analytics/forecast
+router.get('/forecast', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return helper.sendResponse(res, await analytics.getForecastAnalytics(req));
+});
+
 export default router;

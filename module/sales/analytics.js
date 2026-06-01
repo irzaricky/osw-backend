@@ -543,7 +543,7 @@ class AnalyticsModule extends BaseModule {
         include: [{
           model: SSalesForecastDetails,
           as: 'details',
-          attributes: ['fix_qty', 'temporary_qty']
+          attributes: ['forecast_qty']
         }],
         attributes: ['id', 'forecast_type', 'start_period', 'end_period']
       });
@@ -576,7 +576,7 @@ class AnalyticsModule extends BaseModule {
         // Total qty from details (fix + temporary)
         let totalQty = 0;
         for (const d of (forecast.details || [])) {
-          totalQty += (d.fix_qty || 0) + (d.temporary_qty || 0);
+          totalQty += d.forecast_qty || 0;
         }
         const monthlyShare = helper.round(totalQty / divisor, 2);
 
@@ -1176,6 +1176,219 @@ class AnalyticsModule extends BaseModule {
           status_breakdown: statusBreakdown,
           top_customers: topCustomers,
           monthly_trends: monthlyTrends
+        }
+      };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  /**
+   * GET /sales/analytics/sdo
+   * Returns SDO Analytics KPIs, status counts, monthly forecast-vs-spo, and top customers
+   */
+  async getSdoAnalytics(req) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date 
+        ? dayjs(start_date).format('YYYY-MM-DD') 
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date 
+        ? dayjs(end_date).format('YYYY-MM-DD') 
+        : dayjs().format('YYYY-MM-DD');
+
+      // 1. Fetch SPOs for KPIs
+      const spos = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        },
+        include: [{
+          model: SSalesPurchaseOrderDetails,
+          as: 'details',
+          attributes: ['ordered_qty', 'sent_qty']
+        }]
+      });
+
+      let totalSpos = spos.length;
+      let totalOrderedQty = 0;
+      let totalSentQty = 0;
+      for (const spo of spos) {
+        if (spo.details) {
+          for (const det of spo.details) {
+            totalOrderedQty += det.ordered_qty || 0;
+            totalSentQty += det.sent_qty || 0;
+          }
+        }
+      }
+
+      // 2. Fetch SDOs for status counts
+      const sdos = await SDeliveryOrders.findAll({
+        where: {
+          shipment_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        }
+      });
+
+      const sdoCounts = {
+        Created: 0,
+        Loading: 0,
+        'In Transit': 0,
+        Delivered: 0
+      };
+
+      for (const sdo of sdos) {
+        const status = sdo.delivery_status || 'Created';
+        if (sdoCounts[status] !== undefined) {
+          sdoCounts[status]++;
+        } else {
+          sdoCounts[status] = (sdoCounts[status] || 0) + 1;
+        }
+      }
+
+      // 3. SLA Metrics
+      const sdosDelivered = await SDeliveryOrders.findAll({
+        where: {
+          delivery_status: 'Delivered',
+          shipment_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        attributes: ['shipment_date', 'received_at']
+      });
+
+      let on_time = 0;
+      let delayed = 0;
+      for (const sdo of sdosDelivered) {
+        if (!sdo.received_at) continue;
+        const sla_deadline = dayjs(sdo.shipment_date).add(1, 'day');
+        if (dayjs(sdo.received_at).isBefore(sla_deadline) || dayjs(sdo.received_at).isSame(sla_deadline)) {
+          on_time++;
+        } else {
+          delayed++;
+        }
+      }
+      const slaTotal = on_time + delayed;
+      const on_time_rate = slaTotal > 0 ? helper.round(on_time / slaTotal, 4) : 0;
+
+      // 4. Forecast vs SPO (Last 6 Months)
+      const monthsList = [];
+      for (let i = 5; i >= 0; i--) {
+        monthsList.push(dayjs().subtract(i, 'month').format('YYYY-MM'));
+      }
+
+      const forecasts = await SSalesForecasts.findAll({
+        where: {
+          status: { [Op.notIn]: ['Draft', 'Rejected'] }
+        },
+        include: [{
+          model: SSalesForecastDetails,
+          as: 'details',
+          attributes: ['forecast_qty']
+        }],
+        attributes: ['id', 'forecast_type', 'start_period', 'end_period']
+      });
+
+      const windowStart = dayjs().subtract(5, 'month').startOf('month').format('YYYY-MM-DD');
+      const windowEnd = dayjs().endOf('month').format('YYYY-MM-DD');
+
+      const sposForForecast = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [windowStart, windowEnd] }
+        },
+        include: [{
+          model: SSalesPurchaseOrderDetails,
+          as: 'details',
+          attributes: ['ordered_qty']
+        }]
+      });
+
+      const forecastVsSpoResult = {};
+      for (const month of monthsList) {
+        forecastVsSpoResult[month] = { month, forecast_target: 0, spo_actual: 0 };
+      }
+
+      const typeMonthMap = { 'Yearly': 12, 'Half-Year': 6, '4-Month': 4 };
+      for (const forecast of forecasts) {
+        const divisor = typeMonthMap[forecast.forecast_type] || 12;
+        let totalQty = 0;
+        for (const d of (forecast.details || [])) {
+          totalQty += d.forecast_qty || 0;
+        }
+        const monthlyShare = helper.round(totalQty / divisor, 2);
+
+        for (const month of monthsList) {
+          const monthStart = dayjs(month + '-01');
+          const monthEnd = monthStart.endOf('month');
+          const forecastStart = dayjs(forecast.start_period);
+          const forecastEnd = dayjs(forecast.end_period);
+          if (monthStart.isBefore(forecastEnd) && monthEnd.isAfter(forecastStart)) {
+            forecastVsSpoResult[month].forecast_target += monthlyShare;
+          }
+        }
+      }
+
+      for (const spo of sposForForecast) {
+        const month = dayjs(spo.spo_date).format('YYYY-MM');
+        if (forecastVsSpoResult[month]) {
+          for (const d of (spo.details || [])) {
+            forecastVsSpoResult[month].spo_actual += d.ordered_qty || 0;
+          }
+        }
+      }
+
+      for (const month of monthsList) {
+        forecastVsSpoResult[month].forecast_target = helper.round(forecastVsSpoResult[month].forecast_target, 0);
+      }
+      const forecastVsSpoList = monthsList.map(m => forecastVsSpoResult[m]);
+
+      // 5. Top Customers by Qty
+      const sposForCustomers = await SSalesPurchaseOrders.findAll({
+        where: {
+          spo_date: { [Op.between]: [startDateStr, endDateStr] }
+        },
+        include: [
+          { model: SCustomers, as: 'customer', attributes: ['id', 'name'] },
+          { model: SSalesPurchaseOrderDetails, as: 'details', attributes: ['ordered_qty'] }
+        ]
+      });
+
+      const customerMap = {};
+      for (const spo of sposForCustomers) {
+        if (!spo.customer) continue;
+        const cid = spo.customer.id;
+        if (!customerMap[cid]) {
+          customerMap[cid] = { customer_id: cid, customer_name: spo.customer.name, total_ordered_qty: 0 };
+        }
+        for (const d of (spo.details || [])) {
+          customerMap[cid].total_ordered_qty += d.ordered_qty || 0;
+        }
+      }
+
+      const topCustomersList = Object.values(customerMap)
+        .sort((a, b) => b.total_ordered_qty - a.total_ordered_qty)
+        .slice(0, 5);
+
+      return {
+        status: true,
+        data: {
+          date_range: {
+            start: startDateStr,
+            end: endDateStr
+          },
+          kpis: {
+            total_spos: totalSpos,
+            total_ordered_qty: totalOrderedQty,
+            total_sent_qty: totalSentQty,
+            on_time: on_time,
+            delayed: delayed,
+            on_time_rate: on_time_rate
+          },
+          sdo_status_counts: sdoCounts,
+          forecast_vs_spo: forecastVsSpoList,
+          top_customers: topCustomersList
         }
       };
     } catch (error) {

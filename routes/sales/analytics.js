@@ -50,4 +50,9 @@ router.get('/spo', session.sessionChecker, session.permissionChecker(['Superadmi
   return helper.sendResponse(res, await analytics.getSpoAnalytics(req));
 });
 
+// GET /sales/analytics/sdo
+router.get('/sdo', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return helper.sendResponse(res, await analytics.getSdoAnalytics(req));
+});
+
 export default router;

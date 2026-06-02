@@ -151,7 +151,7 @@ export default {
         driver_id: ((i - 1) % 5) + 1,
         shipment_date: new Date(shipmentTime),
         delivery_status: deliveryStatus,
-        proof_of_delivery: deliveryStatus === 'Delivered' ? `/uploads/pod-dummy-${i}.jpg` : null,
+        proof_of_delivery: deliveryStatus === 'Delivered' ? JSON.stringify([`/uploads/pod-dummy-${i}.jpg`]) : null,
         notes: `Pengiriman batch ${i}`,
         created_by: 1,
         received_at: receivedAt,

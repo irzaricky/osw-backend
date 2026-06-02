@@ -743,7 +743,6 @@ class AnalyticsModule extends BaseModule {
         WHERE l.details_snapshot IS NOT NULL
           AND f.status = 'Approved'
           AND (snap->>'qty_status') = 'Temporary'
-          AND l.created_at < DATE_TRUNC('month', (snap->>'period_date')::date)
           AND (snap->>'period_date')::date BETWEEN :startDate AND :endDate
         ORDER BY f.customer_id, (snap->>'part_id')::integer, (snap->>'period_date')::date, l.created_at DESC
       `, {
@@ -787,11 +786,13 @@ class AnalyticsModule extends BaseModule {
 
       for (const key in groups) {
         const g = groups[key];
-        totalAbsError += Math.abs(g.fixQty - g.tempQty);
-        totalForecast += g.tempQty;
+        if (g.fixQty > 0 && g.tempQty > 0) {
+          totalAbsError += Math.abs(g.fixQty - g.tempQty);
+          totalForecast += g.tempQty;
+        }
       }
 
-      let accuracyRate = 0;
+      let accuracyRate = null;
       if (totalForecast > 0) {
         const rate = (1 - (totalAbsError / totalForecast)) * 100;
         accuracyRate = helper.round(Math.max(0, rate), 2);
@@ -919,18 +920,21 @@ class AnalyticsModule extends BaseModule {
       let approvedCount = 0;
 
       for (const spr of approvedSprs) {
-        const approvedLog = spr.logs.find(l => l.status === 'Approved');
-        const submittedLog = spr.logs.find(l => l.status === 'Submitted');
+        const logs = [...spr.logs].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        const approvedLog = logs.find(l => l.status === 'Approved');
+        const submittedLog = logs.find(l => l.status === 'Submitted');
 
         if (approvedLog && approvedLog.created_at) {
           const end = dayjs(approvedLog.created_at);
           const start = submittedLog && submittedLog.created_at
             ? dayjs(submittedLog.created_at)
-            : (spr.created_at ? dayjs(spr.created_at) : null);
+            : dayjs(spr.created_at);
 
           if (start && start.isValid() && end.isValid()) {
             const diffSec = end.diff(start, 'second');
-            if (diffSec > 0) {
+            if (diffSec >= 0) {
               totalApprovalTimeSec += diffSec;
               approvedCount++;
             }
@@ -940,7 +944,7 @@ class AnalyticsModule extends BaseModule {
 
       const avgApprovalTimeHours = approvedCount > 0
         ? helper.round((totalApprovalTimeSec / approvedCount) / 3600, 2)
-        : 0;
+        : null;
 
       // 3. SPR Rejection Rate (%)
       const totalSprCount = await SSalesPurchaseRequests.count({

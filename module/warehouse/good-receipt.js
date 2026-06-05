@@ -1,5 +1,8 @@
 import { Op } from 'sequelize';
 import Joi from 'joi';
+import PdfPrinter from 'pdfmake/src/printer.js';
+import path from 'path';
+import dayjs from 'dayjs';
 import db from '../../models/index.js';
 import { config } from '../../config/app.config.js';
 import helper from '../../class/helper.class.js';
@@ -9,6 +12,7 @@ const {
   SParts,
   SPackages,
   SUsers,
+  SRoles,
   SUserDetail,
   SSuppliers,
   SDefects,
@@ -508,6 +512,393 @@ class GoodReceiptModule extends BaseModule {
         message: 'Internal server error',
         code: 500
       };
+    }
+  }
+
+  async downloadReport(req, res) {
+    try {
+      const { mr_id } = req.params;
+
+      const materialReceiving = await TMaterialReceiving.findByPk(mr_id, {
+        attributes: ['id', 'received_at'],
+        include: [
+          {
+            model: RefReceivingStatus,
+            as: 'status',
+            attributes: ['id', 'name']
+          },
+          {
+            model: SMaterialDeliveryOrder,
+            as: 'mdo',
+            attributes: ['id', 'number'],
+            include: [
+              {
+                model: SMaterialPurchaseOrder,
+                as: 'mpo',
+                attributes: ['id', 'number'],
+                include: [
+                  {
+                    model: SSuppliers,
+                    as: 'supplier',
+                    attributes: ['id', 'name']
+                  },
+                  {
+                    model: SWarehouses,
+                    as: 'warehouse',
+                    attributes: ['id', 'name']
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            model: TMaterialReceivingItem,
+            as: 'items',
+            required: false,
+            attributes: ['id'],
+            include: [
+              {
+                model: TMaterialDeliveryOrderDetail,
+                as: 'mdo_detail',
+                attributes: ['id'],
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    attributes: ['id', 'part_number', 'part_name'],
+                    include: [
+                      {
+                        model: SPackages,
+                        as: 'package',
+                        attributes: ['capacity']
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                model: TMaterialReceivingItemLabel,
+                as: 'labels',
+                required: false,
+                attributes: ['id', 'is_quantity', 'is_quality'],
+                include: [
+                  {
+                    model: TPartLabels,
+                    as: 'label',
+                    attributes: ['label_number']
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            model: TGoodReceipt,
+            as: 'good_receipt',
+            attributes: ['id', 'approved_at', 'remarks'],
+            include: [
+              {
+                model: SUsers,
+                as: 'approver',
+                attributes: ['id'],
+                include: [
+                  {
+                    model: SRoles,
+                    as: 'role',
+                    attributes: ['name']
+                  },
+                  {
+                    model: SUserDetail,
+                    as: 'user_detail',
+                    attributes: ['full_name']
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      });
+
+      if (!materialReceiving) {
+        return res.status(404).json({
+          status: false,
+          message: 'Material receiving not found',
+          code: 404
+        });
+      }
+
+      if (!materialReceiving.good_receipt) {
+        return res.status(400).json({
+          status: false,
+          message: 'Good Receipt is not approved yet',
+          code: 400
+        });
+      }
+
+      const approvedBy = materialReceiving.good_receipt.approver?.user_detail?.full_name ||
+        materialReceiving.good_receipt.approver?.username ||
+        'Unknown';
+      const approverRole = materialReceiving.good_receipt.approver?.role?.name || '';
+      const approvedAt = materialReceiving.good_receipt.approved_at
+        ? new Date(materialReceiving.good_receipt.approved_at).toLocaleString('en-US', { hour12: false })
+        : '-';
+      const receivedAt = materialReceiving.received_at
+        ? new Date(materialReceiving.received_at).toLocaleString('en-US', { hour12: false })
+        : '-';
+      const printedAt = new Date().toLocaleString('en-US', { hour12: false });
+
+      const items = materialReceiving.items || [];
+      const partRows = items.map((item, index) => {
+        const labels = item.labels || [];
+        const expected = labels.length;
+        const accepted = labels.filter(label => label.is_quantity === true && label.is_quality === true).length;
+        const rejected = expected - accepted;
+        const partName = item.mdo_detail?.part?.part_name || '-';
+        const partNumber = item.mdo_detail?.part?.part_number || '-';
+
+        return {
+          no: index + 1,
+          partNumber,
+          partName,
+          expected,
+          accepted,
+          rejected
+        };
+      });
+
+      const totalExpected = partRows.reduce((sum, row) => sum + row.expected, 0);
+      const totalAccepted = partRows.reduce((sum, row) => sum + row.accepted, 0);
+      const totalRejected = partRows.reduce((sum, row) => sum + row.rejected, 0);
+
+      const fonts = {
+        Roboto: {
+          normal: path.resolve('fonts/Roboto-Regular.ttf'),
+          bold: path.resolve('fonts/Roboto-Medium.ttf'),
+          italics: path.resolve('fonts/Roboto-Italic.ttf'),
+          bolditalics: path.resolve('fonts/Roboto-MediumItalic.ttf')
+        }
+      };
+
+      const printer = new PdfPrinter(fonts);
+
+      const docDefinition = {
+        pageSize: 'A4',
+        pageMargins: [36, 36, 36, 36],
+        content: [
+          // Header company details
+          {
+            columns: [
+              {
+                width: '*',
+                stack: [
+                  { text: 'PT. OWS LOGISTICS & DISTRIBUTION', style: 'companyName' },
+                  { text: 'Kawasan Industri Cikarang Blok B-12, Bekasi, Jawa Barat', style: 'companyAddress' },
+                  { text: 'Phone: (021) 8900-1234 | Email: dispatch@ows.co.id', style: 'companyAddress' }
+                ]
+              },
+              {
+                width: 'auto',
+                stack: [
+                  { text: 'GOOD RECEIPT REPORT', style: 'docTitle', alignment: 'right' },
+                  { text: 'WAREHOUSE DOCUMENT', style: 'docSubTitle', alignment: 'right' }
+                ]
+              }
+            ],
+            margin: [0, 0, 0, 15]
+          },
+          // Divider Line
+          {
+            canvas: [{ type: 'line', x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 1.5, lineColor: '#1a237e' }],
+            margin: [0, 0, 0, 15]
+          },
+          // Metadata grid
+          {
+            columns: [
+              {
+                width: '50%',
+                table: {
+                  widths: ['35%', '*'],
+                  body: [
+                    [{ text: 'PO Number', style: 'metaLabel' }, { text: `: ${materialReceiving.mdo?.mpo?.number || '-'}`, style: 'metaValue' }],
+                    [{ text: 'DO Number', style: 'metaLabel' }, { text: `: ${materialReceiving.mdo?.number || '-'}`, style: 'metaValueBold' }],
+                    [{ text: 'Arrived At', style: 'metaLabel' }, { text: `: ${receivedAt}`, style: 'metaValue' }],
+                    [{ text: 'Warehouse', style: 'metaLabel' }, { text: `: ${materialReceiving.mdo?.mpo?.warehouse?.name || '-'}`, style: 'metaValue' }]
+                  ]
+                },
+                layout: 'noBorders'
+              },
+              {
+                width: '50%',
+                table: {
+                  widths: ['30%', '*'],
+                  body: [
+                    [{ text: 'Supplier', style: 'metaLabel' }, { text: `: ${materialReceiving.mdo?.mpo?.supplier?.name || '-'}`, style: 'metaValueBold' }],
+                    [{ text: 'Status', style: 'metaLabel' }, { text: `: ${materialReceiving.status?.name || '-'}`, style: 'metaValue' }],
+                    [{ text: 'Approved At', style: 'metaLabel' }, { text: `: ${approvedAt}`, style: 'metaValue' }]
+                  ]
+                },
+                layout: 'noBorders'
+              }
+            ],
+            margin: [0, 0, 0, 20]
+          },
+          // Summary Cards
+          {
+            columns: [
+              {
+                width: '33%',
+                stack: [
+                  { text: 'Total Parts', style: 'summaryLabel' },
+                  { text: String(partRows.length), style: 'summaryValue' }
+                ],
+                margin: [0, 0, 8, 0],
+                style: 'summaryCard'
+              },
+              {
+                width: '33%',
+                stack: [
+                  { text: 'Accepted Labels', style: 'summaryLabel' },
+                  { text: String(totalAccepted), style: 'summaryValue' }
+                ],
+                margin: [0, 0, 8, 0],
+                style: 'summaryCard'
+              },
+              {
+                width: '34%',
+                stack: [
+                  { text: 'Rejected Labels', style: 'summaryLabel' },
+                  { text: String(totalRejected), style: 'summaryValue' }
+                ],
+                style: 'summaryCard'
+              }
+            ],
+            columnGap: 8,
+            margin: [0, 0, 0, 20]
+          },
+          // Section Title
+          { text: 'RECEIVED ITEMS LIST', style: 'sectionTitle', margin: [0, 0, 0, 8] },
+          {
+            table: {
+              headerRows: 1,
+              widths: ['7%', '20%', '28%', '15%', '15%', '15%'],
+              body: [
+                [
+                  { text: 'No', style: 'tableHeader', alignment: 'center' },
+                  { text: 'Part Number', style: 'tableHeader', alignment: 'center' },
+                  { text: 'Part Name', style: 'tableHeader', alignment: 'center' },
+                  { text: 'Expected (labels)', style: 'tableHeader', alignment: 'center' },
+                  { text: 'Accepted (labels)', style: 'tableHeader', alignment: 'center' },
+                  { text: 'Rejected (labels)', style: 'tableHeader', alignment: 'center' }
+                ],
+                ...partRows.map((row, rowIndex) => [
+                  { text: String(row.no), style: 'tableCell', alignment: 'center' },
+                  { text: row.partNumber, style: 'tableCellHighlight' },
+                  { text: row.partName, style: 'tableCell' },
+                  { text: String(row.expected), style: 'tableCell', alignment: 'center' },
+                  { text: String(row.accepted), style: 'tableCell', alignment: 'center' },
+                  { text: String(row.rejected), style: 'tableCell', alignment: 'center' }
+                ]),
+                [
+                  { text: 'TOTAL', colSpan: 3, style: 'tableHeader', alignment: 'left' },
+                  {},
+                  {},
+                  { text: String(totalExpected), style: 'tableHeader', alignment: 'center' },
+                  { text: String(totalAccepted), style: 'tableHeader', alignment: 'center' },
+                  { text: String(totalRejected), style: 'tableHeader', alignment: 'center' }
+                ]
+              ]
+            },
+            layout: {
+              hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length) ? 1 : 0.5,
+              vLineWidth: () => 0,
+              hLineColor: (i, node) => (i === 0 || i === node.table.body.length) ? '#1a237e' : '#e0e0e0',
+              paddingTop: () => 6,
+              paddingBottom: () => 6,
+              paddingLeft: () => 8,
+              paddingRight: () => 8
+            },
+            margin: [0, 0, 0, 30]
+          },
+          // Remarks Section
+          { text: 'REMARKS', style: 'sectionTitle', margin: [0, 0, 0, 8] },
+          {
+            text: materialReceiving.good_receipt.remarks || '-',
+            style: 'remarksText',
+            fillColor: '#fafafa',
+            margin: [8, 8, 8, 8],
+            border: [1, 1, 1, 1],
+            borderColor: '#e0e0e0'
+          },
+          // Signatures block
+          {
+            columns: [
+              {
+                width: '50%',
+                text: ''
+              },
+              {
+                width: '50%',
+                stack: [
+                  { text: 'Approved By,', style: 'sigLabel', alignment: 'center' },
+                  { text: '', margin: [0, 35, 0, 0] },
+                  { text: `( ${approvedBy} )`, style: 'sigName', alignment: 'center' },
+                  { text: approverRole, style: 'sigRole', alignment: 'center' }
+                ]
+              }
+            ],
+            margin: [0, 30, 0, 0]
+          }
+        ],
+        footer: (currentPage, pageCount) => {
+          return {
+            columns: [
+              { text: `Printed: ${printedAt}`, style: 'footerLeft', margin: [36, 0, 0, 0] },
+              { text: `Page ${currentPage} of ${pageCount}`, style: 'footerRight', alignment: 'right', margin: [0, 0, 36, 0] }
+            ],
+            style: 'footer'
+          };
+        },
+        styles: {
+          companyName: { fontSize: 13, bold: true, color: '#1a237e' },
+          companyAddress: { fontSize: 8, color: '#616161', margin: [0, 2, 0, 0] },
+          docTitle: { fontSize: 18, bold: true, color: '#1a237e' },
+          docSubTitle: { fontSize: 10, bold: true, color: '#757575', margin: [0, 2, 0, 0] },
+          metaLabel: { fontSize: 9, bold: true, color: '#424242' },
+          metaValue: { fontSize: 9, color: '#212121' },
+          metaValueBold: { fontSize: 9, bold: true, color: '#1a237e' },
+          sectionTitle: { fontSize: 10, bold: true, color: '#1a237e', tracking: 1 },
+          summaryCard: { fillColor: '#f5f5f5', margin: [0, 0, 0, 0], padding: [10, 10, 10, 10] },
+          summaryLabel: { fontSize: 9, bold: true, color: '#424242' },
+          summaryValue: { fontSize: 16, bold: true, color: '#1a237e', margin: [0, 6, 0, 0] },
+          tableHeader: { fontSize: 9, bold: true, color: '#ffffff', fillColor: '#1a237e', margin: [0, 2, 0, 2] },
+          tableCell: { fontSize: 9, color: '#212121' },
+          tableCellHighlight: { fontSize: 9, bold: true, color: '#1a237e' },
+          remarksText: { fontSize: 9, color: '#212121' },
+          sigLabel: { fontSize: 9, bold: true, color: '#424242' },
+          sigName: { fontSize: 9, bold: true, color: '#212121' },
+          sigRole: { fontSize: 8, color: '#616161', margin: [0, 2, 0, 0] },
+          footer: { fontSize: 7, color: '#9e9e9e' },
+          footerLeft: { fontSize: 7, color: '#9e9e9e' },
+          footerRight: { fontSize: 7, color: '#9e9e9e' }
+        },
+        defaultStyle: {
+          font: 'Roboto'
+        }
+      };
+
+      const pdfDoc = printer.createPdfKitDocument(docDefinition);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename=good-receipt-${mr_id}.pdf`);
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    } catch (error) {
+      if (!res.headersSent) {
+        return res.status(500).json({
+          status: false,
+          error: error.message,
+          code: 500
+        });
+      }
+      res.end();
     }
   }
 }

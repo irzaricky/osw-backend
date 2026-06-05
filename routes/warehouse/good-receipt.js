@@ -23,4 +23,9 @@ router.post('/approve/:mr_id', session.sessionChecker, session.permissionChecker
   helper.sendResponse(res, result);
 });
 
+// get download good receipt report
+router.get('/report/:mr_id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Supervisor Warehouse']), async (req, res) => {
+  await goodReceiptModule.downloadReport(req, res);
+});
+
 export default router;

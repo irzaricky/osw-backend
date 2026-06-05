@@ -11,4 +11,16 @@ router.get('/', session.sessionChecker, session.permissionChecker(['Superadmin',
   helper.sendResponse(res, result);
 });
 
+// get dropdown parts for warranty and claim filters
+router.get('/dropdown/parts', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
+  const result = await warrantyAndClaimModule.getDropdownParts(req);
+  helper.sendResponse(res, result);
+});
+
+// get dropdown suppliers for warranty and claim filters
+router.get('/dropdown/suppliers', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
+  const result = await warrantyAndClaimModule.getDropdownSuppliers(req);
+  helper.sendResponse(res, result);
+});
+
 export default router;

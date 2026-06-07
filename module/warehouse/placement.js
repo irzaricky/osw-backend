@@ -404,7 +404,14 @@ async detail(req) {
               {
                 model: SParts,
                 as: 'part',
-                attributes: ['id', 'part_number', 'part_name', 'part_category']
+                attributes: ['id', 'part_number', 'part_name', 'part_category','package_id'],
+                include: [
+                          {
+                            model: SPackages,
+                            as: 'package',
+                            attributes: ['id', 'name', 'capacity']
+                          }
+                        ]
               }
             ]
           }

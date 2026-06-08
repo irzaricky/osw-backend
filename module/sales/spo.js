@@ -335,9 +335,13 @@ class SPOModule extends BaseModule {
         return { status: false, message: 'SPO not found', code: 404 };
       }
 
-      if (spo.status !== 'Draft') {
+      const isSupervisor = currentUser.role?.toLowerCase() === 'supervisor sales' || currentUser.role?.toLowerCase() === 'superadmin';
+      const isDraft = spo.status === 'Draft';
+      const isSubmitted = spo.status === 'Submitted';
+
+      if (!isDraft && !(isSubmitted && isSupervisor)) {
         await t.rollback();
-        return { status: false, message: 'Only Draft SPO can be updated', code: 400 };
+        return { status: false, message: 'Only Draft SPO (or Submitted SPO by Supervisor) can be updated', code: 400 };
       }
 
       const detailSchema = Joi.object({
@@ -359,6 +363,44 @@ class SPOModule extends BaseModule {
       }
 
       const updates = validation.value;
+
+      // Handle po_document file upload
+      if (req.files && req.files.po_document) {
+        const file = req.files.po_document;
+        const ext = path.extname(file.name);
+        const allowedExts = ['.pdf'];
+        if (!allowedExts.includes(ext.toLowerCase())) {
+          await t.rollback();
+          return { status: false, message: 'Only PDF files (.pdf) are allowed for Customer PO Document', code: 400 };
+        }
+        if (file.size > 5 * 1024 * 1024) {
+          await t.rollback();
+          return { status: false, message: 'Customer PO Document size cannot exceed 5MB', code: 400 };
+        }
+        const fileName = `po_${Date.now()}${ext}`;
+        const uploadDir = path.join(__dirname, '../../public/uploads/po');
+
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
+        }
+
+        const uploadPath = path.join(uploadDir, fileName);
+        await file.mv(uploadPath);
+
+        // Delete old PO document file if it exists
+        if (spo.po_document) {
+          try {
+            const oldFilePath = path.join(__dirname, '../../public', spo.po_document);
+            if (fs.existsSync(oldFilePath)) {
+              fs.unlinkSync(oldFilePath);
+            }
+          } catch (err) {
+            console.error('Failed to delete old PO document:', err);
+          }
+        }
+
+        updates.po_document = `/uploads/po/${fileName}`;
+      }
 
       // Validate delivery_due_date is strictly before the existing spo_date
       if (updates.delivery_due_date) {

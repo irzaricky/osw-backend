@@ -36,7 +36,7 @@ router.get('/:id', session.sessionChecker, session.permissionChecker(['Superadmi
   return helper.sendResponse(res, result);
 });
 
-router.put('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Order', 'Admin sales']), async (req, res) => {
+router.put('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Staff Sales Order', 'Supervisor Sales', 'Admin sales']), async (req, res) => {
   const result = await spo.update(req);
   return helper.sendResponse(res, result);
 });

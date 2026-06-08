@@ -604,9 +604,9 @@ class SDOModule extends BaseModule {
 
       const file = req.files.loading_photo;
       const ext = path.extname(file.name);
-      const allowedExts = ['.jpg', '.jpeg', '.png'];
+      const allowedExts = ['.jpg', '.jpeg', '.png', '.webp'];
       if (!allowedExts.includes(ext.toLowerCase())) {
-        return { status: false, message: 'Only Image files (.jpg, .jpeg, .png) are allowed for Loading photo', code: 400 };
+        return { status: false, message: 'Only Image files (.jpg, .jpeg, .png, .webp) are allowed for Loading photo', code: 400 };
       }
 
       const fileName = `loading_${Date.now()}${ext}`;

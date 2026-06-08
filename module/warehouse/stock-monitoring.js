@@ -290,11 +290,17 @@ if (stock_status) {
   having.push(`
     CASE
       WHEN COALESCE(part.safety_stock, 0) > 0
+        AND COUNT(ws.id) >= (COALESCE(part.safety_stock, 0) * 2)
+      THEN 'Overstock'
+
+      WHEN COALESCE(part.safety_stock, 0) > 0
         AND COUNT(ws.id) <= (COALESCE(part.safety_stock, 0) * 0.5)
       THEN 'Critical'
+
       WHEN COALESCE(part.safety_stock, 0) > 0
         AND COUNT(ws.id) <= COALESCE(part.safety_stock, 0)
       THEN 'Warning'
+
       ELSE 'Safe'
     END = :stock_status
   `)
@@ -323,13 +329,19 @@ const havingClause = having.length
         END AS coverage_percentage,
 
         CASE
-        WHEN COALESCE(part.safety_stock, 0) > 0
+          WHEN COALESCE(part.safety_stock, 0) > 0
+            AND COUNT(ws.id) >= (COALESCE(part.safety_stock, 0) * 2)
+          THEN 'Overstock'
+
+          WHEN COALESCE(part.safety_stock, 0) > 0
             AND COUNT(ws.id) <= (COALESCE(part.safety_stock, 0) * 0.5)
-        THEN 'Critical'
-        WHEN COALESCE(part.safety_stock, 0) > 0
+          THEN 'Critical'
+
+          WHEN COALESCE(part.safety_stock, 0) > 0
             AND COUNT(ws.id) <= COALESCE(part.safety_stock, 0)
-        THEN 'Warning'
-        ELSE 'Safe'
+          THEN 'Warning'
+
+          ELSE 'Safe'
         END AS stock_status,
 
         pkg.id AS package_id,

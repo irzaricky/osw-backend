@@ -23,7 +23,6 @@ export default (sequelize) => {
     label_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      unique: true
     },
     is_scanned_in: {
       type: DataTypes.BOOLEAN,

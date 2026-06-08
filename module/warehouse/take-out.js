@@ -240,11 +240,15 @@ class TakeOutModule extends BaseModule {
         data: helper.getPaginationData(data, count, page, limit)
       };
     } catch (error) {
-      return config.debug
-        ? { status: false, error: error.message, code: 500 }
-        : { status: false, message: 'Internal server error', code: 500 };
-    }
-  }
+      console.error('Take Out List Error:', error)
+
+      return {
+        status: false,
+        error: error.message,
+        detail: error.errors || error.parent?.detail || error.parent?.message,
+        code: 500
+      };
+    }  }
 
   async detail(req) {
     try {

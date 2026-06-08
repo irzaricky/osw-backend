@@ -39,7 +39,7 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
     OVERTIME:      'overtime_hours',
   };
  
-  // ── 1. Terapkan adjustment di atas BASE param ─────────────────────────────
+  // 1. Terapkan adjustment di atas BASE param
   const param = {
     working_days:            baseParam.working_days,
     shifts_per_day:          baseParam.shifts_per_day,
@@ -54,20 +54,23 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
     if (field) param[field] = Number(adj.adjusted_value);
   }
  
-  // ── 2. Guard: max_takt_time harus valid ──────────────────────────────────
+  // 2. Guard: max_takt_time harus valid
   if (!param.max_takt_time || param.max_takt_time <= 0) {
     return { line_id, skipped: true, reason: 'max_takt_time is 0 or not set' };
   }
  
-  // ── 3. Kalkulasi kapasitas (logic sama dengan calcCapacityUnits lama) ─────
-  const { regular_minutes, overtime_minutes, available_minutes, total_cap_minutes, total_cap_units } =
-    calcCapacityUnits(param);
+  // 3. Kalkulasi kapasitas
+  const {
+    regular_minutes, overtime_minutes, available_minutes,
+    total_cap_minutes, total_cap_units,
+    cap_per_shift, cap_per_day, effective_min_per_shift,
+  } = calcCapacityUnits(param);
  
   const max_takt_time_seconds = param.max_takt_time;
   const max_takt_time_minutes = max_takt_time_seconds / 60;
   const capacity_per_hour     = parseFloat((60 / max_takt_time_minutes).toFixed(4));
  
-  // ── 4. Fetch station & job count ─────────────────────────────────────────
+  // 4. Fetch station & job count
   const stationRows    = await SStations.findAll({ where: { line_id, status: true, deleted_at: null }, attributes: ['id'], transaction: t });
   const stationIds     = stationRows.map((r) => r.id);
   const total_stations = stationIds.length;
@@ -75,7 +78,7 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
     ? await SStationJobs.count({ where: { station_id: stationIds, active: true, deleted_at: null }, distinct: true, col: 'job_id', transaction: t })
     : 0;
  
-  // ── 5. Ambil semua detail lines yang melewati lini ini (dalam plan ini) ──
+  // 5. Ambil semua detail lines yang melewati lini ini (dalam plan ini)
   const assignedDetailLines = await SProductionPlanDetailLine.findAll({
     where:   { line_id },
     include: [{
@@ -87,16 +90,7 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
     transaction: t,
   });
  
-  // ── 6. Hitung TOTAL demand di lini ini (aggregate, bukan per-detail) ─────
-  //
-  // FIX: Model shared-capacity yang benar.
-  // Semua detail yang melewati lini ini BERBAGI kapasitas yang sama.
-  // Feasibility = apakah total_cap_units >= TOTAL semua qty_request.
-  //
-  // Sebelumnya: min(qty_request, total_cap_units) per detail → selalu POSSIBLE
-  //             jika qty_request < total_cap_units, meskipun aggregate melampaui.
-  // Sekarang:   line_status = total_cap_units >= total_qty_this_line
-  // ─────────────────────────────────────────────────────────────────────────
+  // 6. Hitung TOTAL demand di lini ini (aggregate, bukan per-detail)
   let total_qty_this_line = 0;
   for (const dl of assignedDetailLines) {
     total_qty_this_line += dl.plan_detail.qty_request;
@@ -104,43 +98,52 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
  
   const line_status = total_cap_units >= total_qty_this_line ? 'POSSIBLE' : 'IMPOSSIBLE';
  
-  // ── 7. Update setiap detail line — status mengikuti aggregate lini ────────
-  for (const dl of assignedDetailLines) {
+  // 7. Update setiap detail line — status mengikuti aggregate lini
+  const updatePayloads = assignedDetailLines.map((dl) => {
     const qty_request  = dl.plan_detail.qty_request;
-    // qty_capacity: tetap min(qty, cap) agar UI bisa tampilkan
-    // "lini ini mampu produksi sebanyak ini untuk detail ini jika berdiri sendiri"
-    const ratio = total_qty_this_line > 0 
-      ? Math.min(total_cap_units / total_qty_this_line, 1) 
+    const ratio        = total_qty_this_line > 0
+      ? Math.min(total_cap_units / total_qty_this_line, 1)
       : 1;
     const qty_capacity = Math.floor(qty_request * ratio);
-    // capacity_gap per detail: selisih aggregate (negatif = ada shortage di lini ini)
-    // Ini memberi sinyal yang jujur ke planner bahwa ada kompetisi kapasitas.
-    const capacity_gap  = total_cap_units - total_qty_this_line;
-    await dl.update({ qty_capacity, capacity_gap, status: line_status }, { transaction: t });
-  }
+    return { id: dl.id, qty_capacity, capacity_gap: total_cap_units - total_qty_this_line, status: line_status };
+  });
+
+  await Promise.all(
+    updatePayloads.map((p) =>
+      SProductionPlanDetailLine.update(
+        { qty_capacity: p.qty_capacity, capacity_gap: p.capacity_gap, status: p.status },
+        { where: { id: p.id }, transaction: t }
+      )
+    )
+  );
  
-  // ── 8. Hitung menit ──────────────────────────────────────────────────────
+  // 8. Hitung menit
   const effective_capacity_minutes = total_cap_minutes;
-  const total_required_minutes     = parseFloat((total_qty_this_line * max_takt_time_minutes).toFixed(2));
-  const capacity_gap_minutes       = parseFloat((effective_capacity_minutes - total_required_minutes).toFixed(2));
-  const utilization_pct            = effective_capacity_minutes > 0
-    ? parseFloat(((total_required_minutes / effective_capacity_minutes) * 100).toFixed(2))
+  const takt_time_minutes          = max_takt_time_seconds / 60;
+
+  // Referensi teoretis — bukan penentu feasibility
+  const serial_required_minutes = parseFloat(
+    (total_qty_this_line * takt_time_minutes).toFixed(2)
+  );
+
+  // Utilisasi berbasis unit — ini yang akurat untuk model overlapping
+  const utilization_pct = total_cap_units > 0
+    ? parseFloat(((total_qty_this_line / total_cap_units) * 100).toFixed(2))
     : 0;
+
+  // capacity_gap_minutes tetap disimpan sebagai referensi UI
+  const capacity_gap_minutes = parseFloat(
+    (effective_capacity_minutes - serial_required_minutes).toFixed(2)
+  );
  
-  // ── 9. Upsert SProductionPlanCapacityResult ──────────────────────────────
-  //
-  // Tambahkan total_demand_on_line ke kolom yang disimpan agar UI/report
-  // bisa menampilkan "kapasitas: 974, total permintaan: 1190, shortage: 216".
-  // Jika kolom belum ada di schema, cukup simpan di capacity_gap_minutes
-  // yang sudah ada — angka negatif sudah cukup informatif.
-  // ─────────────────────────────────────────────────────────────────────────
+  // 9. Upsert SProductionPlanCapacityResult
   const [result, created] = await SProductionPlanCapacityResult.findOrCreate({
     where:    { plan_id, line_id },
     defaults: {
       plan_id, line_id, total_stations, total_jobs,
       max_takt_time: max_takt_time_seconds, capacity_per_hour,
       total_capacity_minutes:  parseFloat(effective_capacity_minutes.toFixed(2)),
-      total_required_minutes,
+      total_required_minutes: serial_required_minutes,
       capacity_gap_minutes,
       utilization_pct,
       status:               line_status,
@@ -155,7 +158,7 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
       total_stations, total_jobs,
       max_takt_time: max_takt_time_seconds, capacity_per_hour,
       total_capacity_minutes:  parseFloat(effective_capacity_minutes.toFixed(2)),
-      total_required_minutes,
+      total_required_minutes: serial_required_minutes,
       capacity_gap_minutes,
       utilization_pct,
       status:               line_status,
@@ -166,95 +169,138 @@ async function _calcLineCapacity({ plan_id, line_id, baseParam, adjustments, t }
   }
  
   return {
-    line_id,
-    skipped: false,
-    line_status,
-    total_cap_units,
-    total_qty_this_line,
-    total_required_minutes,
-    effective_capacity_minutes: parseFloat(effective_capacity_minutes.toFixed(2)),
-    capacity_gap_minutes,
-    utilization_pct,
-    capacity_info: {
-      total_stations,
-      total_jobs,
-      max_takt_time_seconds,
-      capacity_per_hour,
-      regular_minutes:   parseFloat(regular_minutes.toFixed(2)),
-      overtime_minutes:  parseFloat(overtime_minutes.toFixed(2)),
-      available_minutes: parseFloat(available_minutes.toFixed(2)),
-    },
-  };
+  line_id,
+  skipped: false,
+  line_status,
+  total_cap_units,
+  total_qty_this_line,
+  serial_required_minutes,
+  effective_capacity_minutes: parseFloat(effective_capacity_minutes.toFixed(2)),
+  capacity_gap_minutes,
+  utilization_pct,
+  capacity_info: {
+    total_stations,
+    total_jobs,
+    max_takt_time_seconds,
+    capacity_per_hour,
+    regular_minutes:          parseFloat(regular_minutes.toFixed(2)),
+    overtime_minutes:         parseFloat(overtime_minutes.toFixed(2)),
+    available_minutes:        parseFloat(available_minutes.toFixed(2)),
+    cap_per_shift:            cap_per_shift,
+    cap_per_day:              cap_per_day,
+    effective_min_per_shift:  parseFloat(effective_min_per_shift.toFixed(4)),
+  },
+};
 }
 
 async function _aggregateOverallStatus({ plan_id, plan, allBaseParams, lineResults, t }) {
-  // Cek apakah semua lini sudah terhitung (tidak ada yang skipped)
-  const allLinesCalculated = allBaseParams
-    .every((p) => lineResults.some((r) => r.line_id === p.line_id && !r.skipped));
- 
-  // Requery semua detail lines beserta status per-lini
+
+  // Bangun map hasil kalkulasi yang baru saja selesai
+  const freshResultMap = new Map(
+    lineResults
+      .filter((r) => !r.skipped)
+      .map((r) => [r.line_id, r.line_status])
+  );
+
+  // Query hasil yang sudah ada di DB untuk lini lain
+  const existingResults = await SProductionPlanCapacityResult.findAll({
+    where:      { plan_id },
+    attributes: ["line_id", "status"],
+    transaction: t,
+  });
+  const existingResultMap = new Map(existingResults.map((r) => [r.line_id, r.status]));
+
+  // Cek apakah SEMUA lini sudah punya hasil kalkulasi
+  const allLinesHaveResult = allBaseParams.every(
+    (p) => freshResultMap.has(p.line_id) || existingResultMap.has(p.line_id)
+  );
+
+  // Agregasi status per plan_detail
   const finalDetailLines = await SProductionPlanDetailLine.findAll({
     include: [{
       model:      SProductionPlanDetail,
-      as:         'plan_detail',
+      as:         "plan_detail",
       where:      { plan_id },
-      attributes: ['id', 'qty_request'],
+      attributes: ["id", "qty_request"],
     }],
-    attributes: ['plan_detail_id', 'line_id', 'qty_capacity', 'status'],
+    attributes: ["plan_detail_id", "line_id", "qty_capacity", "status"],
     transaction: t,
   });
- 
-  // Agregasi per plan_detail_id: POSSIBLE hanya jika SEMUA lini POSSIBLE
+
   const detailAggMap = new Map();
   for (const dl of finalDetailLines) {
     const detail_id   = dl.plan_detail_id;
     const qty_request = dl.plan_detail.qty_request;
+
     if (!detailAggMap.has(detail_id)) {
-      detailAggMap.set(detail_id, { qty_request, hasImpossible: false, hasUncalculated: false, minQtyCapacity: Infinity });
+      detailAggMap.set(detail_id, {
+        qty_request,
+        hasImpossible:    false,
+        hasUncalculated:  false,
+        minQtyCapacity:   Infinity,
+      });
     }
+
     const entry = detailAggMap.get(detail_id);
-    if (!dl.status || dl.status === 'Not_Calculated') {
+
+    if (!dl.status || dl.status === "Not_Calculated") {
       entry.hasUncalculated = true;
+    } else if (dl.status === "IMPOSSIBLE") {
+      entry.hasImpossible   = true;
+      entry.minQtyCapacity  = Math.min(entry.minQtyCapacity, dl.qty_capacity ?? 0);
     } else {
-      if (dl.status === 'IMPOSSIBLE') entry.hasImpossible = true;
-      entry.minQtyCapacity = Math.min(entry.minQtyCapacity, dl.qty_capacity ?? 0);
+      // POSSIBLE
+      entry.minQtyCapacity  = Math.min(entry.minQtyCapacity, dl.qty_capacity ?? 0);
     }
   }
- 
-  for (const [detail_id, { qty_request, hasImpossible, hasUncalculated, minQtyCapacity }] of detailAggMap.entries()) {
+
+  // Update status setiap plan_detail
+  for (const [detail_id, { qty_request, hasImpossible, hasUncalculated, minQtyCapacity }] of detailAggMap) {
     if (hasUncalculated) {
-      await SProductionPlanDetail.update({ status: 'Not_Calculated' }, { where: { id: detail_id }, transaction: t });
+      await SProductionPlanDetail.update(
+        { status: "Not_Calculated" },
+        { where: { id: detail_id }, transaction: t }
+      );
     } else {
       const effectiveCap = minQtyCapacity === Infinity ? 0 : minQtyCapacity;
       const gap          = effectiveCap - qty_request;
-      const dstatus      = hasImpossible ? 'IMPOSSIBLE' : 'POSSIBLE';
+      // Aturan bisnis: SATU lini IMPOSSIBLE → detail ini IMPOSSIBLE
+      const dstatus      = hasImpossible ? "IMPOSSIBLE" : "POSSIBLE";
       await SProductionPlanDetail.update(
         { qty_capacity: effectiveCap, capacity_gap: gap, status: dstatus },
         { where: { id: detail_id }, transaction: t }
       );
     }
   }
- 
+
+  // Tentukan overall_status plan
   let aggregatedStatus;
-  if (!allLinesCalculated) {
-    aggregatedStatus = 'Not_Calculated';
+
+  if (!allLinesHaveResult) {
+    aggregatedStatus = "Not_Calculated";
   } else {
-    const hasBottleneck = [...detailAggMap.values()].some((e) => e.hasUncalculated || e.hasImpossible);
-    aggregatedStatus = hasBottleneck ? 'IMPOSSIBLE' : 'POSSIBLE';
+    const anyImpossible = allBaseParams.some((p) => {
+      const status = freshResultMap.get(p.line_id) ?? existingResultMap.get(p.line_id);
+      return status === "IMPOSSIBLE";
+    });
+
+    aggregatedStatus = anyImpossible ? "IMPOSSIBLE" : "POSSIBLE";
   }
- 
-  const total_qty_capacity = [...detailAggMap.values()].reduce((s, { qty_request, minQtyCapacity, hasUncalculated }) => {
-    return s + (hasUncalculated ? 0 : Math.min(minQtyCapacity === Infinity ? 0 : minQtyCapacity, qty_request));
+
+  // Hitung total_qty_capacity untuk header plan
+  const total_qty_capacity = [...detailAggMap.values()].reduce((sum, entry) => {
+    if (entry.hasUncalculated) return sum; // belum terhitung, kontribusi = 0
+    const cap = entry.minQtyCapacity === Infinity ? 0 : entry.minQtyCapacity;
+    return sum + Math.min(cap, entry.qty_request);
   }, 0);
- 
+
+  // Update header plan
   await plan.update({ total_qty_capacity, overall_status: aggregatedStatus }, { transaction: t });
- 
+
   return { aggregatedStatus, total_qty_capacity, detailAggMap };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Derive rentang tanggal dari plan_month (string "YYYY-MM")
-// ─────────────────────────────────────────────────────────────────────────────
 function getPlanMonthRange(plan_month) {
   const [year, month] = plan_month.split("-").map(Number);
   const start = new Date(Date.UTC(year, month - 1, 1));
@@ -275,10 +321,8 @@ function toDateStr(val) {
   return new Date(val).toISOString().split("T")[0];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Auto-assign lines dari routing per part
 // Return: Map<part_id, [{ line_id, sequence }]>
-// ─────────────────────────────────────────────────────────────────────────────
 async function getRoutingLinesByPartIds(partIds, t) {
   if (!partIds.length) return new Map();
 
@@ -323,9 +367,7 @@ async function getRoutingLinesByPartIds(partIds, t) {
   return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Auto-assign detail lines + init BASE params
-// ─────────────────────────────────────────────────────────────────────────────
 async function autoAssignDetailLines(planId, details, routingMap, t, paramYear, paramMonth) {
   if (!details.length) return;
 
@@ -401,9 +443,7 @@ async function autoAssignDetailLines(planId, details, routingMap, t, paramYear, 
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // HELPER: checkPlanLineConflicts — warning-only, tidak blocking
-// ─────────────────────────────────────────────────────────────────────────────
 async function checkPlanLineConflicts(currentPlanId, lineIds, t) {
   if (!lineIds || lineIds.length === 0) return [];
 
@@ -450,68 +490,64 @@ async function checkPlanLineConflicts(currentPlanId, lineIds, t) {
   return warnings;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Hitung total_capacity_units dari param
-//
-// FIX: Manpower TIDAK mengalikan throughput unit.
-// Rumus: total_capacity_units = floor(total_capacity_minutes / takt_time_minutes)
-// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Menghitung kapasitas lini dalam satuan unit dan menit.
+ *
+ * Catatan satuan:
+ *   - working_hours_per_shift : JAM  → dikali 60 → MENIT
+ *   - overtime_hours          : JAM PER HARI (total semua shift) → dibagi shifts_per_day → JAM PER SHIFT
+ *   - max_takt_time           : DETIK → dibagi 60 → MENIT
+ *   - efficiency_factor       : desimal (0–1)
+ *
+ * SETELAH FIX (floor PER SHIFT — identik dengan resolveCapacityPerLine di sched module):
+ *   ot_per_shift_hours       = overtime_hours / shifts_per_day      ← distribusi OT merata per shift
+ *   effective_min_per_shift  = (working_hours_per_shift + ot_per_shift_hours) × 60 × efficiency
+ *   cap_per_shift            = floor(effective_min_per_shift / takt_min)   ← floor per shift
+ *   total_cap_units          = cap_per_shift × shifts_per_day × working_days
+ *
+ * Setelah fix: Σ slot_capacity (schedule) == total_cap_units (plan) secara matematika pasti.
+ */
 function calcCapacityUnits(param) {
-  const taktMin            = param.max_takt_time / 60;
-  const regular_minutes    = param.working_days * param.shifts_per_day * param.working_hours_per_shift * 60;
-  const overtime_minutes   = param.working_days * param.overtime_hours * 60;
-  const available_minutes  = regular_minutes + overtime_minutes;
-  const total_cap_minutes  = available_minutes * param.efficiency_factor;
-  const total_cap_units    = taktMin > 0 ? Math.floor(total_cap_minutes / taktMin) : 0;
-  return { regular_minutes, overtime_minutes, available_minutes, total_cap_minutes, total_cap_units };
-}
+  const taktMin = param.max_takt_time / 60; // detik → menit
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Simulasi overlapping capacity
-//
-// Dalam model overlapping/transfer-batch, lini-lini pada routing suatu part
-// tidak mengerjakan kuantitas yang dibagi, melainkan masing-masing mengerjakan
-// PENUH qty_request (setiap unit melewati semua lini secara berurutan).
-//
-// Bottleneck sejati = lini dengan total_capacity_units TERKECIL dibandingkan
-// qty_request. Dalam mode overlapping, tidak ada "gap" palsu akibat
-// asumsi sequential start — lini hilir dapat mulai begitu ada unit dari lini hulu.
-//
-// Return: { overallStatus, totalCapByLine }
-//   overallStatus: "POSSIBLE" jika semua lini mampu menampung qty_request
-//   totalCapByLine: Map<line_id, { cap, qty, possible }>
-// ─────────────────────────────────────────────────────────────────────────────
-function simulateOverlappingFeasibility(detailLines, resultCapMap) {
-  // Grup per plan_detail_id: cari bottleneck per detail
-  // (lini dengan kapasitas terkecil = penentu feasibility)
-  const detailFeasibility = new Map(); // detail_id → { qty_request, minLineCap, possible }
+  // Menit kerja reguler per shift (jam → menit)
+  const regular_min_per_shift = param.working_hours_per_shift * 60;
 
-  for (const dl of detailLines) {
-    const did     = dl.plan_detail_id;
-    const cap     = resultCapMap.get(dl.line_id) ?? 0;
-    const qty     = dl.plan_detail?.qty_request ?? 0;
+  // OT didistribusikan merata ke setiap shift:
+  //   overtime_hours adalah total per hari (semua shift) → bagi shifts_per_day → per shift
+  const shifts_per_day        = param.shifts_per_day > 0 ? param.shifts_per_day : 1;
+  const ot_hours_per_shift    = (param.overtime_hours ?? 0) / shifts_per_day;
+  const ot_min_per_shift      = ot_hours_per_shift * 60;
 
-    if (!detailFeasibility.has(did)) {
-      detailFeasibility.set(did, { qty_request: qty, minLineCap: cap, possible: cap >= qty });
-    } else {
-      const entry = detailFeasibility.get(did);
-      // Bottleneck = lini dengan kapasitas terkecil
-      if (cap < entry.minLineCap) {
-        entry.minLineCap = cap;
-        entry.possible   = cap >= qty;
-      }
-    }
-  }
+  // Menit efektif per shift setelah efisiensi (sama dengan sched module)
+  const effective_min_per_shift = (regular_min_per_shift + ot_min_per_shift) * param.efficiency_factor;
 
-  const allPossible = [...detailFeasibility.values()].every((e) => e.possible);
-  return { overallStatus: allPossible ? "POSSIBLE" : "IMPOSSIBLE", detailFeasibility };
+  // Floor PER SHIFT — identik dengan resolveCapacityPerLine di order-schedule-module
+  const cap_per_shift  = taktMin > 0 ? Math.floor(effective_min_per_shift / taktMin) : 0;
+  const cap_per_day    = cap_per_shift * param.shifts_per_day;
+  const total_cap_units = cap_per_day * param.working_days;
+
+  // Nilai turunan untuk laporan (tetap disediakan agar pemanggil tidak perlu diubah)
+  const regular_minutes   = param.working_days * param.shifts_per_day * regular_min_per_shift;
+  const overtime_minutes  = param.working_days * param.shifts_per_day * ot_min_per_shift; // total OT terpakai
+  const available_minutes = regular_minutes + overtime_minutes;
+  const total_cap_minutes = available_minutes * param.efficiency_factor;
+
+  return {
+    regular_minutes,
+    overtime_minutes,
+    available_minutes,
+    total_cap_minutes,
+    total_cap_units,
+    cap_per_shift,
+    cap_per_day,
+    effective_min_per_shift,
+  };
 }
 
 class PlanModule extends BaseModule {
 
-  // ─────────────────────────────────────────────────────────────
   // LIST
-  // ─────────────────────────────────────────────────────────────
   async list(req, res) {
     try {
       const { limit, page, offset } = helper.getPagination(req.query);
@@ -554,9 +590,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // DETAIL
-  // ─────────────────────────────────────────────────────────────
   async detail(req, res) {
     try {
       const { id } = req.params;
@@ -625,9 +659,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // GET AVAILABLE DELIVERY ORDERS
-  // ─────────────────────────────────────────────────────────────
   async getAvailableDeliveryOrders(req, res) {
     try {
       const { plan_month } = req.query;
@@ -703,9 +735,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // CREATE — Mendukung plan_type: ORIGINAL | AMENDMENT
-  // ─────────────────────────────────────────────────────────────
   async create(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -824,10 +854,12 @@ class PlanModule extends BaseModule {
 
       const isAmendment  = plan_type === "AMENDMENT";
       const prefix       = isAmendment ? `PP-${plan_month}-A` : `PP-${plan_month}-`;
-      const lastPlan     = await SProductionPlan.findOne({
+      const lastPlan = await SProductionPlan.findOne({
         where: { plan_number: { [Op.iLike]: `${prefix}%` } },
         order: [["plan_number", "DESC"]],
-        paranoid: false, transaction: t,
+        paranoid: false,
+        transaction: t,
+        lock: t.LOCK.UPDATE, // ← tambahan ini
       });
       const seq         = lastPlan
         ? String(parseInt(lastPlan.plan_number.split(isAmendment ? "-A" : "-").pop()) + 1).padStart(5, "0")
@@ -941,9 +973,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // UPDATE
-  // ─────────────────────────────────────────────────────────────
   async update(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -987,9 +1017,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // SYNC DOs
-  // ─────────────────────────────────────────────────────────────
   async syncDOs(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1029,19 +1057,42 @@ class PlanModule extends BaseModule {
       const toRemove     = currentDoIds.filter((did) => !do_ids.includes(did));
 
       if (toRemove.length > 0) {
-        const removedDetails = await SProductionPlanDetail.findAll({
-          where:       { plan_id: id, do_id: toRemove },
-          attributes:  ["id"],
+        const remainingDetails = await SProductionPlanDetail.findAll({
+          where: { plan_id: id }, attributes: ["id"], transaction: t,
+        });
+        const remainingDetailIds = remainingDetails.map((d) => d.id);
+
+        const activeLineIds = remainingDetailIds.length > 0
+          ? await SProductionPlanDetailLine.findAll({
+              where:      { plan_detail_id: remainingDetailIds },
+              attributes: ["line_id"],
+              transaction: t,
+            }).then((rows) => [...new Set(rows.map((r) => r.line_id))])
+          : [];
+
+        // Hapus (soft-delete) adjustment untuk lini yang sudah tidak dipakai plan ini
+        const orphanedAdjs = await SProductionPlanAdjustment.findAll({
+          where: {
+            plan_id: id,
+            ...(activeLineIds.length > 0
+              ? { line_id: { [Op.notIn]: activeLineIds } }
+              : {}), // jika tidak ada lini aktif sama sekali, hapus semua adjustment
+          },
           transaction: t,
         });
-        const removedDetailIds = removedDetails.map((d) => d.id);
-        if (removedDetailIds.length > 0) {
-          await SProductionPlanDetailLine.destroy({
-            where: { plan_detail_id: removedDetailIds }, transaction: t,
+        await Promise.all(orphanedAdjs.map((adj) => adj.destroy({ transaction: t })));
+
+        // Reset capacity params untuk lini yang tidak lagi relevan juga
+        if (activeLineIds.length > 0) {
+          await SProductionPlanCapacityParam.destroy({
+            where: { plan_id: id, line_id: { [Op.notIn]: activeLineIds } },
+            transaction: t,
+          });
+          await SProductionPlanCapacityResult.destroy({
+            where: { plan_id: id, line_id: { [Op.notIn]: activeLineIds } },
+            transaction: t,
           });
         }
-        await SProductionPlanDoReference.destroy({ where: { plan_id: id, do_id: toRemove }, transaction: t });
-        await SProductionPlanDetail.destroy({ where: { plan_id: id, do_id: toRemove }, transaction: t });
       }
 
       let newDetails = [];
@@ -1164,9 +1215,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // SAVE CAPACITY PARAMS
-  // ─────────────────────────────────────────────────────────────
   async saveCapacityParams(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1270,15 +1319,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // CALCULATE CAPACITY (per-line)
-  //
-  // Model Overlapping/Transfer-Batch:
-  //   Setiap lini dalam routing mengerjakan SEMUA unit (bukan dibagi).
-  //   Bottleneck = lini dengan kapasitas terkecil.
-  //   Status IMPOSSIBLE hanya terjadi jika kapasitas lini < qty_request.
-  //   TIDAK ada pinalti akibat asumsi sequential start.
-  // ─────────────────────────────────────────────────────────────
   async calculateCapacity(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1350,7 +1391,7 @@ class PlanModule extends BaseModule {
           line_status:                lineResult.line_status,
           total_capacity_units:       lineResult.total_cap_units,
           total_qty_this_line:        lineResult.total_qty_this_line,
-          total_required_minutes:     lineResult.total_required_minutes,
+          total_required_minutes:     lineResult.serial_required_minutes,
           effective_capacity_minutes: lineResult.effective_capacity_minutes,
           capacity_gap_minutes:       lineResult.capacity_gap_minutes,
           utilization_pct:            lineResult.utilization_pct,
@@ -1373,10 +1414,8 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // CALCULATE ALL CAPACITY
   // Kalkulasi semua line sekaligus dengan model overlapping.
-  // ─────────────────────────────────────────────────────────────
   async calculateAllCapacity(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1405,7 +1444,7 @@ class PlanModule extends BaseModule {
    
       const lineIds = allBaseParams.map((p) => p.line_id);
    
-      // ── Reset semua detail lines & capacity results (sama seperti sebelumnya) ─
+      // Reset semua detail lines & capacity results (sama seperti sebelumnya)
       const allDetailIds = plan.details.map((d) => d.id);
       if (allDetailIds.length > 0) {
         await SProductionPlanDetailLine.update(
@@ -1415,7 +1454,7 @@ class PlanModule extends BaseModule {
       }
       await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
    
-      // ── Ambil semua adjustment sekaligus, grouped per line_id ────────────────
+      // Ambil semua adjustment sekaligus, grouped per line_id
       const adjustmentsAll = await SProductionPlanAdjustment.findAll({
         where: { plan_id: id, line_id: lineIds },
         order: [['sequence', 'ASC']],
@@ -1427,7 +1466,7 @@ class PlanModule extends BaseModule {
         adjByLine.get(adj.line_id).push(adj);
       }
    
-      // ── Loop: satu panggilan _calcLineCapacity per lini ──────────────────────
+      // Loop: satu panggilan _calcLineCapacity per lini
       const lineResults = [];
       for (const bp of allBaseParams) {
         const result = await _calcLineCapacity({
@@ -1440,7 +1479,7 @@ class PlanModule extends BaseModule {
         lineResults.push(result);
       }
    
-      // ── Agregasi overall status (helper yang sama dengan calculateCapacity) ───
+      // Agregasi overall status (helper yang sama dengan calculateCapacity)
       const { aggregatedStatus, total_qty_capacity } = await _aggregateOverallStatus({
         plan_id: id, plan, allBaseParams, lineResults, t,
       });
@@ -1475,9 +1514,7 @@ class PlanModule extends BaseModule {
     }
   }
    
-  // ─────────────────────────────────────────────────────────────
   // ADD ADJUSTMENT
-  // ─────────────────────────────────────────────────────────────
   async addAdjustment(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1591,9 +1628,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // DELETE ADJUSTMENT
-  // ─────────────────────────────────────────────────────────────
   async deleteAdjustment(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1649,19 +1684,12 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // SUBMIT FOR APPROVAL
-  //
-  // FIX: Validasi IMPOSSIBLE tidak otomatis memblokir submit.
-  // Dalam model overlapping, IMPOSSIBLE berarti kapasitas lini
-  // tidak mencukupi — ini tetap di-submit untuk eskalasi manajerial.
-  // Blocking hanya terjadi jika kapasitas BELUM dikalkulasi sama sekali.
-  // ─────────────────────────────────────────────────────────────
   async submitForApproval(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
-
+  
       const plan = await SProductionPlan.findByPk(id, {
         include: [{ model: SProductionPlanDetail, as: "details" }],
         transaction: t,
@@ -1674,18 +1702,33 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  "Only Draft or Rejected plans can be submitted",
+          error: "Only Draft or Rejected plans can be submitted",
         });
       }
+  
+      // Guard #1: Kapasitas belum dikalkulasi sama sekali
       if (plan.overall_status === "Not_Calculated") {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  "Capacity has not been calculated yet. Please run capacity calculation first.",
+          error: "Capacity has not been calculated yet. Please run capacity calculation first.",
         });
       }
-
-      // Validasi: semua detail harus punya minimal 1 detail line (ada routing)
+  
+      // Guard #2: IMPOSSIBLE adalah hard blocker absolut
+      // Tidak ada jalur bypass. User WAJIB melakukan adjustment hingga
+      // overall_status berubah menjadi POSSIBLE sebelum bisa submit.
+      if (plan.overall_status === "IMPOSSIBLE") {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  "Production Plan cannot be submitted. Overall capacity status is IMPOSSIBLE. " +
+                  "Please add adjustments on the bottleneck line(s) until all lines reach " +
+                  "POSSIBLE status before submitting.",
+        });
+      }
+  
+      // Guard #3: Semua detail harus punya minimal 1 routing (detail line)
       const detailIds = plan.details.map((d) => d.id);
       const detailLinesGrouped = await SProductionPlanDetailLine.findAll({
         where:      { plan_detail_id: detailIds },
@@ -1698,43 +1741,42 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `${unrouted.length} product(s) have no routing configured. Please set up part routing first.`,
+          error:  `${unrouted.length} product(s) have no routing configured. ` +
+                  `Please set up part routing first.`,
         });
       }
-
-      // Validasi: semua line BASE params sudah dikalkulasi
-      const params  = await SProductionPlanCapacityParam.findAll({ where: { plan_id: id, param_type: "BASE" }, transaction: t });
-      const results = await SProductionPlanCapacityResult.findAll({ where: { plan_id: id }, transaction: t });
-
+  
+      // Guard #4: Semua lini BASE params sudah punya hasil kalkulasi
+      const params  = await SProductionPlanCapacityParam.findAll({
+        where: { plan_id: id, param_type: "BASE" }, transaction: t,
+      });
+      const results = await SProductionPlanCapacityResult.findAll({
+        where: { plan_id: id }, transaction: t,
+      });
       const uncalculatedLines = params.filter((p) => !results.some((r) => r.line_id === p.line_id));
       if (uncalculatedLines.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `${uncalculatedLines.length} line(s) have not been calculated yet. Please run capacity calculation for all lines first.`,
+          error:  `${uncalculatedLines.length} line(s) have not been calculated yet. ` +
+                  `Please run capacity calculation for all lines first.`,
         });
       }
-
-      // OVERLAPPING MODEL: IMPOSSIBLE tidak memblokir submit.
-      // Ini merupakan sinyal peringatan — perencana tetap bisa submit dengan
-      // kapasitas yang kurang (misalnya dengan rencana lembur/outsource).
-      // Catat warning dalam response jika IMPOSSIBLE.
-      const hasImpossible = plan.overall_status === "IMPOSSIBLE";
-
+  
+      // Semua guard lolos → status plan hanya bisa sampai sini jika POSSIBLE
       const oldData = plan.toJSON();
       await plan.update({ status: "Pending_Approval" }, { transaction: t });
-
+  
       await this.logActivity(req, {
         moduleCode:   "production-plan",
         activityCode: "SUBMIT",
         resourceId:   plan.id,
         oldData,
         newData:      plan,
-        description:  `Submitted Production Plan ${plan.plan_number} for approval` +
-                      (hasImpossible ? " [WARNING: Some lines have insufficient capacity]" : ""),
+        description:  `Submitted Production Plan ${plan.plan_number} for approval`,
         transaction:  t,
       });
-
+  
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
@@ -1744,10 +1786,7 @@ class PlanModule extends BaseModule {
           id:             plan.id,
           plan_number:    plan.plan_number,
           status:         "Pending_Approval",
-          overall_status: plan.overall_status,
-          warning:        hasImpossible
-            ? "Plan submitted with insufficient capacity on some lines. Approver should review before approving."
-            : null,
+          overall_status: plan.overall_status, // dijamin "POSSIBLE" di titik ini
         },
       });
     } catch (error) {
@@ -1757,9 +1796,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // APPROVE
-  // ─────────────────────────────────────────────────────────────
   async approve(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1816,9 +1853,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // REJECT
-  // ─────────────────────────────────────────────────────────────
   async reject(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1875,14 +1910,12 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // DELETE
-  // ─────────────────────────────────────────────────────────────
   async delete(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
-
+  
       const plan = await SProductionPlan.findByPk(id, { transaction: t });
       if (!plan) {
         await t.rollback();
@@ -1892,22 +1925,42 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft plans can be deleted" });
       }
-
+  
+      // Hapus semua child data secara eksplisit (urutan penting!)
+      // 1. Detail lines dulu (FK ke plan_details)
       const details = await SProductionPlanDetail.findAll({
-        where:      { plan_id: id },
-        attributes: ["id"],
-        transaction: t,
+        where: { plan_id: id }, attributes: ["id"], transaction: t,
       });
       const detailIds = details.map((d) => d.id);
+  
       if (detailIds.length > 0) {
         await SProductionPlanDetailLine.destroy({
           where: { plan_detail_id: detailIds }, transaction: t,
         });
       }
-
+  
+      // 2. Plan details
+      await SProductionPlanDetail.destroy({ where: { plan_id: id }, transaction: t });
+  
+      // 3. Capacity results (hard-delete sesuai strategi 4D — ini data kalkulasi)
+      await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
+  
+      // 4. Adjustments (soft-delete sesuai strategi 4D — ini log audit keputusan bisnis)
+      const adjustments = await SProductionPlanAdjustment.findAll({
+        where: { plan_id: id }, transaction: t,
+      });
+      await Promise.all(adjustments.map((adj) => adj.destroy({ transaction: t })));
+  
+      // 5. Capacity params
+      await SProductionPlanCapacityParam.destroy({ where: { plan_id: id }, transaction: t });
+  
+      // 6. DO references
+      await SProductionPlanDoReference.destroy({ where: { plan_id: id }, transaction: t });
+  
+      // 7. Terakhir: soft-delete plan header
       const oldData = plan.toJSON();
       await plan.destroy({ transaction: t });
-
+  
       await this.logActivity(req, {
         moduleCode:   "production-plan",
         activityCode: "DELETE",
@@ -1916,7 +1969,7 @@ class PlanModule extends BaseModule {
         description:  `Deleted Production Plan ${plan.plan_number}`,
         transaction:  t,
       });
-
+  
       await t.commit();
       return helper.sendResponse(res, { status: true, code: 200, message: "Production Plan deleted" });
     } catch (error) {
@@ -1926,9 +1979,7 @@ class PlanModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
   // GET DROPDOWN
-  // ─────────────────────────────────────────────────────────────
   async getDropdown(req, res) {
     try {
       const plans = await SProductionPlan.findAll({

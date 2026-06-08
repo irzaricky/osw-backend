@@ -49,15 +49,19 @@ const DETAIL_SCHEMA = Joi.object({
   child_bom_id:     Joi.number().integer().optional().allow(null),
 });
 
-async function generateBomNumber(part_id) {
-  const part = await SParts.findByPk(part_id);
+async function generateBomNumber(part_id, transaction) {
+  const part = await SParts.findByPk(part_id, { transaction });
   if (!part) throw new Error('Parent part not found for BOM number generation');
 
   const prefix = `BOM-${part.part_number}`;
+
+  // Gunakan transaksi yang sama + LOCK FOR UPDATE untuk hindari race condition
   const lastBom = await SBoms.findOne({
     where: { bom_number: { [Op.iLike]: `${prefix}-%` } },
     order: [['created_at', 'DESC']],
     paranoid: false,
+    transaction,
+    lock: true, // ← kunci baris ini selama transaksi
   });
 
   let sequence = 1;
@@ -67,6 +71,24 @@ async function generateBomNumber(part_id) {
   }
 
   return `${prefix}-${String(sequence).padStart(3, '0')}`;
+}
+
+async function detectCircularBom(startBomId, targetBomId, visited = new Set(), transaction) {
+  if (visited.has(startBomId)) return false; // sudah diproses, bukan siklus baru
+  visited.add(startBomId);
+
+  const details = await SBomDetails.findAll({
+    where: { bom_id: startBomId, deleted_at: null, child_bom_id: { [Op.ne]: null } },
+    attributes: ['child_bom_id'],
+    transaction,
+  });
+
+  for (const d of details) {
+    if (d.child_bom_id === targetBomId) return true; // siklus ditemukan
+    const hasCircle = await detectCircularBom(d.child_bom_id, targetBomId, visited, transaction);
+    if (hasCircle) return true;
+  }
+  return false;
 }
 
 /**
@@ -116,10 +138,34 @@ async function validateDetails(details, bomId, parentPartId, transaction) {
           error: `child_bom_id ${d.child_bom_id} does not belong to part_id ${d.part_id}. child_bom must be a BOM whose parent_part matches this component.`,
         };
       }
+
+      const isCircular = await detectCircularBom(d.child_bom_id, Number(bomId), new Set(), transaction);
+      if (isCircular) {
+        return { ok: false, error: `child_bom_id ${d.child_bom_id} creates a circular BOM dependency chain` };
+      }
     }
   }
 
   return { ok: true };
+}
+
+// Letakkan di luar class, di-resolve saat pertama kali dibutuhkan (lazy singleton)
+let _statusCache = null;
+
+async function getStatusIds() {
+  if (_statusCache) return _statusCache;
+
+  const [docStatuses, activationStatuses] = await Promise.all([
+    RefBomDocumentStatus.findAll({ attributes: ['id', 'code'] }),
+    RefBomActivationStatus.findAll({ attributes: ['id', 'code'] }),
+  ]);
+
+  _statusCache = {
+    doc: Object.fromEntries(docStatuses.map((s) => [s.code, s.id])),
+    activation: Object.fromEntries(activationStatuses.map((s) => [s.code, s.id])),
+  };
+
+  return _statusCache;
 }
 
 // ─── Module ──────────────────────────────────────────────────────────────────
@@ -239,8 +285,11 @@ class BomModule extends BaseModule {
             where: { deleted_at: null },
             required: false,
             include: BOM_DETAIL_INCLUDE,
-            order: [['sequence', 'ASC'], ['level', 'ASC']],
           },
+        ],
+        order: [
+          [{ model: SBomDetails, as: 'details' }, 'sequence', 'ASC'],
+          [{ model: SBomDetails, as: 'details' }, 'level', 'ASC'],
         ],
       });
 
@@ -284,7 +333,7 @@ class BomModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 400, error: 'Parent part not found' });
       }
 
-      const bom_number = await generateBomNumber(parent_part_id);
+      const bom_number = await generateBomNumber(parent_part_id, t);
 
       const draftStatus = await RefBomDocumentStatus.findOne({
         where: { code: 'DRAFT', deleted_at: null },
@@ -694,7 +743,7 @@ class BomModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, error: 'Detail not found' });
       }
 
-      await detail.destroy({ transaction: t });
+      await detail.destroy({ transaction: t, force: true });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'UPDATE',
@@ -793,16 +842,21 @@ class BomModule extends BaseModule {
         });
       }
 
-      const pendingStatus = await RefBomDocumentStatus.findOne({
-        where: { code: 'PENDING_APPROVAL', deleted_at: null }, transaction: t,
-      });
-      if (!pendingStatus) {
+      // const pendingStatus = await RefBomDocumentStatus.findOne({
+      //   where: { code: 'PENDING_APPROVAL', deleted_at: null }, transaction: t,
+      // });
+      // if (!pendingStatus) {
+      //   await t.rollback();
+      //   return helper.sendResponse(res, { status: false, code: 500, error: 'Document status PENDING_APPROVAL not configured' });
+      // }
+      const statusIds = await getStatusIds();
+      if (!statusIds.doc['PENDING_APPROVAL']) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 500, error: 'Document status PENDING_APPROVAL not configured' });
       }
 
       const oldData = bom.toJSON();
-      await bom.update({ doc_status_id: pendingStatus.id, reject_reason: null }, { transaction: t });
+      await bom.update({ doc_status_id: statusIds.doc['PENDING_APPROVAL'], reject_reason: null }, { transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'SUBMIT',
@@ -1077,13 +1131,23 @@ class BomModule extends BaseModule {
 
       const newBomNumber = await generateBomNumber(bom.parent_part_id);
 
+      // Cari versi tertinggi yang pernah ada untuk parent part ini (termasuk soft-deleted)
+      const maxVersionBom = await SBoms.findOne({
+        where: { parent_part_id: bom.parent_part_id },
+        order: [['bom_version', 'DESC']],
+        paranoid: false,
+        transaction: t,
+      });
+
+      const nextVersion = (maxVersionBom?.bom_version ?? 0) + 1;
+
       const newBom = await SBoms.create({
         bom_number:     newBomNumber,
         description:    bom.description,
         parent_part_id: bom.parent_part_id,
         uom_id:         bom.uom_id,
         notes:          bom.notes,
-        bom_version:    bom.bom_version + 1,
+        bom_version:    nextVersion,
         doc_status_id:  draftStatus?.id ?? null,
         created_by:     req.user?.id ?? null,
       }, { transaction: t });

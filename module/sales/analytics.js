@@ -12,7 +12,7 @@ const {
   SDeliveryPlans, SDeliveryPlanDetails,
   SSalesForecasts, SSalesForecastDetails,
   SDocks, SWarehouses, SCustomers, SVehicles, SUserDetail,
-  SParts, SSalesPurchaseRequests, SSalesPurchaseRequestLogs
+  SParts, SSalesPurchaseRequests, SSalesPurchaseRequestDetails, SSalesPurchaseRequestLogs
 } = db;
 
 class AnalyticsModule extends BaseModule {
@@ -275,11 +275,695 @@ class AnalyticsModule extends BaseModule {
     }
   }
 
-  /**
-   * GET /sales/analytics/export
-   * Generates a beautifully styled Excel report containing delivery details
-   */
-  async exportSDODetails(req, res) {
+  async exportForecastDetails(req, res) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
+        : dayjs().format('YYYY-MM-DD');
+
+      const details = await SSalesForecastDetails.findAll({
+        where: {
+          period_date: {
+            [Op.between]: [startDateStr, endDateStr]
+          }
+        },
+        include: [
+          {
+            model: SSalesForecasts,
+            as: 'forecast',
+            include: [
+              { model: SCustomers, as: 'customer', attributes: ['name'] }
+            ]
+          },
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['part_name', 'part_number']
+          }
+        ],
+        order: [['period_date', 'ASC'], ['forecast_id', 'DESC']]
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Forecast Details');
+      worksheet.views = [{ showGridLines: true }];
+
+      // 1. Report Title Blocks
+      worksheet.mergeCells('A1:G1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = 'Sales Forecast Details Report';
+      titleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: '312E81' } };
+      titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      worksheet.getRow(1).height = 30;
+
+      worksheet.mergeCells('A2:G2');
+      const dateCell = worksheet.getCell('A2');
+      dateCell.value = `Period Date Range: ${startDateStr} to ${endDateStr}`;
+      dateCell.font = { name: 'Arial', size: 10, italic: true };
+      dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.mergeCells('A3:G3');
+      const genCell = worksheet.getCell('A3');
+      genCell.value = `Generated Date: ${dayjs().format('DD/MM/YYYY HH:mm:ss')} WIB`;
+      genCell.font = { name: 'Arial', size: 9, color: { argb: '4B5563' } };
+      genCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.getRow(4).height = 15;
+
+      const headerRow = worksheet.getRow(5);
+      headerRow.height = 25;
+
+      const columns = [
+        { header: 'Forecast No', key: 'forecast_number', width: 22 },
+        { header: 'Customer', key: 'customer_name', width: 25 },
+        { header: 'Part Name', key: 'part_name', width: 25 },
+        { header: 'Part No', key: 'part_number', width: 20 },
+        { header: 'Period Date', key: 'period_date', width: 18 },
+        { header: 'Forecast Qty', key: 'forecast_qty', width: 15 },
+        { header: 'Qty Status', key: 'qty_status', width: 15 }
+      ];
+
+      worksheet.columns = columns;
+
+      columns.forEach((col, index) => {
+        headerRow.getCell(index + 1).value = col.header;
+      });
+
+      for (let col = 1; col <= 7; col++) {
+        const cell = headerRow.getCell(col);
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: '312E81' }
+        };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: '9CA3AF' } },
+          bottom: { style: 'medium', color: { argb: '1E1B4B' } },
+          left: { style: 'thin', color: { argb: '9CA3AF' } },
+          right: { style: 'thin', color: { argb: '9CA3AF' } }
+        };
+      }
+
+      for (const d of details) {
+        const rowData = {
+          forecast_number: d.forecast?.forecast_number || '-',
+          customer_name: d.forecast?.customer?.name || '-',
+          part_name: d.part?.part_name || '-',
+          part_number: d.part?.part_number || '-',
+          period_date: d.period_date ? dayjs(d.period_date).format('DD/MM/YYYY') : '-',
+          forecast_qty: d.forecast_qty || 0,
+          qty_status: d.qty_status || 'Temporary'
+        };
+
+        const row = worksheet.addRow(rowData);
+        row.height = 20;
+
+        for (let col = 1; col <= 7; col++) {
+          const cell = row.getCell(col);
+          cell.font = { name: 'Arial', size: 9 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'E5E7EB' } },
+            bottom: { style: 'thin', color: { argb: 'E5E7EB' } },
+            left: { style: 'thin', color: { argb: 'E5E7EB' } },
+            right: { style: 'thin', color: { argb: 'E5E7EB' } }
+          };
+
+          if ([1, 4, 5, 7].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          } else if ([2, 3].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          } else {
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+
+          if (col === 6) {
+            cell.numFmt = '#,##0';
+          }
+        }
+
+        const statusCell = row.getCell(7);
+        const status = d.qty_status || 'Temporary';
+        let statusColors = { bg: 'FEF3C7', fg: '92400E' }; // Temporary
+        if (status === 'Fix') {
+          statusColors = { bg: 'D1FAE5', fg: '065F46' };
+        }
+
+        statusCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: statusColors.bg }
+        };
+        statusCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: statusColors.fg } };
+      }
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=Forecast_Analytics_Report_${startDateStr}_${endDateStr}.xlsx`);
+
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error('Forecast Excel Export Error:', error);
+      res.status(500).json({ status: false, error: error.message });
+    }
+  }
+
+  async exportSprDetails(req, res) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
+        : dayjs().format('YYYY-MM-DD');
+
+      const details = await SSalesPurchaseRequestDetails.findAll({
+        include: [
+          {
+            model: SSalesPurchaseRequests,
+            as: 'spr',
+            where: {
+              request_date: {
+                [Op.between]: [startDateStr, endDateStr]
+              }
+            },
+            include: [
+              {
+                model: SSalesForecasts,
+                as: 'forecast',
+                include: [{ model: SCustomers, as: 'customer', attributes: ['name'] }]
+              }
+            ]
+          },
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['part_name', 'part_number', 'price']
+          }
+        ],
+        order: [[{ model: SSalesPurchaseRequests, as: 'spr' }, 'request_date', 'ASC'], ['spr_id', 'DESC']]
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('SPR Details');
+      worksheet.views = [{ showGridLines: true }];
+
+      // 1. Report Title Blocks
+      worksheet.mergeCells('A1:I1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = 'Sales Purchase Request Details Report';
+      titleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: '312E81' } };
+      titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      worksheet.getRow(1).height = 30;
+
+      worksheet.mergeCells('A2:I2');
+      const dateCell = worksheet.getCell('A2');
+      dateCell.value = `Request Date Range: ${startDateStr} to ${endDateStr}`;
+      dateCell.font = { name: 'Arial', size: 10, italic: true };
+      dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.mergeCells('A3:I3');
+      const genCell = worksheet.getCell('A3');
+      genCell.value = `Generated Date: ${dayjs().format('DD/MM/YYYY HH:mm:ss')} WIB`;
+      genCell.font = { name: 'Arial', size: 9, color: { argb: '4B5563' } };
+      genCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.getRow(4).height = 15;
+
+      const headerRow = worksheet.getRow(5);
+      headerRow.height = 25;
+
+      const columns = [
+        { header: 'SPR No', key: 'spr_number', width: 22 },
+        { header: 'Customer', key: 'customer_name', width: 25 },
+        { header: 'Date', key: 'request_date', width: 18 },
+        { header: 'Status', key: 'status', width: 15 },
+        { header: 'Part Name', key: 'part_name', width: 25 },
+        { header: 'Part No', key: 'part_number', width: 20 },
+        { header: 'Qty', key: 'qty', width: 15 },
+        { header: 'Unit Price', key: 'unit_price', width: 18 },
+        { header: 'Total Price', key: 'total_price', width: 18 }
+      ];
+
+      worksheet.columns = columns;
+
+      columns.forEach((col, index) => {
+        headerRow.getCell(index + 1).value = col.header;
+      });
+
+      for (let col = 1; col <= 9; col++) {
+        const cell = headerRow.getCell(col);
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: '312E81' }
+        };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: '9CA3AF' } },
+          bottom: { style: 'medium', color: { argb: '1E1B4B' } },
+          left: { style: 'thin', color: { argb: '9CA3AF' } },
+          right: { style: 'thin', color: { argb: '9CA3AF' } }
+        };
+      }
+
+      for (const d of details) {
+        const unitPrice = parseFloat(d.part?.price || 0);
+        const totalPrice = (d.qty || 0) * unitPrice;
+
+        const rowData = {
+          spr_number: d.spr?.spr_number || '-',
+          customer_name: d.spr?.forecast?.customer?.name || '-',
+          request_date: d.spr?.request_date ? dayjs(d.spr.request_date).format('DD/MM/YYYY') : '-',
+          status: d.spr?.status || 'Draft',
+          part_name: d.part?.part_name || '-',
+          part_number: d.part?.part_number || '-',
+          qty: d.qty || 0,
+          unit_price: unitPrice,
+          total_price: totalPrice
+        };
+
+        const row = worksheet.addRow(rowData);
+        row.height = 20;
+
+        for (let col = 1; col <= 9; col++) {
+          const cell = row.getCell(col);
+          cell.font = { name: 'Arial', size: 9 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'E5E7EB' } },
+            bottom: { style: 'thin', color: { argb: 'E5E7EB' } },
+            left: { style: 'thin', color: { argb: 'E5E7EB' } },
+            right: { style: 'thin', color: { argb: 'E5E7EB' } }
+          };
+
+          if ([1, 3, 4, 6].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          } else if ([2, 5].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          } else {
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+
+          if (col === 7) {
+            cell.numFmt = '#,##0';
+          }
+          if ([8, 9].includes(col)) {
+            cell.numFmt = '#,##0.00';
+          }
+        }
+
+        const statusCell = row.getCell(4);
+        const status = d.spr?.status || 'Draft';
+        let statusColors = { bg: 'F3F4F6', fg: '374151' }; // Draft
+        if (status === 'Approved') {
+          statusColors = { bg: 'D1FAE5', fg: '065F46' };
+        } else if (status === 'Submitted') {
+          statusColors = { bg: 'DBEAFE', fg: '1E40AF' };
+        } else if (status === 'Rejected') {
+          statusColors = { bg: 'FEE2E2', fg: '991B1B' };
+        }
+
+        statusCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: statusColors.bg }
+        };
+        statusCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: statusColors.fg } };
+      }
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=SPR_Analytics_Report_${startDateStr}_${endDateStr}.xlsx`);
+
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error('SPR Excel Export Error:', error);
+      res.status(500).json({ status: false, error: error.message });
+    }
+  }
+
+  async exportSpoDetails(req, res) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
+        : dayjs().format('YYYY-MM-DD');
+
+      const details = await SSalesPurchaseOrderDetails.findAll({
+        include: [
+          {
+            model: SSalesPurchaseOrders,
+            as: 'order',
+            where: {
+              spo_date: {
+                [Op.between]: [startDateStr, endDateStr]
+              }
+            },
+            include: [
+              { model: SCustomers, as: 'customer', attributes: ['name'] },
+              { model: SSalesPurchaseRequests, as: 'spr', attributes: ['spr_number'] }
+            ]
+          },
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['part_name', 'part_number']
+          }
+        ],
+        order: [[{ model: SSalesPurchaseOrders, as: 'order' }, 'spo_date', 'ASC'], ['spo_id', 'DESC']]
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('SPO Details');
+      worksheet.views = [{ showGridLines: true }];
+
+      // 1. Report Title Blocks
+      worksheet.mergeCells('A1:J1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = 'Sales Purchase Order Details Report';
+      titleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: '312E81' } };
+      titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      worksheet.getRow(1).height = 30;
+
+      worksheet.mergeCells('A2:J2');
+      const dateCell = worksheet.getCell('A2');
+      dateCell.value = `SPO Date Range: ${startDateStr} to ${endDateStr}`;
+      dateCell.font = { name: 'Arial', size: 10, italic: true };
+      dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.mergeCells('A3:J3');
+      const genCell = worksheet.getCell('A3');
+      genCell.value = `Generated Date: ${dayjs().format('DD/MM/YYYY HH:mm:ss')} WIB`;
+      genCell.font = { name: 'Arial', size: 9, color: { argb: '4B5563' } };
+      genCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.getRow(4).height = 15;
+
+      const headerRow = worksheet.getRow(5);
+      headerRow.height = 25;
+
+      const columns = [
+        { header: 'SPO No', key: 'spo_number', width: 22 },
+        { header: 'SPR Ref', key: 'spr_ref', width: 22 },
+        { header: 'Customer', key: 'customer_name', width: 25 },
+        { header: 'PO Date', key: 'spo_date', width: 18 },
+        { header: 'Status', key: 'status', width: 15 },
+        { header: 'Part Name', key: 'part_name', width: 25 },
+        { header: 'Part No', key: 'part_number', width: 20 },
+        { header: 'Ordered Qty', key: 'ordered_qty', width: 15 },
+        { header: 'Sent Qty', key: 'sent_qty', width: 15 },
+        { header: 'Outstanding Qty', key: 'outstanding_qty', width: 18 }
+      ];
+
+      worksheet.columns = columns;
+
+      columns.forEach((col, index) => {
+        headerRow.getCell(index + 1).value = col.header;
+      });
+
+      for (let col = 1; col <= 10; col++) {
+        const cell = headerRow.getCell(col);
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: '312E81' }
+        };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: '9CA3AF' } },
+          bottom: { style: 'medium', color: { argb: '1E1B4B' } },
+          left: { style: 'thin', color: { argb: '9CA3AF' } },
+          right: { style: 'thin', color: { argb: '9CA3AF' } }
+        };
+      }
+
+      for (const d of details) {
+        const ordered = d.ordered_qty || 0;
+        const sent = d.sent_qty || 0;
+        const outstanding = Math.max(0, ordered - sent);
+
+        const rowData = {
+          spo_number: d.order?.spo_number || '-',
+          spr_ref: d.order?.spr?.spr_number || '-',
+          customer_name: d.order?.customer?.name || '-',
+          spo_date: d.order?.spo_date ? dayjs(d.order.spo_date).format('DD/MM/YYYY') : '-',
+          status: d.order?.status || 'Draft',
+          part_name: d.part?.part_name || '-',
+          part_number: d.part?.part_number || '-',
+          ordered_qty: ordered,
+          sent_qty: sent,
+          outstanding_qty: outstanding
+        };
+
+        const row = worksheet.addRow(rowData);
+        row.height = 20;
+
+        for (let col = 1; col <= 10; col++) {
+          const cell = row.getCell(col);
+          cell.font = { name: 'Arial', size: 9 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'E5E7EB' } },
+            bottom: { style: 'thin', color: { argb: 'E5E7EB' } },
+            left: { style: 'thin', color: { argb: 'E5E7EB' } },
+            right: { style: 'thin', color: { argb: 'E5E7EB' } }
+          };
+
+          if ([1, 2, 4, 5, 7].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          } else if ([3, 6].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          } else {
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+
+          if ([8, 9, 10].includes(col)) {
+            cell.numFmt = '#,##0';
+          }
+        }
+
+        const statusCell = row.getCell(5);
+        const status = d.order?.status || 'Draft';
+        let statusColors = { bg: 'F3F4F6', fg: '374151' }; // Draft
+        if (status === 'Completed') {
+          statusColors = { bg: 'D1FAE5', fg: '065F46' };
+        } else if (status === 'Processing') {
+          statusColors = { bg: 'DBEAFE', fg: '1E40AF' };
+        } else if (status === 'Submitted' || status === 'Locked') {
+          statusColors = { bg: 'FEF3C7', fg: '92400E' };
+        } else if (status === 'Rejected') {
+          statusColors = { bg: 'FEE2E2', fg: '991B1B' };
+        }
+
+        statusCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: statusColors.bg }
+        };
+        statusCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: statusColors.fg } };
+      }
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=SPO_Analytics_Report_${startDateStr}_${endDateStr}.xlsx`);
+
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error('SPO Excel Export Error:', error);
+      res.status(500).json({ status: false, error: error.message });
+    }
+  }
+
+  async exportSdpDetails(req, res) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      const startDateStr = start_date
+        ? dayjs(start_date).format('YYYY-MM-DD')
+        : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+      const endDateStr = end_date
+        ? dayjs(end_date).format('YYYY-MM-DD')
+        : dayjs().format('YYYY-MM-DD');
+
+      const details = await SDeliveryPlanDetails.findAll({
+        include: [
+          {
+            model: SDeliveryPlans,
+            as: 'deliveryPlan',
+            where: {
+              scheduled_date: {
+                [Op.between]: [startDateStr, endDateStr]
+              }
+            },
+            include: [
+              { model: SDocks, as: 'dock', attributes: ['name'] },
+              {
+                model: SDeliveryOrders,
+                as: 'deliveryOrders',
+                include: [{ model: SVehicles, as: 'vehicle', attributes: ['plate_number'] }]
+              }
+            ]
+          },
+          {
+            model: SSalesPurchaseOrderDetails,
+            as: 'spoDetail',
+            include: [{ model: SParts, as: 'part', attributes: ['part_name'] }]
+          }
+        ],
+        order: [[{ model: SDeliveryPlans, as: 'deliveryPlan' }, 'scheduled_date', 'ASC'], ['delivery_plan_id', 'DESC']]
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('SDP Details');
+      worksheet.views = [{ showGridLines: true }];
+
+      // 1. Report Title Blocks
+      worksheet.mergeCells('A1:I1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = 'Sales Delivery Plan Details Report';
+      titleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: '312E81' } };
+      titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      worksheet.getRow(1).height = 30;
+
+      worksheet.mergeCells('A2:I2');
+      const dateCell = worksheet.getCell('A2');
+      dateCell.value = `Scheduled Date Range: ${startDateStr} to ${endDateStr}`;
+      dateCell.font = { name: 'Arial', size: 10, italic: true };
+      dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.mergeCells('A3:I3');
+      const genCell = worksheet.getCell('A3');
+      genCell.value = `Generated Date: ${dayjs().format('DD/MM/YYYY HH:mm:ss')} WIB`;
+      genCell.font = { name: 'Arial', size: 9, color: { argb: '4B5563' } };
+      genCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      worksheet.getRow(4).height = 15;
+
+      const headerRow = worksheet.getRow(5);
+      headerRow.height = 25;
+
+      const columns = [
+        { header: 'DP Number', key: 'dp_number', width: 22 },
+        { header: 'Scheduled Date', key: 'scheduled_date', width: 18 },
+        { header: 'Time Start', key: 'time_start', width: 15 },
+        { header: 'Time End', key: 'time_end', width: 15 },
+        { header: 'Dock Name', key: 'dock_name', width: 18 },
+        { header: 'Vehicle Plate', key: 'vehicle_plate', width: 18 },
+        { header: 'Status', key: 'status', width: 15 },
+        { header: 'Part Name', key: 'part_name', width: 25 },
+        { header: 'Planned Qty', key: 'planned_qty', width: 15 }
+      ];
+
+      worksheet.columns = columns;
+
+      columns.forEach((col, index) => {
+        headerRow.getCell(index + 1).value = col.header;
+      });
+
+      for (let col = 1; col <= 9; col++) {
+        const cell = headerRow.getCell(col);
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: '312E81' }
+        };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: '9CA3AF' } },
+          bottom: { style: 'medium', color: { argb: '1E1B4B' } },
+          left: { style: 'thin', color: { argb: '9CA3AF' } },
+          right: { style: 'thin', color: { argb: '9CA3AF' } }
+        };
+      }
+
+      for (const d of details) {
+        const plates = d.deliveryPlan?.deliveryOrders
+          ? d.deliveryPlan.deliveryOrders.map(o => o.vehicle?.plate_number).filter(Boolean).join(', ')
+          : '';
+
+        const rowData = {
+          dp_number: d.deliveryPlan?.dp_number || '-',
+          scheduled_date: d.deliveryPlan?.scheduled_date ? dayjs(d.deliveryPlan.scheduled_date).format('DD/MM/YYYY') : '-',
+          time_start: d.deliveryPlan?.time_start || '-',
+          time_end: d.deliveryPlan?.time_end || '-',
+          dock_name: d.deliveryPlan?.dock?.name || '-',
+          vehicle_plate: plates || '-',
+          status: d.deliveryPlan?.status || 'Draft',
+          part_name: d.spoDetail?.part?.part_name || '-',
+          planned_qty: d.planned_qty || 0
+        };
+
+        const row = worksheet.addRow(rowData);
+        row.height = 20;
+
+        for (let col = 1; col <= 9; col++) {
+          const cell = row.getCell(col);
+          cell.font = { name: 'Arial', size: 9 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'E5E7EB' } },
+            bottom: { style: 'thin', color: { argb: 'E5E7EB' } },
+            left: { style: 'thin', color: { argb: 'E5E7EB' } },
+            right: { style: 'thin', color: { argb: 'E5E7EB' } }
+          };
+
+          if ([1, 2, 3, 4, 5, 6, 7].includes(col)) {
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          } else if (col === 8) {
+            cell.alignment = { vertical: 'middle', horizontal: 'left' };
+          } else {
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+
+          if (col === 9) {
+            cell.numFmt = '#,##0';
+          }
+        }
+
+        const statusCell = row.getCell(7);
+        const status = d.deliveryPlan?.status || 'Draft';
+        let statusColors = { bg: 'F3F4F6', fg: '374151' }; // Draft
+        if (status === 'Scheduled') {
+          statusColors = { bg: 'DBEAFE', fg: '1E40AF' };
+        } else if (status === 'Loading') {
+          statusColors = { bg: 'FEF3C7', fg: '92400E' };
+        } else if (status === 'Dispatched') {
+          statusColors = { bg: 'D1FAE5', fg: '065F46' };
+        }
+
+        statusCell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: statusColors.bg }
+        };
+        statusCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: statusColors.fg } };
+      }
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=SDP_Analytics_Report_${startDateStr}_${endDateStr}.xlsx`);
+
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error('SDP Excel Export Error:', error);
+      res.status(500).json({ status: false, error: error.message });
+    }
+  }
+
+  async exportSdoDetails(req, res) {
     try {
       const { start_date, end_date } = req.query;
 
@@ -375,7 +1059,6 @@ class AnalyticsModule extends BaseModule {
       }
 
       // 3. Populate Rows
-      let currentRowIdx = 6;
       for (const sdo of sdos) {
         let totalSent = 0;
         let totalReceived = 0;
@@ -464,8 +1147,6 @@ class AnalyticsModule extends BaseModule {
           fgColor: { argb: statusColors.bg }
         };
         statusCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: statusColors.fg } };
-
-        currentRowIdx++;
       }
 
       // 4. Send Response Binary Stream
@@ -475,7 +1156,7 @@ class AnalyticsModule extends BaseModule {
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
-      console.error('Excel Export Error:', error);
+      console.error('SDO Excel Export Error:', error);
       res.status(500).json({ status: false, error: error.message });
     }
   }

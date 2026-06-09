@@ -15,9 +15,29 @@ router.get('/trends', session.sessionChecker, session.permissionChecker(['Supera
   return helper.sendResponse(res, await analytics.getTrends(req));
 });
 
-// GET /sales/analytics/export
-router.get('/export', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
-  return analytics.exportSDODetails(req, res);
+// GET /sales/analytics/forecast-export
+router.get('/forecast-export', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return analytics.exportForecastDetails(req, res);
+});
+
+// GET /sales/analytics/spr-export
+router.get('/spr-export', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return analytics.exportSprDetails(req, res);
+});
+
+// GET /sales/analytics/spo-export
+router.get('/spo-export', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return analytics.exportSpoDetails(req, res);
+});
+
+// GET /sales/analytics/sdp-export
+router.get('/sdp-export', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return analytics.exportSdpDetails(req, res);
+});
+
+// GET /sales/analytics/sdo-export
+router.get('/sdo-export', session.sessionChecker, session.permissionChecker(['Superadmin', 'Supervisor Sales']), async (req, res) => {
+  return analytics.exportSdoDetails(req, res);
 });
 
 // GET /sales/analytics/sla

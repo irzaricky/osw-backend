@@ -35,6 +35,18 @@ const {
 } = db;
 
 class MaterialReceivingModule extends BaseModule {
+  formatStatus(status) {
+    if (!status) {
+      return null;
+    }
+
+    return status
+      .replace(/_/g, ' ')
+      .split(' ')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  }
+
   async list(req) {
     try{
       const params = req.query;
@@ -81,7 +93,7 @@ class MaterialReceivingModule extends BaseModule {
       }
 
       if (status === 'in transit') {
-        where.status = 'in transit';
+        where.status = 'in_transit';
 
         where['$material_receiving.id$'] = {
           [Op.is]: null
@@ -136,7 +148,7 @@ class MaterialReceivingModule extends BaseModule {
           ...where,
           [Op.or]: [
             {
-              status: 'in transit'
+              status: 'in_transit'
             },
             {
               '$material_receiving.id$': {
@@ -166,7 +178,7 @@ class MaterialReceivingModule extends BaseModule {
           dock: item.dock?.name || null,
           transporter: item.transporter,
           arrived_at: materialReceiving?.received_at || null,
-          status: materialReceiving?.status?.name || item.status.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+          status: materialReceiving?.status?.name || this.formatStatus(item.status)
         };
       });
 
@@ -277,7 +289,7 @@ class MaterialReceivingModule extends BaseModule {
         target_date: materialDeliveryOrder.target_date,
         arrived_at: mr?.received_at || null,
         remarks: mr?.remarks || null,
-        status: mr?.status?.name || materialDeliveryOrder.status.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+        status: mr?.status?.name || this.formatStatus(materialDeliveryOrder.status),
         items: materialDeliveryOrder.mdo_details.map(
           (item) => ({
             id: item.id,
@@ -358,7 +370,7 @@ class MaterialReceivingModule extends BaseModule {
         };
       }
 
-      if (materialDeliveryOrder.status !== 'in transit') {
+      if (materialDeliveryOrder.status !== 'in_transit') {
         await t.rollback();
         return {
           status: false,
@@ -633,7 +645,7 @@ class MaterialReceivingModule extends BaseModule {
       const mappedData = {
         id: materialDeliveryOrder.id,
         number: materialDeliveryOrder.number,
-        status: mr?.status?.name || materialDeliveryOrder.status.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+        status: mr?.status?.name || this.formatStatus(materialDeliveryOrder.status),
         target_date: materialDeliveryOrder.target_date,
         arrived_at: mr?.received_at || null,
         warehouse: materialDeliveryOrder.mpo?.warehouse?.name || null,

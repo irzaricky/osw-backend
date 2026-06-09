@@ -48,12 +48,12 @@ if (config.debug) {
 	app.use(loggerMorgan('dev'));
 }
 
-app.use(express.json({ limit : '100mb'}));
+app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(fileUpload({
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-    abortOnLimit: true,
-    createParentPath: true
+	limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+	abortOnLimit: true,
+	createParentPath: true
 }));
 app.use(cookieParser());
 app.use('/', express.static(path.join(__dirname, 'public')));
@@ -61,8 +61,8 @@ app.disable('x-powered-by');
 
 // ensure req.body is always an object
 app.use((req, res, next) => {
-    req.body = req.body || {};
-    next();
+	req.body = req.body || {};
+	next();
 });
 
 
@@ -121,14 +121,14 @@ app.use(function (req, res, next) {
 
 //https://stackoverflow.com/questions/7067966/how-to-allow-cors
 app.use((req, res, next) => {
-    const allowedOrigin = config.site.frontendUrl;
-    const origin = req.headers.origin;
+	const allowedOrigin = config.site.frontendUrl;
+	const origin = req.headers.origin;
 
-    if (origin === allowedOrigin) {
-        res.header("Access-Control-Allow-Origin", origin);
-    }
-    
-    res.header("Access-Control-Allow-Credentials", "true");
+	if (origin === allowedOrigin) {
+		res.header("Access-Control-Allow-Origin", origin);
+	}
+
+	res.header("Access-Control-Allow-Credentials", "true");
 	res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
 
 	if (req.method === 'OPTIONS') {
@@ -145,8 +145,8 @@ const routers = helper.getAllRouters(__routes_dir);
 for (const mainRoute in routers) {
 	for (const subRoute in routers[mainRoute]) {
 		const routePath = routers[mainRoute][subRoute];
-        // Dynamic import for ESM
-        const routeModule = await import(pathToFileURL(routePath).href);
+		// Dynamic import for ESM
+		const routeModule = await import(pathToFileURL(routePath).href);
 		app.use(`${mainRoute === '/' ? '' : mainRoute}/${subRoute}`, routeModule.default || routeModule);
 	}
 }

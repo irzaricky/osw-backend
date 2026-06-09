@@ -80,17 +80,25 @@ class SPOModule extends BaseModule {
   async list(req) {
     try {
       const params = req.query;
-      const { start_date, end_date, status, search } = params;
+      const { start_date, end_date, status, search, customer_id } = params;
       const { limit, page, offset } = helper.getPagination(params);
 
       const where = {};
 
       if (start_date && end_date) {
         where.spo_date = { [Op.between]: [start_date, end_date] };
+      } else if (start_date) {
+        where.spo_date = { [Op.gte]: start_date };
+      } else if (end_date) {
+        where.spo_date = { [Op.lte]: end_date };
       }
 
       if (status) {
         where.status = status;
+      }
+
+      if (customer_id) {
+        where.customer_id = customer_id;
       }
 
       if (search) {

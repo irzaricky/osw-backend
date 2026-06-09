@@ -6,7 +6,6 @@ export default (sequelize) => {
       SLines.belongsTo(models.SFactories, { foreignKey: 'factory_id', as: 'factory' });
       SLines.hasMany(models.SStations, { foreignKey: 'line_id', as: 'stations' });
       SLines.hasMany(models.SLineCapacityParam, { foreignKey: 'line_id', as: 'capacity_param' });
-      SLines.hasMany(models.SEmployeeGroup,    { foreignKey: 'line_id', as: 'employee_groups' });
       SLines.hasMany(models.SPartRoutings, { foreignKey: 'line_id', as: 'part_routings' });
     }
   }
@@ -29,6 +28,11 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true
     }
   }, {
     sequelize,

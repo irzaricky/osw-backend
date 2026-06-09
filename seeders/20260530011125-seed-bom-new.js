@@ -165,8 +165,8 @@ export default {
         notes: `Seeder otomatis produksi untuk item tipe ${parentCode}`,
         bom_version: 1,
         uom_id: parentData.uom_id,
-        doc_status_id: 3,         // APPROVED (Sesuai id master data Anda)
-        activation_status_id: 2,  // ACTIVE (Sesuai id master data Anda)
+        doc_status:        'Approved',
+        activation_status: 'Active',
         reject_reason: null,
         created_by: 1,            // Diarahkan ke user id administrator 1
         approved_by: 1,           // Disetujui oleh user id 1

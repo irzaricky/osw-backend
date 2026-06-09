@@ -17,14 +17,6 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
-    total_stations: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
-    total_jobs: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
     max_takt_time: {
       type: DataTypes.INTEGER
     },
@@ -52,10 +44,6 @@ export default (sequelize) => {
     calculated_at: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
-    },
-    calculation_version: {
-      type: DataTypes.INTEGER,
-      defaultValue: 1
     },
     total_capacity_units: {
       type: DataTypes.INTEGER,

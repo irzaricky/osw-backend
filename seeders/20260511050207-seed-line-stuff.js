@@ -202,18 +202,6 @@ export default {
 
     await queryInterface.bulkInsert('s_station_jobs', newStationJobs, { ignoreDuplicates: true });
 
-    // ── 4. Positions ──────────────────────────────────────────────────────────
-
-    await queryInterface.bulkInsert('s_employee_positions', [
-      { name: 'Group Leader',  description: 'Leads and coordinates group members',         ...ts },
-      { name: 'Operator',      description: 'Runs production process at workstations',     ...ts },
-      { name: 'Quality Check', description: 'Inspects production output quality',          ...ts },
-      { name: 'Technician',    description: 'Maintains and repairs production machinery',  ...ts },
-    ], { ignoreDuplicates: true });
-
-    const positions = await q(`SELECT id, name FROM s_employee_positions`);
-    const posMap = Object.fromEntries(positions.map((p) => [p.name, p.id]));
-
     // ── 5. FOREMAN role & users ───────────────────────────────────────────────
 
     await queryInterface.bulkInsert('s_roles', [
@@ -251,33 +239,11 @@ export default {
     const foremanRows = await q(`SELECT id, email FROM s_users WHERE email = ANY(ARRAY[${foremanEmails.map((e) => `'${e}'`).join(',')}])`);
     const foremanMap = Object.fromEntries(foremanRows.map((r) => [r.email, r.id]));
 
-    // ── 6. Employee Groups ────────────────────────────────────────────────────
-
-    const groupsToInsert = lineConfigs
-      .map((l) => ({
-        line_id:     findLine(lines, l.code),
-        name:        `Group ${l.label.toUpperCase()}`,
-        leader_id:   foremanMap[`foreman.${l.label}@factory.local`],
-        description: `Production group for ${l.code}`,
-        active:      true,
-        ...ts,
-      }))
-      .filter((g) => g.line_id && g.leader_id);
-
-    await queryInterface.bulkInsert('s_employee_groups', groupsToInsert, { ignoreDuplicates: true });
-
-    const groupRows = await q(`SELECT id, name FROM s_employee_groups`);
-    const groupMap = Object.fromEntries(groupRows.map((g) => [g.name, g.id]));
-
     // ── 7. New Flow: Employees & Group Members ────────────────────────────────
     
     const employeesToInsert = [];
-    const relationMappings = [];
 
     lineConfigs.forEach((l) => {
-      const groupName = `Group ${l.label.toUpperCase()}`;
-      const groupId   = groupMap[groupName];
-      if (!groupId) return;
       const lbl = l.label.toUpperCase();
 
       // Define personal data structure
@@ -296,16 +262,8 @@ export default {
         employeesToInsert.push({
           employee_code: member.code,
           name:          member.name,
-          position_id:   posMap[member.position],
-          qr_token:      `QR-${member.code}`,  // <-- PENAMBAHAN QR TOKEN DISINI
-          active:        true,
-          ...ts
-        });
-
-        // 2. Prepare mapping relation for s_employee_group_members
-        relationMappings.push({
-          group_id:      groupId,
-          employee_code: member.code,
+          position_name: member.position,
+          qr_token:      `QR-${member.code}`,
           active:        true,
           ...ts
         });
@@ -314,24 +272,6 @@ export default {
 
     // Bulk Insert master data karyawan (s_employees)
     await queryInterface.bulkInsert('s_employees', employeesToInsert, { ignoreDuplicates: true });
-
-    // Tarik data karyawan yang baru saja diinsert untuk mendapatkan ID-nya
-    const insertedEmployees = await q(`SELECT id, employee_code FROM s_employees WHERE employee_code LIKE 'EMP-%'`);
-    const empIdMap = Object.fromEntries(insertedEmployees.map((e) => [e.employee_code, e.id]));
-
-    // Map relasi group_id dengan employee_id
-    const membersToInsert = relationMappings
-      .map(rel => ({
-        group_id:    rel.group_id,
-        employee_id: empIdMap[rel.employee_code],
-        active:      rel.active,
-        created_at:  rel.created_at,
-        updated_at:  rel.updated_at
-      }))
-      .filter(m => m.employee_id); // validasi pastikan ID ditemukan
-
-    // Bulk Insert tabel relasi (s_employee_group_members)
-    await queryInterface.bulkInsert('s_employee_group_members', membersToInsert, { ignoreDuplicates: true });
 
     // ── Summary ───────────────────────────────────────────────────────────────
 
@@ -348,28 +288,9 @@ export default {
   async down(queryInterface) {
     // Remove in reverse FK order (Child -> Parent)
 
-    // 1. Delete skills (jika ada) menggunakan employee_id dari s_employees
-    await queryInterface.sequelize.query(`
-      DELETE FROM s_employee_skills
-      WHERE employee_id IN (
-        SELECT id FROM s_employees WHERE employee_code LIKE 'EMP-%'
-      )
-    `);
-
-    // 2. Delete data dari tabel junction (s_employee_group_members)
-    await queryInterface.sequelize.query(`
-      DELETE FROM s_employee_group_members
-      WHERE group_id IN (SELECT id FROM s_employee_groups WHERE name LIKE 'Group %')
-    `);
-
     // 3. Delete master karyawan (s_employees) yang di-generate seeder
     await queryInterface.sequelize.query(`
       DELETE FROM s_employees WHERE employee_code LIKE 'EMP-%'
-    `);
-
-    // 4. Delete data groups
-    await queryInterface.sequelize.query(`
-      DELETE FROM s_employee_groups WHERE name LIKE 'Group %'
     `);
 
     const labels = ['frm','batt','elec','fnl','test','qc','rwk','prm','col','coat','inqc','mat','pack','fg'];

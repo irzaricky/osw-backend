@@ -73,16 +73,13 @@ export default {
 
     for (const line of lines) {
       // ── Manpower: query member aktif beserta nama posisinya ───────────────
+      // GANTI dengan query langsung ke s_employees via s_stations:
       const members = await queryInterface.sequelize.query(
-        `SELECT m.id, p.name AS position_name
-         FROM s_employee_group_members m
-         LEFT JOIN s_employee_groups g    ON g.id = m.group_id
-         LEFT JOIN s_employees e          ON e.id = m.employee_id
-         LEFT JOIN s_employee_positions p ON p.id = e.position_id
-         WHERE g.line_id = ${line.id}
-           AND g.active  = true
-           AND m.active  = true
-           AND e.active  = true;`,
+        `SELECT e.id, e.position_name
+        FROM s_employees e
+        WHERE e.active = true
+          AND e.deleted_at IS NULL
+          AND e.position_name IS NOT NULL;`,
         { type: Sequelize.QueryTypes.SELECT }
       );
 

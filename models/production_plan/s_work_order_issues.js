@@ -4,6 +4,10 @@ export default (sequelize) => {
   class SWorkOrderIssue extends Model {
     static associate(models) {
       SWorkOrderIssue.belongsTo(models.SWorkOrder, { foreignKey: 'wo_id', as: 'work_order' });
+      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'reported_by', as: 'reporter' });
+      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'resolved_by', as: 'resolver' });
+      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'paused_by', as: 'pauser' });
+      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'resumed_by', as: 'resumer' });
     }
   }
 
@@ -36,7 +40,7 @@ export default (sequelize) => {
       type: DataTypes.STRING(100)
     },
     reported_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
     },
     reported_time: {
       type: DataTypes.DATE,
@@ -47,11 +51,35 @@ export default (sequelize) => {
       type: DataTypes.TEXT
     },
     resolved_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
     },
     resolved_time: {
       type: DataTypes.DATE
-    }
+    },
+    severity: {
+      type: DataTypes.STRING(20)
+    },
+    pause_reason: {
+      type: DataTypes.STRING(100)
+    },
+    paused_by: {
+      type: DataTypes.INTEGER
+    },
+    paused_at: {
+      type: DataTypes.DATE
+    },
+    resumed_by: {
+      type: DataTypes.INTEGER
+    },
+    resumed_at: {
+      type: DataTypes.DATE
+    },
+    pause_duration_minutes: {
+      type: DataTypes.INTEGER
+    },
+    shift_end_qty: {
+      type: DataTypes.INTEGER
+    },
   }, {
     sequelize,
     modelName: 'SWorkOrderIssue',

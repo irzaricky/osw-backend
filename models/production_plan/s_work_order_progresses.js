@@ -25,7 +25,22 @@ export default (sequelize) => {
       type: DataTypes.DECIMAL(5, 2)
     },
     reported_by: {
-      type: DataTypes.STRING(100)
+      type: DataTypes.INTEGER
+    },
+    qty_good: {
+      type: DataTypes.INTEGER
+    },
+    qty_reject: {
+      type: DataTypes.INTEGER
+    },
+    qty_scrap: {
+      type: DataTypes.INTEGER
+    },
+    cumulative_qty_good: {
+      type: DataTypes.INTEGER
+    },
+    reported_at: {
+      type: DataTypes.DATE,
     }
   }, {
     sequelize,

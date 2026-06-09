@@ -11,7 +11,6 @@ export default (sequelize) => {
       SProductionPlanDetail.hasMany(models.SProductionOrderProduct, { foreignKey: 'plan_detail_id', as: 'production_order_products' });
       SProductionPlanDetail.belongsTo(models.SPartRoutings, { foreignKey: 'routing_id', as: 'routing' });
       SProductionPlanDetail.belongsTo(models.SLines, { foreignKey: 'assigned_line_id', as: 'assigned_line' });
-      SProductionPlanDetail.hasMany(models.SProductionPlanDetailLine, { foreignKey: 'plan_detail_id', as: 'detail_lines' });
     }
   }
 
@@ -74,10 +73,6 @@ export default (sequelize) => {
     },
     priority_level: {
       type: DataTypes.STRING(20)
-    },
-    priority_score: {
-      type: DataTypes.DECIMAL(10,2),
-      defaultValue: 0
     },
   }, {
     sequelize,

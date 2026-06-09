@@ -57,6 +57,15 @@ export default (sequelize) => {
         allowNull: false,
         defaultValue: 60,
       },
+      // New fields for monthly parameters
+      param_year: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
+      param_month: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
     },
     {
       sequelize,

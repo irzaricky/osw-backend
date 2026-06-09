@@ -50,6 +50,8 @@ export default {
 
       supervisor: { type: Sequelize.STRING(100) },
 
+      sequence: { type: Sequelize.INTEGER, allowNull: false, defaultValue: 1 },
+
       created_at: { allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       updated_at: { allowNull: false, type: Sequelize.DATE, defaultValue: Sequelize.literal('CURRENT_TIMESTAMP') },
       deleted_at: { type: Sequelize.DATE }

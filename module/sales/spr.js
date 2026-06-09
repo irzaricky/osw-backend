@@ -282,7 +282,8 @@ class SPRModule extends BaseModule {
         return { status: false, message: 'SPR not found', code: 404 };
       }
 
-      if (!['Draft', 'Rejected'].includes(spr.status)) {
+      const isAdminSales = currentUser.role?.toLowerCase() === 'admin sales';
+      if (!['Draft', 'Rejected'].includes(spr.status) && !isAdminSales) {
         await t.rollback();
         return { status: false, message: 'Only Draft or Rejected SPR can be updated', code: 400 };
       }

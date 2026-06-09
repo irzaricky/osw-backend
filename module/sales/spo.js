@@ -336,10 +336,11 @@ class SPOModule extends BaseModule {
       }
 
       const isSupervisor = currentUser.role?.toLowerCase() === 'supervisor sales' || currentUser.role?.toLowerCase() === 'superadmin';
+      const isAdminSales = currentUser.role?.toLowerCase() === 'admin sales';
       const isDraft = spo.status === 'Draft';
       const isSubmitted = spo.status === 'Submitted';
 
-      if (!isDraft && !(isSubmitted && isSupervisor)) {
+      if (!isDraft && !(isSubmitted && isSupervisor) && !isAdminSales) {
         await t.rollback();
         return { status: false, message: 'Only Draft SPO (or Submitted SPO by Supervisor) can be updated', code: 400 };
       }

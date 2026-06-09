@@ -12,6 +12,11 @@ export default (sequelize) => {
         foreignKey: 'skill_id',
         as: 'skill',
       });
+
+      SEmployeeSkill.belongsTo(models.SEmployee, {
+        foreignKey: 'employee_id',
+        as: 'employee',
+      });
     }
   }
 
@@ -23,9 +28,12 @@ export default (sequelize) => {
         primaryKey: true,
       },
 
-      member_id: {
+      employee_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
+        references: { model: 's_employees', key: 'id' },
+        onUpdate: 'CASCADE',
+        onDelete: 'RESTRICT',
       },
 
       skill_id: {

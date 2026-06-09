@@ -172,7 +172,7 @@ class PartsModule extends BaseModule {
 
         rows = await SParts.findAll({
           where,
-          attributes: ['id', 'part_number', 'part_name', 'part_type_code'],
+          attributes: ['id', 'part_number', 'part_name', 'part_type_code', 'min_qty_sell'],
           include: [
             {
               model: SUom,
@@ -362,6 +362,7 @@ class PartsModule extends BaseModule {
         generation:       Joi.string().max(20).optional().allow('', null),
         color:            Joi.string().max(50).optional().allow('', null),
         color_code:       Joi.string().max(20).optional().allow('', null),
+        min_qty_sell:     Joi.number().integer().min(0).optional().default(10),
       })
 
       const validation = helper.validate(req.body, schema)
@@ -373,7 +374,8 @@ class PartsModule extends BaseModule {
       const {
         part_number, part_name, part_type_code, part_category,
         supplier_id, uom_id, package_id, price, safety_stock,
-        lead_time_days, model_name, model_code, generation, color, color_code
+        lead_time_days, model_name, model_code, generation, color, color_code,
+        min_qty_sell
       } = validation.value
 
       // Cek duplikasi part number
@@ -430,6 +432,7 @@ class PartsModule extends BaseModule {
         generation: generation || null,
         color: color || null,
         color_code: color_code || null,
+        min_qty_sell: min_qty_sell !== undefined ? min_qty_sell : 10,
       }
 
       let part
@@ -510,6 +513,7 @@ class PartsModule extends BaseModule {
         generation:       Joi.string().max(20).optional().allow('', null),
         color:            Joi.string().max(50).optional().allow('', null),
         color_code:       Joi.string().max(20).optional().allow('', null),
+        min_qty_sell:     Joi.number().integer().min(0).optional().default(10),
       })
 
       const validation = helper.validate(req.body, schema)
@@ -521,7 +525,8 @@ class PartsModule extends BaseModule {
       const {
         part_number, part_name, part_type_code, part_category,
         supplier_id, uom_id, package_id, price, safety_stock,
-        lead_time_days, model_name, model_code, generation, color, color_code
+        lead_time_days, model_name, model_code, generation, color, color_code,
+        min_qty_sell
       } = validation.value
 
       const part = await SParts.findByPk(id, { transaction: t })
@@ -585,6 +590,7 @@ class PartsModule extends BaseModule {
           generation: generation || null,
           color: color || null,
           color_code: color_code || null,
+          min_qty_sell: min_qty_sell !== undefined ? min_qty_sell : 10,
         },
         { transaction: t }
       )

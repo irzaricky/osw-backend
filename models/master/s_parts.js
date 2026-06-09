@@ -73,6 +73,11 @@ export default (sequelize) => {
       defaultValue: null,
       comment: 'Berat per unit dalam kilogram (kg)',
     },
+    min_qty_sell: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 10,
+    },
   }, {
     sequelize,
     modelName: 'SParts',

@@ -381,6 +381,11 @@ class ForecastModule extends BaseModule {
           continue;
         }
 
+        if (forecastQty < part.min_qty_sell) {
+          errors.push(`Row ${i}: Forecast quantity for part ${part.part_number} (${forecastQty}) is less than the minimum sales quantity of ${part.min_qty_sell}.`);
+          continue;
+        }
+
         // For 4-Month: validate period_date
         if (is4Month) {
           if (!periodDateStr) {
@@ -439,7 +444,7 @@ class ForecastModule extends BaseModule {
               {
                 model: SParts,
                 as: 'part',
-                attributes: ['id', 'part_number', 'part_name']
+                attributes: ['id', 'part_number', 'part_name', 'min_qty_sell']
               }
             ]
           },
@@ -804,6 +809,32 @@ class ForecastModule extends BaseModule {
 
       const { customer_id, forecast_type, description, details } = validation.value;
 
+      if (details && details.length > 0) {
+        const partIds = details.map(d => d.part_id);
+        const parts = await SParts.findAll({
+          where: { id: { [Op.in]: partIds } },
+          attributes: ['id', 'part_number', 'min_qty_sell'],
+          transaction: t
+        });
+        const partMap = new Map(parts.map(p => [p.id, p]));
+
+        for (const d of details) {
+          const part = partMap.get(d.part_id);
+          if (!part) {
+            await t.rollback();
+            return { status: false, message: `Part with ID ${d.part_id} not found.`, code: 400 };
+          }
+          if (d.forecast_qty < part.min_qty_sell) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Forecast quantity for part ${part.part_number} (${d.forecast_qty}) is less than the minimum sales quantity of ${part.min_qty_sell}.`,
+              code: 400
+            };
+          }
+        }
+      }
+
       // Auto-calculate start_period and end_period from forecast_type
       const today = dayjs();
       let start_period, end_period;
@@ -1059,6 +1090,33 @@ class ForecastModule extends BaseModule {
       }
 
       const { details } = validation.value;
+
+      if (details && details.length > 0) {
+        const partIds = details.map(d => d.part_id);
+        const parts = await SParts.findAll({
+          where: { id: { [Op.in]: partIds } },
+          attributes: ['id', 'part_number', 'min_qty_sell'],
+          transaction: t
+        });
+        const partMap = new Map(parts.map(p => [p.id, p]));
+
+        for (const d of details) {
+          const part = partMap.get(d.part_id);
+          if (!part) {
+            await t.rollback();
+            return { status: false, message: `Part with ID ${d.part_id} not found.`, code: 400 };
+          }
+          if (d.forecast_qty < part.min_qty_sell) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Forecast quantity for part ${part.part_number} (${d.forecast_qty}) is less than the minimum sales quantity of ${part.min_qty_sell}.`,
+              code: 400
+            };
+          }
+        }
+      }
+
       const oldData = JSON.parse(JSON.stringify(forecast));
 
       const existingDetails = await SSalesForecastDetails.findAll({

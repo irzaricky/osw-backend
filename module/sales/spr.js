@@ -105,7 +105,7 @@ class SPRModule extends BaseModule {
           {
             model: SSalesPurchaseRequestDetails,
             as: 'details',
-            include: [{ model: SParts, as: 'part', attributes: ['part_number', 'part_name'] }]
+            include: [{ model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name', 'min_qty_sell'] }]
           },
           {
             model: SSalesPurchaseRequestLogs,
@@ -226,6 +226,33 @@ class SPRModule extends BaseModule {
       }
 
       const { spr_name, required_date, description, details } = validation.value;
+
+      if (details && details.length > 0) {
+        const partIds = details.map(d => d.part_id);
+        const parts = await SParts.findAll({
+          where: { id: { [Op.in]: partIds } },
+          attributes: ['id', 'part_number', 'min_qty_sell'],
+          transaction: t
+        });
+        const partMap = new Map(parts.map(p => [p.id, p]));
+
+        for (const d of details) {
+          const part = partMap.get(d.part_id);
+          if (!part) {
+            await t.rollback();
+            return { status: false, message: `Part with ID ${d.part_id} not found.`, code: 400 };
+          }
+          if (d.qty < part.min_qty_sell) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Quantity for part ${part.part_number} (${d.qty}) is less than the minimum sales quantity of ${part.min_qty_sell}.`,
+              code: 400
+            };
+          }
+        }
+      }
+
       const spr_number = await this._generateSPRNumber(t);
 
       const spr = await SSalesPurchaseRequests.create({
@@ -307,6 +334,33 @@ class SPRModule extends BaseModule {
       }
 
       const updates = validation.value;
+
+      if (updates.details && updates.details.length > 0) {
+        const partIds = updates.details.map(d => d.part_id);
+        const parts = await SParts.findAll({
+          where: { id: { [Op.in]: partIds } },
+          attributes: ['id', 'part_number', 'min_qty_sell'],
+          transaction: t
+        });
+        const partMap = new Map(parts.map(p => [p.id, p]));
+
+        for (const d of updates.details) {
+          const part = partMap.get(d.part_id);
+          if (!part) {
+            await t.rollback();
+            return { status: false, message: `Part with ID ${d.part_id} not found.`, code: 400 };
+          }
+          if (d.qty < part.min_qty_sell) {
+            await t.rollback();
+            return {
+              status: false,
+              message: `Quantity for part ${part.part_number} (${d.qty}) is less than the minimum sales quantity of ${part.min_qty_sell}.`,
+              code: 400
+            };
+          }
+        }
+      }
+
       const oldData = JSON.parse(JSON.stringify(spr));
 
       await spr.update(updates, { transaction: t });
@@ -560,6 +614,11 @@ class SPRModule extends BaseModule {
           continue;
         }
 
+        if (qty < part.min_qty_sell) {
+          errors.push(`Row ${i}: Quantity for part ${part.part_number} (${qty}) is less than the minimum sales quantity of ${part.min_qty_sell}`);
+          continue;
+        }
+
         // Initialize group if new SPR Name
         if (!sprGroups[sprName]) {
           sprGroups[sprName] = {
@@ -599,7 +658,7 @@ class SPRModule extends BaseModule {
 
         for (const group of resultData) {
           const spr_number = await this._generateSPRNumber(t);
-          
+
           const spr = await SSalesPurchaseRequests.create({
             spr_number,
             spr_name: group.header.spr_name,

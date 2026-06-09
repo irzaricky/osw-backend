@@ -57,8 +57,8 @@ export default {
     // Hapus kolom personil yang duplikat
     await queryInterface.removeColumn("s_employee_group_members", "employee_code");
     await queryInterface.removeColumn("s_employee_group_members", "name");
-    await queryInterface.removeColumn("s_employee_group_members","position_id");
-    await queryInterface.removeColumn("s_employee_group_members","skill_level"); // pindah ke s_employee_skills atau s_employees jika general
+    await queryInterface.removeColumn("s_employee_group_members", "position_id");
+    await queryInterface.removeColumn("s_employee_group_members", "skill_level"); // pindah ke s_employee_skills atau s_employees jika general
 
     // Tambahkan foreign key employee_id
     await queryInterface.addColumn(
@@ -66,12 +66,12 @@ export default {
       "employee_id",
       {
         type: Sequelize.INTEGER,
-        allowNull: false,
+        allowNull: true,
         references: { model: "s_employees", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      
+
     );
 
     // 3. Modifikasi s_employee_skills: ganti member_id menjadi employee_id agar skill melekat pada individu karyawan

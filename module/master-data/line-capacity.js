@@ -13,43 +13,13 @@ const {
   SStations,
   SStationJobs,
   SJobs,
-  SEmployeeGroup,
-  SEmployeeGroupMember,
-  SEmployee,
-  SEmployeePosition,
   sequelize,
 } = db;
 
-// =============================================================================
-// CATATAN MIGRASI DATABASE
-// =============================================================================
-// Tabel s_line_capacity_params perlu diubah strukturnya:
-//
-// 1. Hapus UNIQUE constraint lama pada kolom line_id (jika ada)
-// 2. Tambah kolom param_year  SMALLINT NOT NULL
-// 3. Tambah kolom param_month TINYINT  NOT NULL  (1-12)
-// 4. Tambah UNIQUE constraint baru: (line_id, param_year, param_month)
-//
-// Contoh SQL migrasi:
-//   ALTER TABLE s_line_capacity_params
-//     ADD COLUMN param_year  SMALLINT NOT NULL DEFAULT 0 AFTER line_id,
-//     ADD COLUMN param_month TINYINT  NOT NULL DEFAULT 0 AFTER param_year,
-//     DROP INDEX line_id,                          -- hapus unique lama
-//     ADD UNIQUE KEY uq_line_year_month (line_id, param_year, param_month);
-//
-//   -- Update baris lama jika ada (isi dengan tahun & bulan berjalan)
-//   UPDATE s_line_capacity_params
-//     SET param_year  = YEAR(CURDATE()),
-//         param_month = MONTH(CURDATE())
-//     WHERE param_year = 0;
-// =============================================================================
-
-const NON_OPERATOR_POSITIONS = ["Group Leader", "Foreman"];
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: dapatkan tanggal awal dan akhir dari year + month (1-based)
-// Contoh: getMonthRange(2025, 6) → { startDate: "2025-06-01", endDate: "2025-06-30" }
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
 function getMonthRange(year, month) {
   const pad   = (n) => String(n).padStart(2, "0");
   const start = new Date(year, month - 1, 1);
@@ -60,18 +30,10 @@ function getMonthRange(year, month) {
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: format "YYYY-MM" untuk display
-// ─────────────────────────────────────────────────────────────────────────────
 function formatPeriod(year, month) {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-/**
- * Hitung durasi netto dalam menit dari array shift entries.
- * Net = SUM(PRODUCTIVE) - SUM(BREAK)
- * Mendukung shift lintas tengah malam.
- */
 function calcNetMinutes(shiftEntries) {
   let productive = 0;
   let breakTime  = 0;
@@ -92,27 +54,12 @@ function calcNetMinutes(shiftEntries) {
   return Math.max(0, productive - breakTime);
 }
 
-/**
- * Derive parameter kapasitas dari shift calendar line untuk periode tertentu.
- *
- * @param {number}      lineId      - ID line
- * @param {string}      startDate   - "YYYY-MM-DD" awal periode (wajib)
- * @param {string}      endDate     - "YYYY-MM-DD" akhir periode (wajib)
- * @param {Transaction} transaction - Sequelize transaction (opsional)
- *
- * Logika:
- * - Working day  → shift calendar JOIN ref_type_calendars WHERE is_holiday = false
- *                  Shift yang dipakai: type = 'REGULAR'
- * - Overtime day → shift calendar JOIN ref_type_calendars WHERE is_holiday = true
- *                  Shift yang dipakai: type = 'NON REGULAR'
- *
- * Output:
- * - working_days            : jumlah hari non-holiday dalam periode
- * - shifts_per_day          : rata-rata jumlah shift_number unik REGULAR per hari kerja
- * - working_hours_per_shift : rata-rata jam netto REGULAR per shift
- * - overtime_hours          : rata-rata jam netto NON REGULAR per hari overtime
- * - requested_range         : { start, end } untuk audit trail
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveShiftCalendarParams
+// Derive working_days, shifts_per_day, working_hours_per_shift, overtime_hours
+// langsung dari s_shift_calendars untuk rentang tanggal yang diberikan.
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function resolveShiftCalendarParams(lineId, startDate, endDate, transaction = null) {
   const opts = transaction ? { transaction } : {};
 
@@ -168,7 +115,6 @@ async function resolveShiftCalendarParams(lineId, startDate, endDate, transactio
     const shift     = cal.shift;
     if (!shift) continue;
 
-    // Klem loop ke dalam range yang diminta
     const calStart  = new Date(cal.start_date);
     const calEnd    = new Date(cal.end_date);
     const loopStart = calStart < rangeStart ? rangeStart : calStart;
@@ -251,8 +197,9 @@ async function resolveShiftCalendarParams(lineId, startDate, endDate, transactio
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: format satu baris SLineCapacityParam untuk response
+// formatParamRow — shape response param yang konsisten
 // ─────────────────────────────────────────────────────────────────────────────
+
 function formatParamRow(p) {
   return {
     id:                              p.id,
@@ -271,21 +218,17 @@ function formatParamRow(p) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Logika kalkulasi & upsert untuk satu line + satu bulan.
-// Dipakai oleh calculate() (manual) dan cronRecalculateAll() (otomatis).
+// _doCalculate — inti kalkulasi, dipanggil oleh calculate() dan cronRecalculateAll()
 //
-// @param {object} opts
-//   line_id          : number
-//   year             : number
-//   month            : number (1-12)
-//   efficiency_factor: number
-//   transaction      : Sequelize transaction
-//   req              : Express request (untuk logActivity) — null saat cron
-//
-// @returns {object} data hasil kalkulasi
-// @throws  Error dengan property .code (404 | 422 | 500)
+// Perubahan dari versi lama:
+//   - default_manpower tidak lagi diderivasi dari SEmployeeGroup/SEmployeeGroupMember
+//     (kedua tabel telah dihapus dari schema).
+//   - manpower sekarang diterima sebagai parameter eksplisit dari caller.
+//   - Validasi manpower === 0 tetap dipertahankan agar tidak menyimpan data
+//     yang tidak valid.
 // ─────────────────────────────────────────────────────────────────────────────
-async function _doCalculate({ line_id, year, month, efficiency_factor, transaction: t, req }) {
+
+async function _doCalculate({ line_id, year, month, efficiency_factor, manpower, transaction: t, req }) {
   const { startDate, endDate } = getMonthRange(year, month);
   const periodLabel            = formatPeriod(year, month);
 
@@ -297,7 +240,15 @@ async function _doCalculate({ line_id, year, month, efficiency_factor, transacti
   });
   if (!line) throw Object.assign(new Error("Line not found"), { code: 404 });
 
-  // 2. Derive dari shift calendar untuk bulan yang dipilih
+  // 2. Validasi manpower
+  if (!manpower || manpower < 1) {
+    throw Object.assign(
+      new Error(`Manpower harus diisi dan bernilai minimal 1.`),
+      { code: 422 }
+    );
+  }
+
+  // 3. Derive dari shift calendar untuk bulan yang dipilih
   const calendarParams = await resolveShiftCalendarParams(line_id, startDate, endDate, t);
   if (!calendarParams) {
     throw Object.assign(
@@ -311,7 +262,7 @@ async function _doCalculate({ line_id, year, month, efficiency_factor, transacti
 
   const { working_days, shifts_per_day, working_hours_per_shift, overtime_hours } = calendarParams;
 
-  // 3. Data aktual line (manpower & takt time)
+  // 4. Data aktual line (stations & takt time dari routing)
   const tmp           = new LineCapacityModule();
   const actualSummary = await tmp._getLineSummary(line_id, t);
 
@@ -319,22 +270,20 @@ async function _doCalculate({ line_id, year, month, efficiency_factor, transacti
     throw Object.assign(new Error(`Line ${line.line_code} belum memiliki station aktif.`), { code: 422 });
   if (actualSummary.total_active_jobs === 0)
     throw Object.assign(new Error(`Line ${line.line_code} belum ada job aktif di station manapun.`), { code: 422 });
-  if (actualSummary.default_manpower === 0)
-    throw Object.assign(new Error(`Line ${line.line_code} belum ada operator aktif. Assign employee group terlebih dahulu.`), { code: 422 });
 
-  // 4. Upsert berdasarkan (line_id, param_year, param_month) — multi-baris
+  // 5. Upsert berdasarkan (line_id, param_year, param_month)
   const paramPayload = {
     default_working_days:            working_days,
     default_shifts_per_day:          shifts_per_day,
     default_working_hours_per_shift: working_hours_per_shift,
     default_overtime_hours:          overtime_hours,
     default_efficiency_factor:       efficiency_factor,
-    default_manpower:                actualSummary.default_manpower,
+    default_manpower:                manpower,
     default_max_takt_time:           actualSummary.max_takt_time_seconds,
   };
 
   const [savedParams, created] = await SLineCapacityParam.findOrCreate({
-    where: { line_id, param_year: year, param_month: month },
+    where:    { line_id, param_year: year, param_month: month },
     defaults: { line_id, param_year: year, param_month: month, ...paramPayload },
     transaction: t,
   });
@@ -379,7 +328,6 @@ async function _doCalculate({ line_id, year, month, efficiency_factor, transacti
       actual_line: {
         total_active_stations: actualSummary.total_active_stations,
         total_active_jobs:     actualSummary.total_active_jobs,
-        default_manpower:      actualSummary.default_manpower,
         max_takt_time_seconds: actualSummary.max_takt_time_seconds,
       },
     },
@@ -388,15 +336,6 @@ async function _doCalculate({ line_id, year, month, efficiency_factor, transacti
 
 class LineCapacityModule extends BaseModule {
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // GET /line-capacity/:line_id/params
-  //
-  // Menampilkan semua baris parameter yang sudah tersimpan untuk line ini
-  // (satu baris per bulan), diurutkan terbaru di atas.
-  //
-  // Query params (opsional):
-  //   year  : filter per tahun
-  // ─────────────────────────────────────────────────────────────────────────
   async getParams(req, res) {
     try {
       const { line_id } = req.params;
@@ -416,7 +355,6 @@ class LineCapacityModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, message: "Line not found" });
       }
 
-      // Ambil semua baris untuk line ini (filter tahun opsional)
       const whereClause = { line_id };
       if (year) whereClause.param_year = year;
 
@@ -447,17 +385,6 @@ class LineCapacityModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // GET /line-capacity/:line_id/params/preview?year=2025&month=7
-  //
-  // Preview hasil kalkulasi dari shift calendar untuk bulan tertentu,
-  // TANPA menyimpan ke DB. Berguna untuk FE menampilkan "ini yang akan
-  // dihitung jika kamu klik Calculate".
-  //
-  // Query params:
-  //   year  : integer, default tahun berjalan
-  //   month : integer 1-12, default bulan berjalan
-  // ─────────────────────────────────────────────────────────────────────────
   async previewParams(req, res) {
     try {
       const { line_id } = req.params;
@@ -482,12 +409,22 @@ class LineCapacityModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, message: "Line not found" });
       }
 
-      // Ambil data paralel: calendar preview + aktual line + baris tersimpan bulan ini (jika ada)
-      const [calendarParams, actualSummary, existingParam] = await Promise.all([
+      const [calendarParams, actualSummary, existingParam, latestParam] = await Promise.all([
         resolveShiftCalendarParams(line_id, startDate, endDate),
         this._getLineSummary(line_id),
-        SLineCapacityParam.findOne({ where: { line_id, param_year: year, param_month: month } }),
+        SLineCapacityParam.findOne({
+          where: { line_id, param_year: year, param_month: month },
+        }),
+        SLineCapacityParam.findOne({
+          where: { line_id },
+          order: [["param_year", "DESC"], ["param_month", "DESC"]],
+        }),
       ]);
+
+      const suggested_manpower =
+        existingParam?.default_manpower ??
+        latestParam?.default_manpower   ??
+        null;
 
       return helper.sendResponse(res, {
         status: true,
@@ -495,12 +432,13 @@ class LineCapacityModule extends BaseModule {
         data: {
           line:           { id: line.id, line_code: line.line_code, name: line.name },
           preview_period: { year, month, period: periodLabel, startDate, endDate },
-          // Apakah bulan ini sudah pernah dikalkulasi sebelumnya
           already_calculated: existingParam !== null,
           existing_param:     existingParam ? formatParamRow(existingParam) : null,
-          // Preview nilai yang akan dihitung
-          calendar_params:    calendarParams,  // null = shift calendar belum dikonfigurasi
+          // Nilai yang akan dihitung otomatis dari shift calendar & routing
+          calendar_params:    calendarParams, // null = shift calendar belum dikonfigurasi
           actual:             actualSummary,
+          // Hint untuk field manpower yang harus diisi user di request calculate()
+          suggested_manpower,
         },
       });
     } catch (error) {
@@ -509,19 +447,6 @@ class LineCapacityModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // POST /line-capacity/:line_id/calculate
-  //
-  // Hitung dan simpan parameter kapasitas untuk bulan yang dipilih.
-  // Jika baris (line_id, year, month) sudah ada → update (overwrite).
-  // Jika belum ada → insert baris baru.
-  //
-  // Body:
-  //   year             : integer, default tahun berjalan
-  //   month            : integer 1-12, default bulan berjalan
-  //                      Tidak boleh memilih bulan yang sudah lewat.
-  //   efficiency_factor: number 0.1-1 (default: dari baris bulan terbaru di DB, atau 0.85)
-  // ─────────────────────────────────────────────────────────────────────────
   async calculate(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -531,7 +456,7 @@ class LineCapacityModule extends BaseModule {
       const currentYear  = now.getFullYear();
       const currentMonth = now.getMonth() + 1;
 
-      // Ambil efficiency_factor default dari baris terbaru yang tersimpan (bulan manapun)
+      // Ambil param terbaru untuk default efficiency_factor & manpower
       const latestParam = await SLineCapacityParam.findOne({
         where: { line_id },
         order: [["param_year", "DESC"], ["param_month", "DESC"]],
@@ -543,6 +468,11 @@ class LineCapacityModule extends BaseModule {
         month: Joi.number().integer().min(1).max(12).default(currentMonth),
         efficiency_factor: Joi.number().min(0.1).max(1)
           .default(latestParam ? parseFloat(latestParam.default_efficiency_factor) : 0.85),
+        // manpower wajib diisi. Jika ada param bulan sebelumnya, jadikan default
+        // agar tidak memaksa user mengetik ulang nilai yang sama tiap bulan.
+        manpower: latestParam
+          ? Joi.number().integer().min(1).default(latestParam.default_manpower)
+          : Joi.number().integer().min(1).required(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -551,9 +481,9 @@ class LineCapacityModule extends BaseModule {
         return helper.sendResponse(res, validation);
       }
 
-      const { year, month, efficiency_factor } = validation.value;
+      const { year, month, efficiency_factor, manpower } = validation.value;
 
-      // ── Validasi: tidak boleh bulan yang sudah lewat ──────────────────────
+      // Tidak boleh menghitung ulang bulan yang sudah lewat
       const selectedPeriod = year * 100 + month;
       const currentPeriod  = currentYear * 100 + currentMonth;
       if (selectedPeriod < currentPeriod) {
@@ -567,10 +497,17 @@ class LineCapacityModule extends BaseModule {
         });
       }
 
-      // ── Jalankan kalkulasi ────────────────────────────────────────────────
       let result;
       try {
-        result = await _doCalculate({ line_id, year, month, efficiency_factor, transaction: t, req });
+        result = await _doCalculate({
+          line_id,
+          year,
+          month,
+          efficiency_factor,
+          manpower,
+          transaction: t,
+          req,
+        });
       } catch (err) {
         await t.rollback();
         return helper.sendResponse(res, {
@@ -598,14 +535,6 @@ class LineCapacityModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // DELETE /line-capacity/:line_id/params/:year/:month
-  //
-  // Hapus satu baris parameter untuk bulan tertentu.
-  // Tidak boleh menghapus bulan berjalan atau masa depan —
-  // hanya baris lama (bulan yang sudah lewat) yang boleh dihapus
-  // untuk keperluan housekeeping.
-  // ─────────────────────────────────────────────────────────────────────────
   async deleteParam(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -669,30 +598,6 @@ class LineCapacityModule extends BaseModule {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // cronRecalculateAll()
-  //
-  // Dipanggil oleh:
-  //   1. Cron job otomatis setiap awal bulan
-  //   2. Admin via endpoint POST /line-capacity/cron/recalculate-all
-  //
-  // Proses:
-  //   - Ambil semua line aktif
-  //   - Untuk setiap line: hitung & INSERT baris baru untuk bulan berjalan
-  //   - efficiency_factor diambil dari baris terbaru di DB, default 0.85
-  //   - Jika baris untuk bulan ini sudah ada → update (idempotent)
-  //   - Jika gagal (misal shift calendar belum ada) → skip + catat error,
-  //     tidak mengganggu line lain
-  //
-  // Setup cron (di app.js / server.js):
-  //   import cron from "node-cron";
-  //   import lineCapacityModule from "./modules/line-capacity/line-capacity.module.js";
-  //
-  //   cron.schedule("5 0 1 * *", async () => {
-  //     const result = await lineCapacityModule.cronRecalculateAll();
-  //     console.log("[Cron][LineCapacity]", result);
-  //   }, { timezone: "Asia/Jakarta" });
-  // ─────────────────────────────────────────────────────────────────────────
   async cronRecalculateAll(req = null, res = null) {
     const now        = new Date();
     const year       = now.getFullYear();
@@ -718,23 +623,39 @@ class LineCapacityModule extends BaseModule {
     for (const line of lines) {
       const t = await sequelize.transaction();
       try {
-        // Ambil efficiency_factor dari baris terbaru yang tersimpan
+        // Ambil efficiency_factor & manpower dari param bulan terakhir yang tersimpan.
+        // Jika belum pernah ada param untuk line ini, lewati — tidak ada data
+        // manpower yang bisa dijadikan acuan.
         const latestParam = await SLineCapacityParam.findOne({
           where: { line_id: line.id },
           order: [["param_year", "DESC"], ["param_month", "DESC"]],
           transaction: t,
         });
-        const efficiency_factor = latestParam
-          ? parseFloat(latestParam.default_efficiency_factor)
-          : 0.85;
+
+        if (!latestParam) {
+          await t.rollback();
+          failCount++;
+          results.push({
+            line_id:   line.id,
+            line_code: line.line_code,
+            status:    "skipped",
+            period:    formatPeriod(year, month),
+            reason:    "Belum ada parameter tersimpan untuk line ini. Lakukan kalkulasi manual pertama kali melalui endpoint calculate.",
+          });
+          continue;
+        }
+
+        const efficiency_factor = parseFloat(latestParam.default_efficiency_factor);
+        const manpower          = latestParam.default_manpower;
 
         await _doCalculate({
-          line_id:          line.id,
+          line_id:     line.id,
           year,
           month,
           efficiency_factor,
-          transaction:      t,
-          req:              null, // tidak ada req saat cron → skip logActivity
+          manpower,
+          transaction: t,
+          req:         null, // tidak ada req saat cron → skip logActivity
         });
 
         await t.commit();
@@ -777,10 +698,6 @@ class LineCapacityModule extends BaseModule {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Private: _getLineSummary
-  // Tidak berubah dari versi sebelumnya.
-  // ─────────────────────────────────────────────────────────────────────────
   async _getLineSummary(line_id, transaction = null) {
     const queryOpts = transaction ? { transaction } : {};
 
@@ -840,68 +757,11 @@ class LineCapacityModule extends BaseModule {
       };
     });
 
-    const groups = await SEmployeeGroup.findAll({
-      where:      { line_id, active: true },
-      attributes: ["id", "name"],
-      include: [
-        {
-          model:    SEmployeeGroupMember,
-          as:       "members",
-          where:    { active: true },
-          required: false,
-          attributes: ["id", "employee_id"],
-          include: [
-            {
-              model:    SEmployee,
-              as:       "employee",
-              where:    { active: true },
-              required: false,
-              attributes: ["id", "employee_code", "name", "position_id"],
-              include: [
-                {
-                  model:    SEmployeePosition,
-                  as:       "position",
-                  attributes: ["id", "name"],
-                  required: false,
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      ...queryOpts,
-    });
-
-    let totalOperators  = 0;
-    let totalAllMembers = 0;
-
-    const groupSummaries = groups.map((group) => {
-      const allMembers = group.members ?? [];
-      const operators  = allMembers.filter((m) => {
-        const pos = m.employee?.position?.name ?? "";
-        return !NON_OPERATOR_POSITIONS.some((nonOp) =>
-          pos.toLowerCase().includes(nonOp.toLowerCase())
-        );
-      });
-      totalAllMembers += allMembers.length;
-      totalOperators  += operators.length;
-
-      return {
-        group_id:        group.id,
-        group_name:      group.name,
-        total_members:   allMembers.length,
-        total_operators: operators.length,
-      };
-    });
-
     return {
       total_active_stations: stations.length,
       total_active_jobs:     totalActiveJobs,
       max_takt_time_seconds: maxTaktTime,
       bottleneck_station:    stationSummaries.find((s) => s.takt_time_seconds === maxTaktTime) ?? null,
-      default_manpower:      totalOperators,
-      total_all_members:     totalAllMembers,
-      groups:                groupSummaries,
       stations:              stationSummaries,
     };
   }

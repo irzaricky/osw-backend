@@ -495,7 +495,6 @@ class MRPModule extends BaseModule {
           target_safety_stock: TARGET_SAFETY_STOCK,
           net_requirement: netRequirement,
           qty: netRequirement,
-          // Backward-compat
           stock_qty: stockOnHand,
           shortage_qty: Math.max(0, grossRequirement - stockOnHand),
           part: item.part,
@@ -945,24 +944,28 @@ class MRPModule extends BaseModule {
   // Aktor: Staff Material
   async getDropdownSalesPlans(req) {
     try {
-      const { search } = req.query;
-      const where = { status: { [Op.in]: ['Approved', 'Waiting PPIC'] } };
+      const usedMrps = await SMrp.findAll({
+        attributes: ['spr_id'],
+        where: {
+          spr_id: { [Op.not]: null }
+        }
+      });
 
-      if (search) {
-        where[Op.or] = [
-          { spr_number: { [Op.like]: `%${search}%` } },
-          { spr_name: { [Op.like]: `%${search}%` } },
-        ];
-      }
+      const usedSprIds = usedMrps.map(mrp => mrp.spr_id);
 
-      const rows = await SSalesPurchaseRequests.findAll({
-        where,
-        attributes: ['id', 'spr_number', 'spr_name', 'required_date', 'status'],
-        order: [['required_date', 'ASC']],
+      const plans = await SSalesPurchaseRequests.findAll({
+        where: {
+          doc_status_id: 3,
+          id: {
+            [Op.notIn]: usedSprIds
+          }
+        },
+        attributes: ['id', 'spr_number', 'description', 'priority'],
+        order: [['created_at', 'DESC']],
         limit: 50,
       });
 
-      return { status: true, data: rows };
+      return { status: true, data: plans };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
       return { status: false, message: 'Internal server error', code: 500 };
@@ -1032,6 +1035,44 @@ class MRPModule extends BaseModule {
       return { status: false, message: 'Internal server error', code: 500 };
     }
   }
+
+  // [GET] /mrp/dashboard/critical-parts
+  // Mengambil daftar material kritis (stok <= 10) untuk dasbor
+  // Aktor: Semua (Dashboard)
+  async getDashboardCriticalParts(req) {
+    try {
+      // Cari 5 material paling kritis untuk list
+      const rows = await SParts.findAll({
+        where: {
+          part_type_code: 'RAW', // Hanya filter bahan baku
+          safety_stock: { [Op.lte]: 10 } // Batas kritis <= 10
+        },
+        attributes: ['id', 'part_number', 'part_name', 'safety_stock', 'uom_id'],
+        include: [{ model: SUom, as: 'uom', attributes: ['id', 'name', 'code'] }],
+        order: [['safety_stock', 'ASC']], // Urutkan dari stok yang paling sedikit
+        limit: 5,
+      });
+
+      // Hitung total seluruh material yang kritis untuk angka di Metric Card
+      const totalCritical = await SParts.count({
+        where: {
+          part_type_code: 'RAW',
+          safety_stock: { [Op.lte]: 10 }
+        }
+      });
+
+      return { 
+        status: true, 
+        data: { 
+          parts: rows, 
+          total: totalCritical 
+        } 
+      };
+    } catch (error) {
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }Z
 }
 
 export default new MRPModule();

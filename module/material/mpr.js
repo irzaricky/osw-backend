@@ -250,6 +250,41 @@ const createEmergency = async (req) => {
       }
     }
 
+    const now = new Date();
+    // Definisi "periode" adalah bulan berjalan
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    
+    const inputPartIds = details.map(d => d.part_id);
+
+    // Cari MPR aktif (draft / submitted) di periode yang sama
+    const activeMprs = await SMaterialPurchaseRequest.findAll({
+      where: {
+        status: { [Op.in]: ['draft', 'submitted'] }, // Cek yang masih aktif
+        request_date: { [Op.between]: [startOfMonth, endOfMonth] }
+      },
+      include: [{
+        model: TMaterialPurchaseRequestDetail,
+        as: 'details',
+        where: { part_id: { [Op.in]: inputPartIds } }, // Cari apakah part_id ini ada di dalamnya
+        attributes: ['part_id']
+      }],
+      transaction
+    });
+
+    // Jika ditemukan MPR aktif dengan part yang sama, tolak transaksi
+    if (activeMprs.length > 0) {
+      const duplicateParts = new Set();
+      activeMprs.forEach(mpr => mpr.details.forEach(d => duplicateParts.add(d.part_id)));
+
+      await transaction.rollback();
+      return { 
+        status: false, 
+        error: `Duplikasi FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] sudah diajukan pada dokumen MPR lain yang masih aktif di periode ini.`, 
+        code: 400 
+      };
+    }
+
     const status = save_as_draft ? 'draft' : 'submitted';
     const number = await generateNumber(transaction);
 
@@ -338,6 +373,40 @@ const update = async (req) => {
           return { status: false, error: `Quantity harus lebih dari 0 pada item ke-${i + 1}`, code: 400 };
         }
       }
+
+      const reqDate = pr.request_date ? new Date(pr.request_date) : new Date();
+      const startOfMonth = new Date(reqDate.getFullYear(), reqDate.getMonth(), 1);
+      const endOfMonth = new Date(reqDate.getFullYear(), reqDate.getMonth() + 1, 0, 23, 59, 59, 999);
+      
+      const inputPartIds = details.map(d => d.part_id);
+
+      const activeMprs = await SMaterialPurchaseRequest.findAll({
+        where: {
+          id: { [Op.ne]: id }, // KECUALIKAN DIRINYA SENDIRI
+          status: { [Op.in]: ['draft', 'submitted'] },
+          request_date: { [Op.between]: [startOfMonth, endOfMonth] }
+        },
+        include: [{
+          model: TMaterialPurchaseRequestDetail,
+          as: 'details',
+          where: { part_id: { [Op.in]: inputPartIds } },
+          attributes: ['part_id']
+        }],
+        transaction
+      });
+
+      if (activeMprs.length > 0) {
+        const duplicateParts = new Set();
+        activeMprs.forEach(mpr => mpr.details.forEach(d => duplicateParts.add(d.part_id)));
+
+        await transaction.rollback();
+        return { 
+          status: false, 
+          error: `Duplikasi FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] sudah ada di dokumen MPR aktif lain pada periode ini.`, 
+          code: 400 
+        };
+      }
+      
       await upsertDetails(id, details, transaction);
     }
 

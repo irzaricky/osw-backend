@@ -5,68 +5,63 @@ import session from '../../class/auth.class.js';
 
 const router = express.Router();
 
+const ALL      = ['Superadmin', 'Admin Material', 'Staff Material', 'Supervisor Material'];
+const MAKER    = ['Superadmin', 'Admin Material', 'Staff Material'];
+const APPROVER = ['Superadmin', 'Admin Material', 'Supervisor Material'];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DROPDOWN
-router.get('/dd-status', session.sessionChecker, async (req, res) => {
-  const result = await mpo.getDropdownStatuses(req);
-  return helper.sendResponse(res, result);
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/dd-status',   session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await mpo.getDropdownStatuses(req));
 });
 
-router.get('/dd-source', session.sessionChecker, async (req, res) => {
-  const result = await mpo.getDropdownSource(req);
-  return helper.sendResponse(res, result);
+router.get('/dd-source',   session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await mpo.getDropdownSource(req));
 });
 
-router.get('/dd-supplier', session.sessionChecker, async (req, res) => {
-  const result = await mpo.getDropdownSupplier(req);
-  return helper.sendResponse(res, result);
+router.get('/dd-supplier', session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await mpo.getDropdownSupplier(req));
 });
 
 // Load source data (MPR or MRP) to pre-fill PO form — must be before /:id routes
-router.get('/source-data/:source_type/:source_id', session.sessionChecker, async (req, res) => {
-  const result = await mpo.getSourceData(req);
-  return helper.sendResponse(res, result);
+router.get('/source-data/:source_type/:source_id', session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await mpo.getSourceData(req));
 });
 
-// LIST
-router.get('/', session.sessionChecker, async (req, res) => {
-  const result = await mpo.list(req);
-  return helper.sendResponse(res, result);
+// ─────────────────────────────────────────────────────────────────────────────
+// CRUD
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await mpo.list(req));
 });
 
-// CREATE
-router.post('/', session.sessionChecker, async (req, res) => {
-  const result = await mpo.create(req);
-  return helper.sendResponse(res, result);
+router.post('/',   session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.create(req));
 });
 
-// DETAIL
-router.get('/:id', session.sessionChecker, async (req, res) => {
-  const result = await mpo.detail(req);
-  return helper.sendResponse(res, result);
+router.get('/:id', session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await mpo.detail(req));
 });
 
-// UPDATE (header only, draft/rejected)
-router.put('/:id', session.sessionChecker, async (req, res) => {
-  const result = await mpo.update(req);
-  return helper.sendResponse(res, result);
+router.put('/:id', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.update(req));
 });
 
-// DELETE (draft only)
-router.delete('/:id', session.sessionChecker, async (req, res) => {
-  const result = await mpo.delete(req);
-  return helper.sendResponse(res, result);
+router.delete('/:id', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.delete(req));
 });
 
-// APPROVE / REJECT (Supervisor)
-router.put('/:id/status', session.sessionChecker, async (req, res) => {
-  const result = await mpo.updateStatus(req);
-  return helper.sendResponse(res, result);
+// Approve / Reject (Supervisor)
+router.put('/:id/status', session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.updateStatus(req));
 });
 
-// MDO HISTORY
-router.get('/:id/mdo-history', session.sessionChecker, async (req, res) => {
-  const result = await mpo.getMdoHistory(req);
-  return helper.sendResponse(res, result);
+// MDO history for a given MPO
+router.get('/:id/mdo-history', session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await mpo.getMdoHistory(req));
 });
 
 export default router;

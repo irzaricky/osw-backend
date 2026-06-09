@@ -5,215 +5,84 @@ import session from '../../class/auth.class.js';
 
 const router = express.Router();
 
-// ============================================================
-// PENTING: Urutan route di Express sangat berpengaruh!
-// Route yang lebih spesifik (misal /dropdown/..., /bulk-review,
-// /sales-plan/:spr_id/load) HARUS diletakkan SEBELUM /:id
-// agar tidak tertangkap sebagai parameter id.
-// ============================================================
+// PENTING: Route spesifik (/dropdown/..., /bulk-review, /sales-plan/:spr_id/load)
+// HARUS sebelum /:id agar tidak tertangkap sebagai parameter id.
 
+const ALL      = ['Superadmin', 'Admin Material', 'Staff Material', 'Supervisor Material'];
+const MAKER    = ['Superadmin', 'Admin Material', 'Staff Material'];
+const APPROVER = ['Superadmin', 'Admin Material', 'Supervisor Material'];
 
-// ============================================================
-// DROPDOWN ENDPOINTS
-// Tidak butuh permission khusus, cukup sudah login
-// Aktor: Staff Material & Supervisor Material
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// DROPDOWN
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Dropdown Sales Plan (SPR) yang Approved/Waiting PPIC
-// Dipakai di form Create MRP saat staff memilih Sales Plan
-router.get(
-  '/dropdown/sales-plans',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.getDropdownSalesPlans(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/dropdown/sales-plans', session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await module.getDropdownSalesPlans(req));
+});
 
-// Dropdown Parts/komponen untuk input detail MRP manual
-// Support query: ?search=part_number_atau_nama
-router.get(
-  '/dropdown/parts',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.getDropdownParts(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/dropdown/parts',       session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await module.getDropdownParts(req));
+});
 
-// Dropdown status MRP untuk filter di halaman list
-router.get(
-  '/dropdown/status',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.getDropdownStatuses(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/dropdown/status',      session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await module.getDropdownStatuses(req));
+});
 
-// Dropdown priority MRP (High, Medium, Low)
-router.get(
-  '/dropdown/priority',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.getDropdownPriority(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/dropdown/priority',    session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await module.getDropdownPriority(req));
+});
 
+// Load Sales Plan data to pre-fill MRP form — must be before /:id routes
+router.get('/sales-plan/:spr_id/load', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.loadSalesPlanData(req));
+});
 
-// ============================================================
-// LOAD SALES PLAN DATA
-// Dipanggil frontend SETELAH staff memilih Sales Plan di form.
-// Response berisi: info SPR, daftar produk, kalkulasi material
-// dari BOM, dan stok warehouse — semua dalam 1 request.
-// Aktor: Staff Material
-// ============================================================
-router.get(
-  '/sales-plan/:spr_id/load',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.loadSalesPlanData(req);
-    return helper.sendResponse(res, result);
-  }
-);
+// ─────────────────────────────────────────────────────────────────────────────
+// CRUD
+// ─────────────────────────────────────────────────────────────────────────────
 
+router.get('/dashboard/critical-parts',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await module.list(req));
+});
 
-// ============================================================
-// LIST MRP
-// Support query params:
-//   ?search=   → cari by nomor/deskripsi MRP
-//   ?status=   → filter by status (Draft/Submitted/Approved/Rejected)
-//   ?spr_id=   → filter by Sales Plan
-//   ?page=     → halaman (default 1)
-//   ?limit=    → jumlah per halaman (default 10)
-// Aktor: Staff Material & Supervisor Material
-// ============================================================
-router.get(
-  '/',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.list(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await module.list(req));
+});
 
+router.post('/',   session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.createDraft(req));
+});
 
-// ============================================================
-// STAFF MATERIAL — MAKER
-// Create, update, submit, delete
-// ============================================================
+router.get('/:id', session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await module.detail(req));
+});
 
-// [POST] Buat MRP baru dari Sales Plan
-// Body wajib: { description, details[] }
-// Body opsional: { spr_id, production_plan_id, priority, notes, save_as_draft }
-//   save_as_draft: true  → simpan sebagai Draft (default)
-//   save_as_draft: false → langsung Submitted ke Supervisor
-router.post(
-  '/',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.createDraft(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.put('/:id', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.update(req));
+});
 
-// [PUT] Submit MRP Draft → Submitted
-// Digunakan jika staff sebelumnya memilih Save as Draft,
-router.put(
-  '/:id/submit',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.submit(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.delete('/:id', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.deleteDraft(req));
+});
 
-// [PUT] Update detail items MRP (replace strategy)
-// Hanya bisa saat status Draft atau Submitted
-// Body: { details: [{ part_id, qty, bom_id?, notes? }] }
-router.put(
-  '/:id/detail',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material', 'Supervisor Material']),
-  async (req, res) => {
-    const result = await module.updateDetails(req);
-    return helper.sendResponse(res, result);
-  }
-);
+// Submit draft → submitted
+router.put('/:id/submit', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.submit(req));
+});
 
-// ============================================================
-// SUPERVISOR MATERIAL — CHECKER
-// PENTING: /bulk-review dan /:id/review HARUS di atas PUT /:id
-// agar Express tidak menganggap 'bulk-review' sebagai nilai :id
-// ============================================================
+// Update detail items only
+router.put('/:id/detail', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.updateDetails(req));
+});
 
-// [PUT] Approve/Reject BANYAK MRP sekaligus (via checkbox di tabel)
-// Body: { ids: [1,2,3], action: 'approve'|'reject', notes?: '...' }
-// notes WAJIB diisi jika action = 'reject'
-router.put(
-  '/bulk-review',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Supervisor Material']),
-  async (req, res) => {
-    const result = await module.bulkReview(req);
-    return helper.sendResponse(res, result);
-  }
-);
+// Approve / Reject bulk — HARUS sebelum /:id/review
+router.put('/bulk-review', session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await module.bulkReview(req));
+});
 
-// [PUT] Approve/Reject SATU MRP (via klik baris di tabel)
-// Body: { action: 'approve'|'reject', notes?: '...' }
-// notes WAJIB diisi jika action = 'reject'
-router.put(
-  '/:id/review',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Supervisor Material']),
-  async (req, res) => {
-    const result = await module.review(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-// [PUT] Update header MRP (description, priority, notes)
-// Hanya bisa saat status Draft atau Submitted
-// Body opsional: { description, priority, notes, save_as_draft }
-router.put(
-  '/:id',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material', 'Supervisor Material']),
-  async (req, res) => {
-    const result = await module.update(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-// [DELETE] Hapus MRP — hanya bisa saat status Draft
-router.delete(
-  '/:id',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.deleteDraft(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-
-// ============================================================
-// DETAIL MRP
-// Aktor: Staff Material & Supervisor Material
-// ============================================================
-router.get(
-  '/:id',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.detail(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
+// Approve / Reject single
+router.put('/:id/review',  session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await module.review(req));
+});
 
 export default router;

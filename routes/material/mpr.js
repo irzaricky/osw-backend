@@ -5,163 +5,61 @@ import session from '../../class/auth.class.js';
 
 const router = express.Router();
 
-// ============================================================
-// PENTING: Urutan route di Express sangat berpengaruh!
-// Route yang lebih spesifik (/dropdown/..., /bulk-review)
-// HARUS diletakkan SEBELUM /:id
-// ============================================================
+// PENTING: Route spesifik (/dropdown/..., /bulk-review) HARUS sebelum /:id
 
+const ALL      = ['Superadmin', 'Admin Material', 'Staff Material', 'Supervisor Material'];
+const MAKER    = ['Superadmin', 'Admin Material', 'Staff Material'];
+const APPROVER = ['Superadmin', 'Admin Material', 'Supervisor Material'];
 
-// ============================================================
-// DROPDOWN ENDPOINTS
-// Cukup sudah login, tidak butuh permission khusus
-// ============================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// DROPDOWN
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Dropdown status PR untuk filter di halaman list
-router.get(
-  '/dropdown/status',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.getDropdownStatuses(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/dropdown/status', session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await module.getDropdownStatuses(req));
+});
 
-// Dropdown parts untuk input detail PR
-// Support query: ?search=part_number_atau_nama
-router.get(
-  '/dropdown/parts',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.getDropdownParts(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/dropdown/parts',  session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
+  return helper.sendResponse(res, await module.getDropdownParts(req));
+});
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CRUD
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ============================================================
-// LIST PR
-// Support query params:
-//   ?search=   → cari by nomor/deskripsi PR
-//   ?status=   → filter by status (draft/submitted/approved/rejected)
-//   ?type=     → filter by type (auto/manual)
-//   ?page=     → halaman (default 1)
-//   ?limit=    → jumlah per halaman (default 10)
-// Aktor: Staff Material & Supervisor Material
-// ============================================================
-router.get(
-  '/',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.list(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.get('/',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await module.list(req));
+});
 
+router.post('/',   session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.createEmergency(req));
+});
 
-// ============================================================
-// STAFF MATERIAL — MAKER
-// Create Emergency, update, submit, delete
-// ============================================================
+router.get('/:id', session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
+  return helper.sendResponse(res, await module.detail(req));
+});
 
-// [POST] Buat Emergency PR secara manual (tanpa MRP)
-// Body wajib: { description, details[] }
-// details[]: { part_id, qty, required_date?, notes? }
-// Body opsional: { save_as_draft }
-//   save_as_draft: true  → simpan sebagai Draft (default)
-//   save_as_draft: false → langsung Submitted ke Supervisor
-router.post(
-  '/',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.createEmergency(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.put('/:id', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.update(req));
+});
 
-// [PUT] Submit PR Draft → Submitted
-// Digunakan jika staff sebelumnya memilih Save as Draft
-router.put(
-  '/:id/submit',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.submit(req);
-    return helper.sendResponse(res, result);
-  }
-);
+router.delete('/:id', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.deleteDraft(req));
+});
 
+// Submit draft → submitted
+router.put('/:id/submit', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.submit(req));
+});
 
-// ============================================================
-// SUPERVISOR MATERIAL — CHECKER
-// PENTING: /bulk-review HARUS di atas /:id/review
-// agar Express tidak menganggap 'bulk-review' sebagai nilai :id
-// ============================================================
+// Approve / Reject bulk — HARUS sebelum /:id/review
+router.put('/bulk-review',  session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await module.bulkReview(req));
+});
 
-// [PUT] Approve/Reject BANYAK PR sekaligus (via checkbox di tabel)
-// Body: { ids: [1,2,3], action: 'approve'|'reject', notes?: '...' }
-// notes WAJIB diisi jika action = 'reject'
-router.put(
-  '/bulk-review',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Supervisor Material']),
-  async (req, res) => {
-    const result = await module.bulkReview(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-// [PUT] Approve/Reject SATU PR
-// Body: { action: 'approve'|'reject', notes?: '...' }
-// notes WAJIB diisi jika action = 'reject'
-router.put(
-  '/:id/review',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Supervisor Material']),
-  async (req, res) => {
-    const result = await module.review(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-// [PUT] Update header dan/atau detail PR
-// Hanya bisa saat status draft atau submitted
-// Body opsional: { description, details[], save_as_draft }
-router.put(
-  '/:id',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.update(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-// [DELETE] Hapus PR — hanya bisa saat status draft
-router.delete(
-  '/:id',
-  session.sessionChecker,
-  session.permissionChecker(['Superadmin', 'Staff Material']),
-  async (req, res) => {
-    const result = await module.deleteDraft(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
-
-// ============================================================
-// DETAIL PR
-// Aktor: Staff Material & Supervisor Material
-// ============================================================
-router.get(
-  '/:id',
-  session.sessionChecker,
-  async (req, res) => {
-    const result = await module.detail(req);
-    return helper.sendResponse(res, result);
-  }
-);
-
+// Approve / Reject single
+router.put('/:id/review',   session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await module.review(req));
+});
 
 export default router;

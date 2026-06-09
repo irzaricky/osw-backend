@@ -80,6 +80,11 @@ export default (sequelize) => {
     shift_name_snapshot: {
       type: DataTypes.STRING,
       allowNull: true
+    },
+    sequence: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1
     }
   }, {
     sequelize,

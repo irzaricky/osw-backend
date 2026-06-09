@@ -6,6 +6,7 @@ export default (sequelize) => {
       SWorkOrderStationJob.belongsTo(models.SWorkOrderStation, { foreignKey: 'wo_station_id', as: 'work_order_station' });
       SWorkOrderStationJob.belongsTo(models.SStationJobs, { foreignKey: 'station_job_id', as: 'station_job' });
       SWorkOrderStationJob.belongsTo(models.SJobs, { foreignKey: 'job_id', as: 'job' });
+      SWorkOrderStationJob.belongsTo(models.SEmployee, { foreignKey: 'operator_id', as: 'operator' });
     }
   }
 
@@ -54,6 +55,10 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: true
     },
+    operator_id : {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    }
   }, {
     sequelize,
     modelName: 'SWorkOrderStationJob',

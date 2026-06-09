@@ -130,21 +130,24 @@ export default {
 
     await queryInterface.bulkInsert('s_jobs', jobs, { ignoreDuplicates: true });
 
-    // 5. Seed Shifts
+    // 5. Seed Shifts (Clean & Continuous 24-Hour Operations)
     const shifts = [
+      // ── SHIFT 1 (Pagi: 07:00 - 15:00) ────────────────────────────────────────
       { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '07:00:00', end_time: '11:30:00', category: 'PRODUCTIVE', description: 'Shift Pagi', active: true, ...timestamp },
       { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '11:30:00', end_time: '12:30:00', category: 'BREAK', description: 'ISHOMA', active: true, ...timestamp },
       { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '12:30:00', end_time: '15:00:00', category: 'PRODUCTIVE', description: 'Shift Pagi Lanjutan', active: true, ...timestamp },
+
+      // ── SHIFT 2 (Sore: 15:00 - 23:00) ────────────────────────────────────────
       { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '15:00:00', end_time: '18:00:00', category: 'PRODUCTIVE', description: 'Shift Sore', active: true, ...timestamp },
-      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '18:00:00', end_time: '18:30:00', category: 'BREAK', description: 'Istirahat', active: true, ...timestamp },
+      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '18:00:00', end_time: '18:30:00', category: 'BREAK', description: 'Istirahat Maghrib', active: true, ...timestamp },
       { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '18:30:00', end_time: '23:00:00', category: 'PRODUCTIVE', description: 'Shift Sore Lanjutan', active: true, ...timestamp },
+
+      // ── SHIFT 3 (Malam: 23:00 - 07:00) ───────────────────────────────────────
       { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '23:00:00', end_time: '02:30:00', category: 'PRODUCTIVE', description: 'Shift Malam', active: true, ...timestamp },
-      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '02:30:00', end_time: '03:00:00', category: 'BREAK', description: 'Istirahat', active: true, ...timestamp },
-      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '03:00:00', end_time: '07:00:00', category: 'PRODUCTIVE', description: 'Shift Malam Lanjutan', active: true, ...timestamp },
-      { name: 'Shift 1 Overtime', shift_number: 1, type: 'NON REGULAR', start_time: '15:00:00', end_time: '18:00:00', category: 'PRODUCTIVE', description: 'Overtime Pagi', active: true, ...timestamp },
-      { name: 'Shift 2 Overtime', shift_number: 2, type: 'NON REGULAR', start_time: '18:30:00', end_time: '21:30:00', category: 'PRODUCTIVE', description: 'Overtime Sore', active: true, ...timestamp },
-      { name: 'Shift 3 Overtime', shift_number: 3, type: 'NON REGULAR', start_time: '23:00:00', end_time: '03:00:00', category: 'PRODUCTIVE', description: 'Overtime Malam', active: true, ...timestamp }
+      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '02:30:00', end_time: '03:00:00', category: 'BREAK', description: 'Istirahat Malam', active: true, ...timestamp },
+      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '03:00:00', end_time: '07:00:00', category: 'PRODUCTIVE', description: 'Shift Malam Lanjutan', active: true, ...timestamp }
     ];
+
     await queryInterface.bulkInsert('s_shifts', shifts, { ignoreDuplicates: true });
 
     // 6. Seed Station Jobs

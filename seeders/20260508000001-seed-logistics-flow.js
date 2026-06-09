@@ -100,8 +100,14 @@ export default {
       shipping_address: `Alamat Customer ${e.globalIdx}`,
       spo_date: d(`${e.shipmentDate}T08:00:00Z`),
       delivery_due_date: d(`${e.shipmentDate}T08:00:00Z`),
-      status: 'Approved',
+    
+      status: 'Completed',
+    
+      remarks: `Sales Purchase Order ${e.globalIdx}`,
+      po_document: `/uploads/po/spo-${e.globalIdx}.pdf`,
+    
       created_by: 1,
+    
       ...timestamp,
     }));
 
@@ -171,22 +177,46 @@ export default {
     };
 
     const deliveryOrderData = allEntries.map((e, idx) => {
-      const status     = resolveStatus(e.batchKey, e.localIdx);
-      const shipTime   = d(`${e.shipmentDate}T07:00:00Z`);
-      const receivedAt = status === 'Scheduled' ? new Date(shipTime.getTime() + 4 * 3600000) : null;
-
+      const status = resolveStatus(e.batchKey, e.localIdx);
+    
+      const shipTime = d(`${e.shipmentDate}T07:00:00Z`);
+    
+      const receivedAt =
+        status === 'Delivered'
+          ? new Date(shipTime.getTime() + 4 * 60 * 60 * 1000)
+          : null;
+    
       return {
-        do_number:        `DO-2026-${String(e.globalIdx).padStart(4, '0')}`,
+        do_number: `DO-2026-${String(e.globalIdx).padStart(4, '0')}`,
+    
         delivery_plan_id: insertedPlans[idx].id,
-        customer_id:      ((e.globalIdx - 1) % 6) + 1,
-        vehicle_id:       ((e.globalIdx - 1) % 5) + 1,
-        driver_id:        ((e.globalIdx - 1) % 5) + 1,
-        shipment_date:    shipTime,
-        delivery_status:  status,
-        proof_of_delivery: status === 'Scheduled' ? `/uploads/pod-dummy-${e.globalIdx}.jpg` : null,
-        notes:            `Pengiriman batch ${e.batchKey}-${e.localIdx}`,
-        created_by:       1,
-        received_at:      receivedAt,
+    
+        customer_id: ((e.globalIdx - 1) % 6) + 1,
+    
+        vehicle_id: ((e.globalIdx - 1) % 5) + 1,
+    
+        driver_id: ((e.globalIdx - 1) % 5) + 1,
+    
+        shipment_date: shipTime,
+    
+        delivery_status: status,
+    
+        proof_of_delivery: null,
+    
+        notes: `Pengiriman batch ${e.batchKey}-${e.localIdx}`,
+    
+        received_at: receivedAt,
+    
+        loading_photo_url: `/uploads/loading/loading-${e.globalIdx}.jpg`,
+    
+        dispatch_approved_by: 1,
+    
+        dispatch_approved_at: new Date(
+          shipTime.getTime() - 30 * 60 * 1000
+        ),
+    
+        created_by: 1,
+    
         ...timestamp,
       };
     });
@@ -197,14 +227,21 @@ export default {
     // DELIVERY ORDER DETAILS
     // =========================
     const deliveryOrderDetailData = allEntries.map((e, idx) => {
-      const status    = resolveStatus(e.batchKey, e.localIdx);
-      const sentQty   = qtyMap[idx].sent;       // MODIFIKASI: Kondisional per bulan
+      const status = resolveStatus(e.batchKey, e.localIdx);
+    
+      const sentQty = qtyMap[idx].sent;
+    
       return {
-        delivery_order_id:      insertedOrders[idx].id,
+        delivery_order_id: insertedOrders[idx].id,
+    
         delivery_plan_detail_id: insertedPlanDetails[idx].id,
-        sent_qty:               sentQty,
-        received_qty:           status === 'Scheduled' ? sentQty : null,
-        notes:                  `Detail shipment ${e.batchKey}-${e.localIdx}`,
+    
+        sent_qty: sentQty,
+    
+        received_qty: null,
+    
+        notes: `Detail shipment ${e.batchKey}-${e.localIdx}`,
+    
         ...timestamp,
       };
     });

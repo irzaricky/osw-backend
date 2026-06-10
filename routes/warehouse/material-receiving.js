@@ -53,6 +53,12 @@ router.post('/quantity-checking/scan/:mr_item_id', session.sessionChecker, sessi
   helper.sendResponse(res, result);
 });
 
+// post add all quantity labels
+router.post('/quantity-checking/add-all/:mr_item_id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
+  const result = await materialReceivingModule.addAllQuantityLabels(req);
+  helper.sendResponse(res, result);
+});
+
 // patch mark quantity incomplete
 router.patch('/quantity-checking/incomplete/:mr_item_label_id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
   const result = await materialReceivingModule.markQuantityIncomplete(req);

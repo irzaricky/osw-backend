@@ -973,6 +973,91 @@ class MaterialReceivingModule extends BaseModule {
     }
   }
 
+  async addAllQuantityLabels(req) {
+    const t = await db.sequelize.transaction();
+    try {
+      const { mr_item_id } = req.params;
+
+      const materialReceivingItem = await TMaterialReceivingItem.findByPk(
+        mr_item_id,
+        {
+          include: [
+            {
+              model: TMaterialReceivingItemLabel,
+              as: 'labels',
+              attributes: ['id', 'quantity_checked_at']
+            }
+          ],
+          transaction: t
+        }
+      );
+
+      if (!materialReceivingItem) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'Material receiving item not found',
+          code: 404
+        };
+      }
+
+      const uncheckedLabels = (materialReceivingItem.labels || [])
+        .filter(
+          (label) => !label.quantity_checked_at
+        );
+
+      if (!uncheckedLabels.length) {
+        await t.rollback();
+        return {
+          status: false,
+          message: 'All labels have already been checked',
+          code: 400
+        };
+      }
+
+      const checkedAt = new Date();
+
+      await TMaterialReceivingItemLabel.update(
+        {
+          is_quantity: true,
+          quantity_checked_at: checkedAt,
+          quantity_checked_by: req.user.id
+        },
+        {
+          where: {
+            id: uncheckedLabels.map((label) => label.id)
+          },
+          transaction: t
+        }
+      );
+
+      await t.commit();
+
+      return {
+        status: true,
+        message: 'All labels added successfully',
+        data: {
+          total: uncheckedLabels.length,
+          checked_at: checkedAt
+        }
+      };
+    } catch (error) {
+      await t.rollback();
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
   async markQuantityIncomplete(req) {
     const t = await db.sequelize.transaction();
     try {

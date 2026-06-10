@@ -12,9 +12,9 @@ export default {
 
     // 2. Seed Defect Categories & Defects
     const defectCategories = [
-      { name: 'Kerusakan Fisik', ...timestamp },
-      { name: 'Cacat Dimensi', ...timestamp },
-      { name: 'Kerusakan Kemasan', ...timestamp }
+      { name: 'Physical Damage', ...timestamp },
+      { name: 'Dimensional Defect', ...timestamp },
+      { name: 'Packaging Damage', ...timestamp }
     ];
     await queryInterface.bulkInsert('ref_defect_categories', defectCategories, { ignoreDuplicates: true });
 
@@ -26,16 +26,16 @@ export default {
     categoriesDB.forEach(c => catMap[c.name] = c.id);
 
     const defects = [
-      { category: 'Kerusakan Fisik', name: 'Retak', ...timestamp },
-      { category: 'Kerusakan Fisik', name: 'Pecah', ...timestamp },
-      { category: 'Kerusakan Fisik', name: 'Penyok', ...timestamp },
-      { category: 'Kerusakan Fisik', name: 'Bengkok', ...timestamp },
-      { category: 'Kerusakan Fisik', name: 'Patah', ...timestamp },
-      { category: 'Cacat Dimensi', name: 'Ukuran tidak sesuai', ...timestamp },
-      { category: 'Cacat Dimensi', name: 'Tebal tidak sesuai', ...timestamp },
-      { category: 'Kerusakan Kemasan', name: 'Kemasan sobek', ...timestamp },
-      { category: 'Kerusakan Kemasan', name: 'Kemasan basah', ...timestamp },
-      { category: 'Kerusakan Kemasan', name: 'Segel rusak', ...timestamp }
+      { category: 'Physical Damage', name: 'Crack', ...timestamp },
+      { category: 'Physical Damage', name: 'Broken', ...timestamp },
+      { category: 'Physical Damage', name: 'Dent', ...timestamp },
+      { category: 'Physical Damage', name: 'Bent', ...timestamp },
+      { category: 'Physical Damage', name: 'Fractured', ...timestamp },
+      { category: 'Dimensional Defect', name: 'Incorrect Size', ...timestamp },
+      { category: 'Dimensional Defect', name: 'Incorrect Thickness', ...timestamp },
+      { category: 'Packaging Damage', name: 'Torn Packaging', ...timestamp },
+      { category: 'Packaging Damage', name: 'Wet Packaging', ...timestamp },
+      { category: 'Packaging Damage', name: 'Broken Seal', ...timestamp }
     ].map(d => ({
       defect_category_id: catMap[d.category],
       name: d.name,
@@ -51,7 +51,7 @@ export default {
     // Assuming Line IDs: 'Line Material' (ID 12), 'Line Finish Good' (ID 14) from previous seed.
     const warehouses = [
       { warehouse_code: 'WH-MAT-01', name: 'Main Material Warehouse', line_id: 12, category_id: 1, notes: 'Gudang utama penyimpanan sparepart & komponen vendor', ...timestamp },
-      { warehouse_code: 'WH-WIP-02', name: 'Work In Proggress warehouse', line_id: 12, category_id: 2, notes: 'Gudang menyimpan barang setengah jadi', ...timestamp },
+      { warehouse_code: 'WH-WIP-02', name: 'Work In Progress Warehouse', line_id: 12, category_id: 2, notes: 'Gudang menyimpan barang setengah jadi', ...timestamp },
       { warehouse_code: 'WH-FG-03', name: 'Finish Good Warehouse', line_id: 14, category_id: 3, notes: 'Gudang penyimpanan sepeda yang sudah dirakit & packing', ...timestamp }
     ];
     await queryInterface.bulkInsert('s_warehouses', warehouses, { ignoreDuplicates: true });

@@ -955,12 +955,12 @@ class MRPModule extends BaseModule {
 
       const plans = await SSalesPurchaseRequests.findAll({
         where: {
-          doc_status_id: 3,
+          status: { [Op.in]: ['Approved', 'Waiting PPIC'] },
           id: {
             [Op.notIn]: usedSprIds
           }
         },
-        attributes: ['id', 'spr_number', 'description', 'priority'],
+        attributes: ['id', 'spr_number', 'spr_name', 'description', 'status'],
         order: [['created_at', 'DESC']],
         limit: 50,
       });

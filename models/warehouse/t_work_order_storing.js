@@ -28,7 +28,7 @@ export default (sequelize) => {
         as: 'area'
       });
 
-      TWorkOrderStoring.belongsTo(models.SWorkOrders, {
+      TWorkOrderStoring.belongsTo(models.SWorkOrder, {
         foreignKey: 'production_wo_id',
         as: 'production_wo'
       });

@@ -28,6 +28,16 @@ export default (sequelize) => {
         as: 'area'
       });
 
+      TWorkOrderStoring.belongsTo(models.SWorkOrders, {
+        foreignKey: 'production_wo_id',
+        as: 'production_wo'
+      });
+
+      TWorkOrderStoring.belongsTo(models.SStations, {
+        foreignKey: 'station_id',
+        as: 'station'
+      });
+
       TWorkOrderStoring.hasMany(models.TWorkOrderStoringItem, {
         foreignKey: 'wo_id',
         as: 'items'
@@ -46,6 +56,18 @@ export default (sequelize) => {
       allowNull: false
     },
     ref_doc_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    take_out_purpose: {
+      type: DataTypes.ENUM('production', 'buffer'),
+      allowNull: true
+    },
+    production_wo_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    station_id: {
       type: DataTypes.INTEGER,
       allowNull: true
     },

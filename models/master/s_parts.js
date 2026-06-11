@@ -78,6 +78,14 @@ export default (sequelize) => {
       allowNull: false,
       defaultValue: 10,
     },
+    standard_buffer_stock: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    weight_per_pcs: {
+      type: DataTypes.DECIMAL(10, 3),
+      allowNull: true,
+    },
   }, {
     sequelize,
     modelName: 'SParts',

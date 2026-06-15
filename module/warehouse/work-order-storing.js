@@ -13,9 +13,16 @@ const {
   SUsers,
   SUserDetail,
   SParts,
+  SPartRoutings,
+  SPartRoutingDetails,
+  SStations,
+  RefStationTypes,
   SPackages,
   SWarehouseAreas,
   SSuppliers,
+  SBoms,
+  SBomDetails,
+  SWorkOrder,
   TWorkOrderStoring, 
   TWorkOrderStoringItem, 
   TWorkOrderStoringItemLabel, 
@@ -221,6 +228,375 @@ class WorkOrderStoringModule extends BaseModule {
     }
   }
 
+  async validateFirstAssemblyBufferStation(stationId, transaction) {
+    const station = await SStations.findByPk(
+      stationId,
+      {
+        include: [
+          {
+            model: RefStationTypes,
+            as: 'station_type',
+            attributes: ['id', 'name']
+          }
+        ],
+        transaction
+      }
+    );
+
+    if (!station) {
+      throw new Error('Station not found');
+    }
+
+    if (station.station_type?.name !== 'ASSEMBLY') {
+      throw new Error(
+        'Station must be Assembly type'
+      );
+    }
+
+    const routings = await SPartRoutings.findAll({
+      attributes: ['id'],
+      include: [
+        {
+          model: SPartRoutingDetails,
+          as: 'routing_details',
+          required: true,
+          attributes: ['id', 'station_id', 'sequence'],
+          include: [
+            {
+              model: SStations,
+              as: 'station',
+              required: true,
+              include: [
+                {
+                  model: RefStationTypes,
+                  as: 'station_type',
+                  required: true,
+                  where: {
+                    name: 'ASSEMBLY'
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      transaction
+    });
+
+    const validStationIds = new Set();
+
+    for (const routing of routings) {
+      const firstAssembly = routing.routing_details
+        .sort(
+          (a, b) => a.sequence - b.sequence
+        )[0];
+
+      if (firstAssembly) {
+        validStationIds.add(
+          firstAssembly.station_id
+        );
+      }
+    }
+
+    if (!validStationIds.has(stationId)) {
+      throw new Error(
+        'Station must be a first assembly station'
+      );
+    }
+    return true;
+  }
+
+  async validateBufferItems(stationId, items, transaction) {
+    const routings = await SPartRoutings.findAll({
+      attributes: ['id', 'part_id'],
+      include: [
+        {
+          model: SPartRoutingDetails,
+          as: 'routing_details',
+          required: true,
+          attributes: ['station_id', 'sequence'],
+          include: [
+            {
+              model: SStations,
+              as: 'station',
+              required: true,
+              include: [
+                {
+                  model: RefStationTypes,
+                  as: 'station_type',
+                  required: true,
+                  where: {
+                    name: 'ASSEMBLY'
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      transaction
+    });
+
+    const validParentPartIds = [];
+
+    for (const routing of routings) {
+      const firstAssembly = routing.routing_details
+        .sort(
+          (a, b) => a.sequence - b.sequence
+        )[0];
+
+      if (firstAssembly && firstAssembly.station_id === stationId) {
+        validParentPartIds.push(
+          routing.part_id
+        );
+      }
+    }
+
+    if (!validParentPartIds.length) {
+      throw new Error(
+        'No part routing found for this station'
+      );
+    }
+
+    const boms = await SBoms.findAll({
+      where: {
+        parent_part_id: {
+          [Op.in]: validParentPartIds
+        },
+        doc_status_id: 3, // Approved
+        activation_status_id: 2 // Active
+      },
+      include: [
+        {
+          model: SBomDetails,
+          as: 'details',
+          required: true,
+          where: {
+            type: 'RAW'
+          }
+        }
+      ],
+      transaction
+    });
+
+    const allowedPartIds = new Set();
+
+    for (const bom of boms) {
+      for (const detail of bom.details) {
+        allowedPartIds.add(
+          detail.part_id
+        );
+      }
+    }
+
+    for (const item of items) {
+      if (!allowedPartIds.has(item.part_id)) {
+        throw new Error(
+          `Part ${item.part_id} is not allowed for selected buffer station`
+        );
+      }
+    }
+
+    return true;
+  }
+
+  async getFirstAssemblyStation(productionWoId, transaction) {
+    const wo = await SWorkOrder.findByPk(
+      productionWoId,
+      {
+        attributes: ['part_id'],
+        transaction
+      }
+    );
+
+    if (!wo) {
+      throw new Error('Production Work Order not found');
+    }
+
+    const routing = await SPartRoutings.findOne({
+      where: {
+        part_id: wo.part_id,
+        active: true
+      },
+      include: [
+        {
+          model: SPartRoutingDetails,
+          as: 'routing_details',
+          required: true,
+          include: [
+            {
+              model: SStations,
+              as: 'station',
+              required: true,
+              include: [
+                {
+                  model: RefStationTypes,
+                  as: 'station_type',
+                  required: true,
+                  where: {
+                    name: 'ASSEMBLY'
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      transaction
+    });
+
+    if (!routing) {
+      throw new Error('Part Routing not found');
+    }
+
+    const firstAssembly = routing.routing_details.sort((a, b) => a.sequence - b.sequence)[0];
+
+    if (!firstAssembly) {
+      throw new Error('Assembly station not found');
+    }
+
+    return firstAssembly.station_id;
+  }
+
+  async validateProductionTakeOut({production_wo_id, items, transaction}) {
+    const wo = await SWorkOrder.findByPk(
+      production_wo_id,
+      {
+        attributes: ['id', 'part_id', 'planned_quantity'],
+        transaction
+      }
+    );
+
+    if (!wo) {
+      throw new Error('Production Work Order not found');
+    }
+
+    const bom = await SBoms.findOne({
+      where: {
+        parent_part_id: wo.part_id,
+        doc_status_id: 3, // Approved
+        activation_status_id: 2 // Active
+      },
+      include: [
+        {
+          model: SBomDetails,
+          as: 'details',
+          required: false
+        }
+      ],
+      transaction
+    });
+
+    if (!bom) {
+      throw new Error('Active BOM not found');
+    }
+
+    const rawMaterials = bom.details.filter(
+      d => d.type === 'RAW'
+    );
+
+    if (rawMaterials.length === 0) {
+      throw new Error('Production WO has no raw material requirement');
+    }
+
+    const requiredMap = new Map();
+
+    for (const detail of rawMaterials) {
+      const requiredQty = Number(detail.qty_required) * Number(wo.planned_quantity);
+
+      requiredMap.set(
+        detail.part_id, requiredQty
+      );
+    }
+
+    const partIds = items.map(i => i.part_id);
+
+    const parts = await SParts.findAll({
+      where: {
+        id: {
+          [Op.in]: partIds
+        }
+      },
+      include: [
+        {
+          model: SPackages,
+          as: 'package',
+          attributes: ['id', 'capacity']
+        }
+      ],
+      transaction
+    });
+
+    const partMap = new Map(
+      parts.map(part => [part.id, part])
+    );
+
+    // VALIDATE PART EXIST
+    for (const item of items) {
+      if (!requiredMap.has(item.part_id)) {
+        throw new Error(
+          `Part ${item.part_id} is not required by Production WO`
+        );
+      }
+    }
+
+    // VALIDATE SUPPLIED QTY
+    for (const item of items) {
+      const requiredQty = requiredMap.get(item.part_id);
+      const part = partMap.get(item.part_id);
+
+      if (!part) {
+        throw new Error(
+          `Part ${item.part_id} not found`
+        );
+      }
+
+      const capacity = Number(part.package?.capacity || 1);
+
+      const suppliedKanban = await TWorkOrderStoringItem.sum(
+        'total_kanban',
+        {
+          include: [
+            {
+              model: TWorkOrderStoring,
+              as: 'work_order',
+              required: true,
+              where: {
+                production_wo_id,
+                wo_status_id: {
+                  [Op.in]: [2, 3, 4]
+                }
+              }
+            }
+          ],
+          where: {
+            part_id: item.part_id
+          },
+          transaction
+        }
+      ) || 0;
+
+      const suppliedQty = suppliedKanban * capacity;
+
+      const requestedQty = item.total_kanban * capacity;
+
+      const remainingQty = requiredQty - suppliedQty;
+
+      if (remainingQty <= 0) {
+        throw new Error(
+          `Part ${item.part_id} already fully supplied`
+        );
+      }
+
+      if (requestedQty > remainingQty) {
+        throw new Error(
+          `Part ${item.part_id} exceeds remaining requirement. Remaining: ${remainingQty}`
+        );
+      }
+    }
+    return true;
+  }
+
   async add(req) {
     const t = await db.sequelize.transaction();
     try {
@@ -236,6 +612,9 @@ class WorkOrderStoringModule extends BaseModule {
         wo_type_id: Joi.number().integer().required(),
         warehouse_area_id: Joi.number().integer().required(),
         wo_status_id: Joi.number().integer().valid(1, 2).required(),
+        take_out_purpose: Joi.string().valid('production', 'buffer').allow(null),
+        production_wo_id: Joi.number().integer().allow(null),
+        station_id: Joi.number().integer().allow(null),
 
         items: Joi.array().items(
           Joi.object({
@@ -259,6 +638,64 @@ class WorkOrderStoringModule extends BaseModule {
       } catch (err) {
         await t.rollback();
         return err;
+      }
+
+      if (value.wo_category === 'Take Out' && value.wo_type_id === 1) {
+        if (!value.take_out_purpose) {
+          await t.rollback();
+          return {
+            status: false,
+            message: 'Take Out Purpose is required for Raw Material Take Out',
+            code: 400
+          };
+        }
+
+        if (value.take_out_purpose === 'buffer') {
+          if (!value.station_id) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Station is required when Take Out Purpose is Buffer',
+              code: 400
+            };
+          }
+
+          try {
+            await this.validateFirstAssemblyBufferStation(value.station_id, t);
+            await this.validateBufferItems(value.station_id, value.items, t);
+          } catch (err) {
+            await t.rollback();
+            return {
+              status: false,
+              message: err.message,
+              code: 400
+            };
+          }
+        }
+
+        if (value.take_out_purpose === 'production') {
+          if (!value.production_wo_id) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Production Work Order is required when Take Out Purpose is Production',
+              code: 400
+            };
+          }
+
+          try {
+            await helper.checkExists(SWorkOrder, value.production_wo_id, 'Production Work Order', t);
+            await this.validateProductionTakeOut(value.production_wo_id, value.items, t);
+            value.station_id = await this.getFirstAssemblyStation(value.production_wo_id, t);
+          } catch (err) {
+            await t.rollback();
+            return {
+              status: false,
+              message: err.message,
+              code: err.code || 400
+            };
+          }
+        }
       }
 
       if (value.ref_doc_id) {
@@ -374,7 +811,9 @@ class WorkOrderStoringModule extends BaseModule {
                     required: true,
                     where: {
                       ref_doc_id: value.ref_doc_id,
-                      wo_status_id: 2
+                      wo_status_id: {
+                        [Op.in]: [2, 3, 4]
+                      }
                     }
                   }
                 ],
@@ -468,6 +907,9 @@ class WorkOrderStoringModule extends BaseModule {
 
         await existing.update({
           wo_category: value.wo_category,
+          take_out_purpose: value.take_out_purpose,
+          production_wo_id: value.production_wo_id,
+          station_id: value.station_id,
           ref_doc_id: value.ref_doc_id,
           ref_doc_number: value.ref_doc_number,
           ref_doc_name: value.ref_doc_name,
@@ -514,6 +956,9 @@ class WorkOrderStoringModule extends BaseModule {
         workOrder = await TWorkOrderStoring.create({
           wo_number,
           wo_category: value.wo_category,
+          take_out_purpose: value.take_out_purpose,
+          production_wo_id: value.production_wo_id,
+          station_id: value.station_id,
           ref_doc_id: value.ref_doc_id,
           ref_doc_number: value.ref_doc_number,
           ref_doc_name: value.ref_doc_name,
@@ -1467,6 +1912,189 @@ class WorkOrderStoringModule extends BaseModule {
       return {
         status: true,
         data: statuses
+      };
+    } catch (error) {
+      if (config.debug) {
+        return {
+          status: false,
+          error: error.message,
+          code: 500
+        };
+      }
+      return {
+        status: false,
+        message: 'Internal server error',
+        code: 500
+      };
+    }
+  }
+
+  async getDropdownWoProduction() {
+    try {
+      const workOrders = await SWorkOrder.findAll({
+        include: [
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['id', 'part_number', 'part_name']
+          }
+        ],
+        order: [['work_date', 'ASC'], ['wo_number', 'ASC']]
+      });
+
+      const result = [];
+
+      for (const wo of workOrders) {
+        const bom = await SBoms.findOne({
+          where: {
+            parent_part_id: wo.part_id,
+            doc_status_id: 3, // Approved
+            activation_status_id: 2 // Active
+          },
+          include: [
+            {
+              model: SBomDetails,
+              as: 'details',
+              include: [
+                {
+                  model: SParts,
+                  as: 'part',
+                  attributes: ['id', 'part_number', 'part_name'],
+                  include: [
+                    {
+                      model: SPackages,
+                      as: 'package',
+                      attributes: ['capacity']
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        });
+
+        if (!bom) {
+          continue;
+        }
+
+        const rawMaterials = bom.details.filter(
+          d => d.type === 'RAW'
+        );
+
+        let firstAssemblyStation = null;
+
+        const routing = await SPartRoutings.findOne({
+          where: { 
+            part_id: wo.part_id,
+            active: true
+          },
+          include: [
+            {
+              model: SPartRoutingDetails,
+              as: 'routing_details',
+              include: [
+                {
+                  model: SStations,
+                  as: 'station',
+                  include: [
+                    {
+                      model: RefStationTypes,
+                      as: 'station_type'
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        })
+
+        if (routing?.routing_details?.length) {
+          const sorted = [...routing.routing_details]
+            .sort((a, b) => a.sequence - b.sequence);
+
+          firstAssemblyStation =
+            sorted.find(
+              r => r.station?.station_type?.name?.toLowerCase().includes('assembly')
+            )?.station;
+
+          if (!firstAssemblyStation) {
+            firstAssemblyStation = sorted[0]?.station ?? null;
+          }
+        }
+
+        const materials = [];
+
+        for (const detail of rawMaterials) {
+          const requiredQty = Number(detail.qty_required) * wo.planned_quantity;
+
+          const packageCapacity = Number(detail.part.package?.capacity || 1);
+
+          const suppliedKanban = await TWorkOrderStoringItem.sum(
+            'total_kanban',
+            {
+              include: [
+                {
+                  model: TWorkOrderStoring,
+                  as: 'work_order',
+                  required: true,
+                  where: {
+                    production_wo_id: wo.id,
+                    wo_status_id: {
+                      [Op.in]: [2, 3, 4]
+                    }
+                  }
+                }
+              ],
+              where: {
+                part_id: detail.part_id
+              }
+            }
+          ) || 0;
+
+          const suppliedQty = suppliedKanban * packageCapacity;
+
+          const remainingQty = Math.max(requiredQty - suppliedQty, 0);
+
+          if (remainingQty <= 0) {
+            continue;
+          }
+
+          materials.push({
+            part_id: detail.part.id,
+            part_number: detail.part.part_number,
+            part_name: detail.part.part_name,
+            required_qty: requiredQty,
+            supplied_qty: suppliedQty,
+            remaining_qty: remainingQty
+          });
+        }
+
+        if (!materials.length) {
+          continue;
+        }
+
+        result.push({
+          wo_id: wo.id,
+          wo_number: wo.wo_number,
+          planned_quantity: wo.planned_quantity,
+          part_id: wo.part.id,
+          part_number: wo.part.part_number,
+          part_name: wo.part.part_name,
+
+          station: firstAssemblyStation
+            ? {
+                id: firstAssemblyStation.id,
+                name: firstAssemblyStation.name
+              }
+            : null,
+
+          materials
+        });
+      }
+
+      return {
+        status: true,
+        data: result
       };
     } catch (error) {
       if (config.debug) {

@@ -7,49 +7,55 @@ const router = express.Router();
 
 // get dropdown work order storing type
 router.get('/types/dropdown', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Supervisor Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.getDropdownWorkOrderStoringType(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.getDropdownWorkOrderStoringType(req);
+  helper.sendResponse(res, result);
 });
 
 // get dropdown work order storing status
 router.get('/statuses/dropdown', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Supervisor Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.getDropdownWorkOrderStoringStatus(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.getDropdownWorkOrderStoringStatus(req);
+  helper.sendResponse(res, result);
+});
+
+// get dropdown work order production
+router.get('/wo-production/dropdown', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Supervisor Warehouse', 'Warehouse Staff']), async (req, res) => {
+  const result = await workOrderStoringModule.getDropdownWoProduction(req);
+  helper.sendResponse(res, result);
 });
 
 // get list work order storing
 router.get('/', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.list(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.list(req);
+  helper.sendResponse(res, result);
 });
 
 // get detail work order storing
 router.get('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.detail(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.detail(req);
+  helper.sendResponse(res, result);
 });
 
 // post add work order storing
 router.post('/', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.add(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.add(req);
+  helper.sendResponse(res, result);
 });
 
 // put update work order storing
 router.put('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.update(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.update(req);
+  helper.sendResponse(res, result);
 });
 
 // delete work order storing
 router.delete('/:id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
-    const result = await workOrderStoringModule.delete(req);
-    helper.sendResponse(res, result);
+  const result = await workOrderStoringModule.delete(req);
+  helper.sendResponse(res, result);
 });
 
 // print part label
 router.get('/print-label/:wo_item_id', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Warehouse Staff']), async (req, res) => {
-    await workOrderStoringModule.printLabel(req, res);
+  await workOrderStoringModule.printLabel(req, res);
 });
 
 export default router;

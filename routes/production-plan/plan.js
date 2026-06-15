@@ -64,6 +64,10 @@ router.post("/:id/capacity-params", auth.sessionChecker, async (req, res) => {
   await productionPlanModule.saveCapacityParams(req, res);
 });
 
+router.put("/:id/capacity-params", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.updateCapacityParams(req, res);
+});
+
 /** POST /plan/:id/calculate
  *  Run capacity calculation engine for a given line */
 router.post("/:id/calculate", auth.sessionChecker, async (req, res) => {

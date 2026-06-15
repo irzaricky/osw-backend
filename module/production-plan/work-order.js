@@ -1,4 +1,4 @@
-import { Op, fn, col, literal } from 'sequelize';
+import { Op, fn, col } from 'sequelize';
 import Joi from 'joi';
 import db from '../../models/index.js';
 import helper from '../../class/helper.class.js';
@@ -7,28 +7,25 @@ import BaseModule from '../../class/base.module.js';
 const {
   SWorkOrder,
   SWorkOrderStation,
-  SWorkOrderStationJob,
   SWorkOrderProgress,
   SWorkOrderIssue,
+  SWorkOrderMaterial,
   SProductionOrder,
   SProductionOrderProduct,
   SProductionOrderSchedule,
   SParts,
   SLines,
-  SFactories,
   SShifts,
   SStations,
-  SJobs,
   sequelize,
 } = db;
 
-// ─── Includes ─────────────────────────────────────────────────────────────────
+// ─── INCLUDES ───────────────────────────────────────────────────────────────
 
 const WO_BASE_INCLUDE = [
   { model: SProductionOrder, as: 'production_order', attributes: ['id', 'po_number'] },
   { model: SParts,           as: 'part',             attributes: ['id', 'part_number', 'part_name'] },
   { model: SLines,           as: 'line',             attributes: ['id', 'line_code', 'name'] },
-  { model: SFactories,       as: 'factory',          attributes: ['id', 'name'] },
   { model: SShifts,          as: 'shift',            attributes: ['id', 'name', 'start_time', 'end_time'] },
 ];
 
@@ -37,62 +34,36 @@ const WO_STATION_INCLUDE = [
     model:    SWorkOrderStation,
     as:       'stations',
     required: false,
-    include: [
-      { model: SStations, as: 'station', attributes: ['id', 'station_code', 'name', 'sequence'] },
-      {
-        model:    SWorkOrderStationJob,
-        as:       'jobs',
-        required: false,
-        include:  [{ model: SJobs, as: 'job', attributes: ['id', 'job_code', 'name', 'standard_time'] }],
-        order:    [['sequence', 'ASC']],
-      },
-    ],
-    order: [['sequence', 'ASC']],
+    include:  [{ model: SStations, as: 'station', attributes: ['id', 'station_code', 'name', 'sequence'] }],
+    order:    [['sequence', 'ASC']],
   },
 ];
 
-const ISSUE_TYPES = ['DOWNTIME', 'DEFECT', 'MATERIAL', 'OTHER'];
+const ISSUE_TYPES = ['DOWNTIME', 'DEFECT', 'MATERIAL', 'OTHER', 'PAUSE'];
 
-// ─── Module ───────────────────────────────────────────────────────────────────
+// ─── MODULE ─────────────────────────────────────────────────────────────────
 
 class WorkOrderModule extends BaseModule {
 
-  // ── List ──────────────────────────────────────────────────────────────────────
-
-  /**
-   * GET /work-orders
-   * Query: search, status, work_date, line_id, po_id, stage, shift_id
-   *
-   * Supports filter by line_id, stage (sequence), dan shift_id.
-   * [PERUBAHAN #3] Tambahan parameter filter opsional `shift_id`.
-   * Jika shift_id dikirim, Work Order akan difilter berdasarkan shift tersebut.
-   * Results are ordered by stage → date → line → wo_number to reflect execution order.
-   */
   async list(req, res) {
     try {
       const { limit, page, offset } = helper.getPagination(req.query);
-      // [PERUBAHAN #3] Tambahkan destructuring `shift_id` dari req.query
       const { search = '', status, work_date, line_id, po_id, stage, shift_id } = req.query;
 
       const where = { deleted_at: null };
 
-      if (search)    where[Op.or] = [{ wo_number: { [Op.iLike]: `%${search}%` } }];
-      if (status)    where.status    = status;
+      if (search)   where[Op.or] = [{ wo_number: { [Op.iLike]: `%${search}%` } }];
+      if (status)   where.status   = status;
       if (work_date) where.work_date = work_date;
-      if (line_id)   where.line_id   = line_id;
-      if (po_id)     where.po_id     = po_id;
-      // `sequence` on WO = stage order from the parallel-sequential scheduler
-      // Filter by stage to see only WOs belonging to a specific production stage
-      if (stage)     where.sequence  = parseInt(stage, 10);
-      // [PERUBAHAN #3] Filter berdasarkan shift_id jika dikirim oleh klien
-      if (shift_id)  where.shift_id  = shift_id;
+      if (line_id)  where.line_id  = line_id;
+      if (po_id)    where.po_id    = po_id;
+      if (stage)    where.sequence = parseInt(stage, 10);
+      if (shift_id) where.shift_id = shift_id;
 
       const { count, rows } = await SWorkOrder.findAndCountAll({
         where,
         limit, offset,
         include:  WO_BASE_INCLUDE,
-        // Sort by stage first so stage-sequential WOs are visually grouped,
-        // then by date and line within each stage
         order:    [['sequence', 'ASC'], ['work_date', 'ASC'], ['line_id', 'ASC'], ['wo_number', 'ASC']],
         distinct: true,
       });
@@ -107,28 +78,16 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Daily Summary ─────────────────────────────────────────────────────────────
-
-  /**
-   * GET /work-orders/daily-summary?work_date=YYYY-MM-DD[&line_id=N][&stage=N][&shift_id=N]
-   *
-   * Aggregated analytics for the given date.
-   * [PERUBAHAN #1] activeIssues menggunakan subquery Sequelize yang aman (anti SQL Injection)
-   *               dan kini juga memfilter berdasarkan `stage` (sequence) jika dikirim.
-   * [PERUBAHAN #3] Tambahan filter opsional shift_id.
-   */
   async dailySummary(req, res) {
     try {
       const workDate = req.query.work_date ?? new Date().toISOString().split('T')[0];
       const lineId   = req.query.line_id  ? parseInt(req.query.line_id, 10)  : null;
       const stage    = req.query.stage    ? parseInt(req.query.stage, 10)    : null;
-      // [PERUBAHAN #3] Ambil shift_id dari query params
       const shiftId  = req.query.shift_id ? parseInt(req.query.shift_id, 10) : null;
 
       const where = { work_date: workDate, deleted_at: null };
       if (lineId)  where.line_id  = lineId;
       if (stage)   where.sequence = stage;
-      // [PERUBAHAN #3] Tambahkan kondisi shift_id jika ada
       if (shiftId) where.shift_id = shiftId;
 
       const wos = await SWorkOrder.findAll({
@@ -136,7 +95,7 @@ class WorkOrderModule extends BaseModule {
         attributes: [
           'status',
           'line_id',
-          'sequence',   // stage order — included so stage_breakdown can be built
+          'sequence',
           [fn('COUNT', col('SWorkOrder.id')), 'count'],
           [fn('SUM', col('planned_quantity')), 'total_planned'],
           [fn('SUM', col('actual_quantity')),  'total_actual'],
@@ -149,11 +108,10 @@ class WorkOrderModule extends BaseModule {
         work_date:        workDate,
         line_id_filter:   lineId  ?? null,
         stage_filter:     stage   ?? null,
-        // [PERUBAHAN #3] Sertakan shift_id_filter di output summary agar klien tahu filter yang aktif
         shift_id_filter:  shiftId ?? null,
         total_wo:         0,
         status_breakdown: {},
-        stage_breakdown:  {},   // Map<stage, { wo_count, total_planned, total_actual }>
+        stage_breakdown:  {},
         lines_active:     new Set(),
         stages_active:    new Set(),
         total_planned:    0,
@@ -176,7 +134,6 @@ class WorkOrderModule extends BaseModule {
         const statusKey = row.status;
         summary.status_breakdown[statusKey] = (summary.status_breakdown[statusKey] ?? 0) + cnt;
 
-        // Stage breakdown: aggregate across all statuses per stage
         const stageKey = `stage_${row.sequence}`;
         if (!summary.stage_breakdown[stageKey]) {
           summary.stage_breakdown[stageKey] = { stage: row.sequence, wo_count: 0, total_planned: 0, total_actual: 0 };
@@ -186,46 +143,17 @@ class WorkOrderModule extends BaseModule {
         summary.stage_breakdown[stageKey].total_actual  += actual;
       }
 
-      summary.lines_active       = summary.lines_active.size;
-      summary.stages_active      = summary.stages_active.size;
-      summary.achievement_pct    = summary.total_planned > 0
+      summary.lines_active    = summary.lines_active.size;
+      summary.stages_active   = summary.stages_active.size;
+      summary.achievement_pct = summary.total_planned > 0
         ? Math.round((summary.total_actual / summary.total_planned) * 10000) / 100
         : 0;
 
-      // ─────────────────────────────────────────────────────────────────────────
-      // [PERUBAHAN #1] Perbaikan SQL Injection pada query activeIssues.
-      //
-      // SEBELUM (TIDAK AMAN — string interpolation langsung):
-      //   sequelize.literal(
-      //     `(SELECT id FROM s_work_orders WHERE work_date = '${workDate}'
-      //       AND deleted_at IS NULL${lineId ? ` AND line_id = ${lineId}` : ''})`
-      //   )
-      //
-      // SESUDAH (AMAN — menggunakan subquery Sequelize ORM dengan parameter binding):
-      //   Subquery dibangun secara programatik menggunakan objek `where` yang
-      //   sudah aman, kemudian di-wrap menggunakan `literal` dari hasil
-      //   findAll yang hanya mengambil `id`. Pendekatan ini sepenuhnya
-      //   memanfaatkan parameterisasi bawaan Sequelize (dialect escape) dan
-      //   tidak ada nilai user-supplied yang diinterpolasi langsung ke string SQL.
-      //
-      // [PERUBAHAN #1b] Filter `stage` (sequence) kini juga dimasukkan ke dalam
-      //   kondisi pencarian activeIssues agar data issues yang dihitung konsisten
-      //   dengan filter stage yang diterapkan pada summary di atas.
-      // ─────────────────────────────────────────────────────────────────────────
-
-      // Bangun kondisi WHERE untuk subquery WO secara aman melalui ORM
-      const woSubqueryWhere = {
-        work_date:  workDate,
-        deleted_at: null,
-      };
-      // Sertakan semua filter aktif agar hasil issues sinkron dengan summary
+      const woSubqueryWhere = { work_date: workDate, deleted_at: null };
       if (lineId)  woSubqueryWhere.line_id  = lineId;
       if (stage)   woSubqueryWhere.sequence = stage;
       if (shiftId) woSubqueryWhere.shift_id = shiftId;
 
-      // Ambil daftar ID Work Order yang sesuai filter, lalu gunakan sebagai
-      // daftar `wo_id` yang valid untuk menghitung issue aktif.
-      // Ini menghindari raw SQL literal sepenuhnya.
       const filteredWoIds = (
         await SWorkOrder.findAll({
           where:      woSubqueryWhere,
@@ -234,7 +162,6 @@ class WorkOrderModule extends BaseModule {
         })
       ).map((w) => w.id);
 
-      // Hitung issue aktif hanya dari WO yang ada dalam daftar filteredWoIds
       const activeIssues = filteredWoIds.length > 0
         ? await SWorkOrderIssue.count({
             where: {
@@ -254,8 +181,6 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Detail ────────────────────────────────────────────────────────────────────
-
   async detail(req, res) {
     try {
       const { id } = req.params;
@@ -269,7 +194,7 @@ class WorkOrderModule extends BaseModule {
             model:    SWorkOrderProgress,
             as:       'progresses',
             required: false,
-            order:    [['progress_time', 'DESC']],
+            order:    [['reported_at', 'DESC']],
           },
           {
             model:    SWorkOrderIssue,
@@ -277,6 +202,11 @@ class WorkOrderModule extends BaseModule {
             where:    { deleted_at: null },
             required: false,
             order:    [['reported_time', 'DESC']],
+          },
+          {
+            model:    SWorkOrderMaterial,
+            as:       'materials',
+            required: false,
           },
         ],
       });
@@ -290,16 +220,6 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Start ─────────────────────────────────────────────────────────────────────
-
-  /**
-   * POST /work-orders/:id/start
-   * Released → In_Progress.
-   *
-   * Only the first station (lowest sequence) on this WO's line is activated.
-   * Subsequent stations remain Pending until each active station is completed —
-   * this enforces the routing sequence within the line.
-   */
   async start(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -315,7 +235,12 @@ class WorkOrderModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 400, error: 'Only Released Work Orders can be started' });
       }
 
-      await wo.update({ status: 'In_Progress' }, { transaction: t });
+      const now = new Date();
+      await wo.update({
+        status:            'In_Progress',
+        actual_start_time: now,
+        started_at:        now,
+      }, { transaction: t });
 
       const allStations = await SWorkOrderStation.findAll({
         where: { wo_id: id },
@@ -324,7 +249,6 @@ class WorkOrderModule extends BaseModule {
       });
 
       if (allStations.length > 0) {
-        // Activate only the first station; all others stay Pending
         await SWorkOrderStation.update(
           { status: 'In_Progress' },
           { where: { id: allStations[0].id }, transaction: t },
@@ -338,8 +262,8 @@ class WorkOrderModule extends BaseModule {
       }
 
       await this.logActivity(req, {
-        moduleCode: 'work_order', activityCode: 'START',
-        resourceId: wo.id, newData: wo,
+        moduleCode:  'work_order', activityCode: 'START',
+        resourceId:  wo.id, newData: wo,
         description: `Started Work Order ${wo.wo_number} — line_id=${wo.line_id} stage=${wo.sequence ?? 1}`,
         transaction: t,
       });
@@ -348,11 +272,12 @@ class WorkOrderModule extends BaseModule {
       return helper.sendResponse(res, {
         status: true, code: 200, message: 'Work Order started',
         data: {
-          id:        wo.id,
-          wo_number: wo.wo_number,
-          line_id:   wo.line_id,
-          stage:     wo.sequence,   // stage order from parallel-sequential model
-          status:    'In_Progress',
+          id:                wo.id,
+          wo_number:         wo.wo_number,
+          line_id:           wo.line_id,
+          stage:             wo.sequence,
+          status:            'In_Progress',
+          actual_start_time: now,
         },
       });
     } catch (error) {
@@ -362,13 +287,14 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Progress ──────────────────────────────────────────────────────────────────
+  // ── Progress ─────────────────────────────────────────────────────────────
 
   /**
    * POST /work-orders/:id/progresses
-   * Body: { cumulative_qty, reported_by }
+   * Body: { qty_good, qty_reject?, qty_scrap?, shift_end_qty?, reported_by_user_id }
    *
-   * cumulative_qty cannot go backward, cannot exceed planned_quantity.
+   * qty_good adalah jumlah unit baik pada laporan ini (bukan kumulatif).
+   * cumulative_qty_good dihitung otomatis dari akumulasi seluruh progress sebelumnya.
    */
   async addProgress(req, res) {
     const t = await sequelize.transaction();
@@ -376,8 +302,11 @@ class WorkOrderModule extends BaseModule {
       const { id } = req.params;
 
       const schema = Joi.object({
-        cumulative_qty: Joi.number().integer().min(0).required(),
-        reported_by:    Joi.string().required(),
+        qty_good:            Joi.number().integer().min(0).required(),
+        qty_reject:          Joi.number().integer().min(0).default(0),
+        qty_scrap:           Joi.number().integer().min(0).default(0),
+        shift_end_qty:       Joi.number().integer().min(0).optional().allow(null),
+        reported_by_user_id: Joi.number().integer().min(1).required(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -393,39 +322,42 @@ class WorkOrderModule extends BaseModule {
       }
       if (wo.status !== 'In_Progress') {
         await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 400, error: 'Progress can only be reported on In_Progress Work Orders' });
-      }
-
-      const { cumulative_qty, reported_by } = validation.value;
-
-      if (cumulative_qty < wo.actual_quantity) {
-        await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error: `cumulative_qty (${cumulative_qty}) cannot be less than current actual_quantity (${wo.actual_quantity}). Progress cannot go backward.`,
-        });
-      }
-      if (cumulative_qty > wo.planned_quantity) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error: `cumulative_qty (${cumulative_qty}) exceeds planned_quantity (${wo.planned_quantity}). Use the /complete endpoint to finalize production.`,
+          error: 'Progress can only be reported on In_Progress Work Orders',
         });
       }
 
-      const progress_pct = wo.planned_quantity > 0
-        ? Math.min(100, Math.round((cumulative_qty / wo.planned_quantity) * 10000) / 100)
-        : 0;
+      const { qty_good, qty_reject, qty_scrap, shift_end_qty, reported_by_user_id } = validation.value;
+
+      // Hitung cumulative_qty_good dari seluruh progress sebelumnya + laporan ini
+      const prevCumulative = (await SWorkOrderProgress.sum('qty_good', {
+        where:       { wo_id: id },
+        transaction: t,
+      })) || 0;
+
+      const cumulative_qty_good = prevCumulative + qty_good;
+
+      if (cumulative_qty_good > wo.planned_quantity) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error: `cumulative qty_good (${cumulative_qty_good}) melebihi planned_quantity (${wo.planned_quantity}).`,
+        });
+      }
 
       const progress = await SWorkOrderProgress.create({
-        wo_id:         wo.id,
-        progress_time: new Date(),
-        cumulative_qty,
-        progress_pct,
-        reported_by,
+        wo_id:               wo.id,
+        qty_good,
+        qty_reject,
+        qty_scrap,
+        cumulative_qty_good,
+        shift_end_qty:       shift_end_qty ?? null,
+        reported_by_user_id,
+        reported_at:         new Date(),
       }, { transaction: t });
 
-      await wo.update({ actual_quantity: cumulative_qty }, { transaction: t });
+      await wo.update({ actual_quantity: cumulative_qty_good }, { transaction: t });
 
       await t.commit();
       return helper.sendResponse(res, { status: true, code: 201, message: 'Progress recorded', data: progress });
@@ -444,7 +376,7 @@ class WorkOrderModule extends BaseModule {
 
       const progresses = await SWorkOrderProgress.findAll({
         where: { wo_id: id },
-        order: [['progress_time', 'DESC']],
+        order: [['reported_at', 'DESC']],
       });
 
       return helper.sendResponse(res, { status: true, code: 200, data: progresses });
@@ -454,22 +386,35 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Issues ────────────────────────────────────────────────────────────────────
+  // ── Issues ───────────────────────────────────────────────────────────────
 
+  /**
+   * POST /work-orders/:id/issues
+   * Body mencakup semua tipe issue dalam satu endpoint (issue_type sebagai pembeda).
+   *
+   * Tipe DOWNTIME: downtime_start, downtime_end, downtime_minutes
+   * Tipe DEFECT:   defect_qty, defect_type, severity
+   * Tipe PAUSE:    pause_reason, paused_by, paused_at, (resumed_by/resumed_at via resolveIssue)
+   * Tipe lain:     issue_description saja
+   */
   async reportIssue(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
 
       const schema = Joi.object({
-        issue_type:        Joi.string().valid(...ISSUE_TYPES).required(),
-        issue_description: Joi.string().required(),
-        reported_by:       Joi.string().required(),
-        downtime_start:    Joi.date().iso().optional().allow(null),
-        downtime_end:      Joi.date().iso().optional().allow(null),
-        downtime_minutes:  Joi.number().integer().min(0).optional().allow(null),
-        defect_qty:        Joi.number().integer().min(0).optional().allow(null),
-        defect_type:       Joi.string().optional().allow('', null),
+        issue_type:          Joi.string().valid(...ISSUE_TYPES).required(),
+        issue_description:   Joi.string().required(),
+        reported_by_user_id: Joi.number().integer().min(1).required(),
+        severity:            Joi.string().valid('LOW', 'MEDIUM', 'HIGH', 'CRITICAL').optional().allow(null),
+        downtime_start:      Joi.date().iso().optional().allow(null),
+        downtime_end:        Joi.date().iso().optional().allow(null),
+        downtime_minutes:    Joi.number().integer().min(0).optional().allow(null),
+        defect_qty:          Joi.number().integer().min(0).optional().allow(null),
+        defect_type:         Joi.string().optional().allow('', null),
+        pause_reason:        Joi.string().optional().allow('', null),
+        paused_by:           Joi.string().optional().allow('', null),
+        paused_at:           Joi.date().iso().optional().allow(null),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -491,7 +436,10 @@ class WorkOrderModule extends BaseModule {
         });
       }
 
-      const { downtime_start, downtime_end, reported_by, ...issueData } = validation.value;
+      const {
+        downtime_start, downtime_end, reported_by_user_id,
+        paused_at, ...issueData
+      } = validation.value;
 
       let downtimeMinutes = issueData.downtime_minutes;
       if (downtime_start && downtime_end && !downtimeMinutes) {
@@ -500,13 +448,14 @@ class WorkOrderModule extends BaseModule {
       }
 
       const issue = await SWorkOrderIssue.create({
-        wo_id:            wo.id,
+        wo_id:               wo.id,
         ...issueData,
-        downtime_start:   downtime_start  ?? null,
-        downtime_end:     downtime_end    ?? null,
-        downtime_minutes: downtimeMinutes ?? null,
-        reported_by,
-        reported_time:    new Date(),
+        downtime_start:      downtime_start  ?? null,
+        downtime_end:        downtime_end    ?? null,
+        downtime_minutes:    downtimeMinutes ?? null,
+        paused_at:           paused_at       ?? null,
+        reported_by_user_id,
+        reported_time:       new Date(),
       }, { transaction: t });
 
       await t.commit();
@@ -542,14 +491,23 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
+  /**
+   * PUT /work-orders/:id/issues/:issue_id/resolve
+   * Body: { resolution, resolved_by, resumed_by?, resumed_at?, pause_duration_minutes? }
+   *
+   * Untuk tipe PAUSE, field resumed_by dan resumed_at mengisi data resume.
+   */
   async resolveIssue(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id, issue_id } = req.params;
 
       const schema = Joi.object({
-        resolution:  Joi.string().required(),
-        resolved_by: Joi.string().required(),
+        resolution:              Joi.string().required(),
+        resolved_by:             Joi.string().required(),
+        resumed_by:              Joi.string().optional().allow('', null),
+        resumed_at:              Joi.date().iso().optional().allow(null),
+        pause_duration_minutes:  Joi.number().integer().min(0).optional().allow(null),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -571,10 +529,15 @@ class WorkOrderModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 400, error: 'Issue is already resolved' });
       }
 
+      const { resolution, resolved_by, resumed_by, resumed_at, pause_duration_minutes } = validation.value;
+
       await issue.update({
-        resolution:    validation.value.resolution,
-        resolved_by:   validation.value.resolved_by,
-        resolved_time: new Date(),
+        resolution,
+        resolved_by,
+        resolved_time:          new Date(),
+        resumed_by:             resumed_by             ?? null,
+        resumed_at:             resumed_at             ?? null,
+        pause_duration_minutes: pause_duration_minutes ?? null,
       }, { transaction: t });
 
       await t.commit();
@@ -586,28 +549,15 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Complete ──────────────────────────────────────────────────────────────────
+  // ── Complete ─────────────────────────────────────────────────────────────
 
   /**
    * POST /work-orders/:id/complete
    * Body: { actual_quantity, under_production_reason? }
    *
-   * PARALLEL-SEQUENTIAL COMPLETION FLOW:
-   *   Each WO is bound to exactly one line in one stage. Completing a WO on line A
-   *   at stage 1 does not affect WOs on line B (same stage, parallel) or any
-   *   stage-2 WOs. The PO is auto-completed only when ALL WOs across ALL lines
-   *   and ALL stages are Completed.
-   *
-   * [PERUBAHAN #2a] Sinkronisasi status SProductionOrderSchedule:
-   *   Status schedule TIDAK langsung di-set ke 'Completed' hanya karena satu WO selesai.
-   *   Schedule baru menjadi 'Completed' jika SELURUH WO yang terikat pada po_schedule_id
-   *   yang sama sudah berstatus 'Completed'. Jika masih ada WO lain yang belum selesai,
-   *   status schedule tetap pada status sebelumnya (misal 'In_Progress').
-   *
-   * [PERUBAHAN #2b] Sinkronisasi actual_qty_per_day pada SProductionOrderSchedule:
-   *   Nilai actual_qty_per_day TIDAK langsung di-overwrite dengan actual_quantity dari
-   *   satu WO. Melainkan, dihitung akumulasi SUM dari actual_quantity seluruh WO yang
-   *   memiliki po_schedule_id yang sama, untuk mendukung skenario multi-shift / paralel.
+   * Single-line completion flow:
+   *   Satu WO = satu lini = satu jadwal slot. Tidak ada multi-line paralel.
+   *   PO auto-complete jika SEMUA WO dalam PO sudah Completed.
    */
   async complete(req, res) {
     const t = await sequelize.transaction();
@@ -637,7 +587,6 @@ class WorkOrderModule extends BaseModule {
 
       const { actual_quantity, under_production_reason } = validation.value;
 
-      // Over-production cap: max 110% of planned
       const maxAllowed = Math.ceil(wo.planned_quantity * 1.1);
       if (actual_quantity > maxAllowed) {
         await t.rollback();
@@ -655,67 +604,51 @@ class WorkOrderModule extends BaseModule {
         });
       }
 
+      const now     = new Date();
       const oldData = wo.toJSON();
-      await wo.update({ actual_quantity, status: 'Completed' }, { transaction: t });
 
-      // Batch update all stations and their jobs in two queries (no N+1 loop)
+      await wo.update({
+        actual_quantity,
+        status:          'Completed',
+        actual_end_time: now,
+        completed_at:    now,
+      }, { transaction: t });
+
+      // Selesaikan semua station
       await SWorkOrderStation.update(
         { status: 'Completed', actual_quantity },
         { where: { wo_id: id }, transaction: t },
       );
 
-      const stationIds = (
-        await SWorkOrderStation.findAll({
-          where:      { wo_id: id },
-          attributes: ['id'],
-          transaction: t,
-        })
-      ).map((s) => s.id);
-
-      if (stationIds.length > 0) {
-        await SWorkOrderStationJob.update(
-          { status: 'Completed' },
-          { where: { wo_station_id: stationIds }, transaction: t },
-        );
-      }
-
       const final_progress_pct = wo.planned_quantity > 0
         ? Math.min(100, Math.round((actual_quantity / wo.planned_quantity) * 10000) / 100)
         : 0;
 
+      // Final progress entry menggunakan kolom baru
       await SWorkOrderProgress.create({
-        wo_id:          wo.id,
-        progress_time:  new Date(),
-        cumulative_qty: actual_quantity,
-        progress_pct:   final_progress_pct,
-        reported_by:    'SYSTEM (Completed)',
+        wo_id:               wo.id,
+        qty_good:            actual_quantity,
+        qty_reject:          0,
+        qty_scrap:           0,
+        cumulative_qty_good: actual_quantity,
+        reported_by_user_id: req.user?.id ?? null,
+        reported_at:         now,
       }, { transaction: t });
 
       await this.logActivity(req, {
-        moduleCode: 'work_order', activityCode: 'COMPLETE',
-        resourceId: wo.id, oldData, newData: wo,
-        description: `Completed WO ${wo.wo_number} on line_id=${wo.line_id} — actual: ${actual_quantity}`, transaction: t,
+        moduleCode:  'work_order', activityCode: 'COMPLETE',
+        resourceId:  wo.id, oldData, newData: wo,
+        description: `Completed WO ${wo.wo_number} on line_id=${wo.line_id} — actual: ${actual_quantity}`,
+        transaction: t,
       });
 
-      // ─────────────────────────────────────────────────────────────────────────
-      // [PERUBAHAN #2] Sinkronisasi SProductionOrderSchedule dengan logika yang benar.
-      // ─────────────────────────────────────────────────────────────────────────
+      // Sinkronisasi SProductionOrderSchedule
       if (wo.po_schedule_id) {
-
-        // [PERUBAHAN #2b] Hitung akumulasi actual_quantity dari SELURUH WO
-        // yang terikat pada po_schedule_id yang sama (termasuk WO yang baru saja selesai).
-        // Ini mendukung skenario multi-shift atau paralel WO dalam satu schedule.
         const accumulatedActualQty = await SWorkOrder.sum('actual_quantity', {
-          where: {
-            po_schedule_id: wo.po_schedule_id,
-            deleted_at:     null,
-          },
+          where: { po_schedule_id: wo.po_schedule_id, deleted_at: null },
           transaction: t,
         });
 
-        // [PERUBAHAN #2a] Cek apakah masih ada WO lain yang belum Completed
-        // pada po_schedule_id yang sama. Status schedule hanya menjadi 'Completed'
-        // jika TIDAK ADA LAGI WO yang tersisa (pendingInSchedule === 0).
         const pendingInSchedule = await SWorkOrder.count({
           where: {
             po_schedule_id: wo.po_schedule_id,
@@ -725,23 +658,17 @@ class WorkOrderModule extends BaseModule {
           transaction: t,
         });
 
-        // Tentukan status schedule: 'Completed' hanya jika semua WO sudah selesai,
-        // 'In_Progress' jika masih ada WO yang berjalan.
         const scheduleNewStatus = pendingInSchedule === 0 ? 'Completed' : 'In_Progress';
 
         await SProductionOrderSchedule.update(
           {
-            // Gunakan total akumulasi, bukan langsung actual_quantity dari satu WO
             actual_qty_per_day: accumulatedActualQty || 0,
             status:             scheduleNewStatus,
           },
           { where: { id: wo.po_schedule_id }, transaction: t },
         );
-      }
 
-      // Recalculate SProductionOrderProduct.actual_qty by summing ALL WO actuals
-      // for the same po_product_id (spans multiple lines if multi-line product)
-      if (wo.po_schedule_id) {
+        // Sinkronisasi SProductionOrderProduct.actual_qty
         const linkedSchedule = await SProductionOrderSchedule.findOne({
           where:      { id: wo.po_schedule_id },
           attributes: ['po_product_id'],
@@ -749,9 +676,7 @@ class WorkOrderModule extends BaseModule {
         });
 
         if (linkedSchedule?.po_product_id) {
-          // Hitung total actual dari seluruh WO yang terikat schedule
-          // di bawah po_product_id yang sama (aman menggunakan subquery ORM)
-          const allScheduleIdsForProduct = (
+          const allScheduleIds = (
             await SProductionOrderSchedule.findAll({
               where:      { po_product_id: linkedSchedule.po_product_id },
               attributes: ['id'],
@@ -760,11 +685,11 @@ class WorkOrderModule extends BaseModule {
             })
           ).map((s) => s.id);
 
-          const productActualSum = allScheduleIdsForProduct.length > 0
+          const productActualSum = allScheduleIds.length > 0
             ? await SWorkOrder.sum('actual_quantity', {
                 where: {
                   deleted_at:     null,
-                  po_schedule_id: { [Op.in]: allScheduleIdsForProduct },
+                  po_schedule_id: { [Op.in]: allScheduleIds },
                 },
                 transaction: t,
               })
@@ -777,8 +702,7 @@ class WorkOrderModule extends BaseModule {
         }
       }
 
-      // Auto-complete the PO when ALL WOs (across ALL lines) are Completed
-      // Must run inside transaction to prevent concurrent race condition
+      // Auto-complete PO jika semua WO sudah Completed
       const pendingWoCount = await SWorkOrder.count({
         where: {
           po_id:      wo.po_id,
@@ -789,28 +713,8 @@ class WorkOrderModule extends BaseModule {
       });
 
       if (pendingWoCount === 0) {
-        // total_actual_qty must count FINAL product units, not line-operation units.
-        // Each po_product row is per (plan_detail × line); parallel lines each record
-        // their own actual_qty but they all contribute to the same final unit count.
-        // MIN(actual_qty) per plan_detail = bottleneck line = real final unit output.
-        // SUM of those per-detail MINs = total final units actually produced.
-        const perDetailActuals = await SProductionOrderProduct.findAll({
-          where:      { po_id: wo.po_id },
-          attributes: ['plan_detail_id', [fn('MIN', col('actual_qty')), 'min_actual']],
-          group:      ['plan_detail_id'],
-          raw:        true,
-          transaction: t,
-        });
-        const totalActualQty = perDetailActuals.reduce(
-          (sum, row) => sum + (parseInt(row.min_actual, 10) || 0), 0
-        );
-
         await SProductionOrder.update(
-          {
-            status:           'Completed',
-            completed_at:     new Date(),
-            total_actual_qty: totalActualQty,
-          },
+          { status: 'Completed', completed_at: now },
           { where: { id: wo.po_id }, transaction: t },
         );
       }
@@ -822,9 +726,10 @@ class WorkOrderModule extends BaseModule {
           id:               wo.id,
           wo_number:        wo.wo_number,
           line_id:          wo.line_id,
-          stage:            wo.sequence,   // stage order from parallel-sequential model
+          stage:            wo.sequence,
           planned_quantity: wo.planned_quantity,
           actual_quantity,
+          actual_end_time:  now,
           po_completed:     pendingWoCount === 0,
         },
       });
@@ -835,23 +740,23 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Station Job Status ────────────────────────────────────────────────────────
+  // ── Station Status ────────────────────────────────────────────────────────
 
   /**
-   * PUT /work-orders/:id/stations/:station_id/jobs/:job_id/status
-   * Body: { status, actual_time? }
+   * PUT /work-orders/:id/stations/:station_id/status
+   * Body: { status }
    *
-   * Enforces job sequence within a station — a job cannot advance to In_Progress
-   * or Completed unless all lower-sequence jobs on the same station are Completed.
+   * Menggantikan updateStationJobStatus. Karena SWorkOrderStationJob sudah tidak ada,
+   * update status dilakukan langsung pada level SWorkOrderStation.
+   * Enforces station sequence: station berikutnya hanya bisa aktif setelah station sebelumnya Completed.
    */
-  async updateStationJobStatus(req, res) {
+  async updateStationStatus(req, res) {
     const t = await sequelize.transaction();
     try {
-      const { id, station_id, job_id } = req.params;
+      const { id, station_id } = req.params;
 
       const schema = Joi.object({
-        status:      Joi.string().valid('Pending', 'In_Progress', 'Completed').required(),
-        actual_time: Joi.number().integer().min(0).optional().allow(null),
+        status: Joi.string().valid('Pending', 'In_Progress', 'Completed').required(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -869,7 +774,7 @@ class WorkOrderModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error: 'Station job status can only be updated on Released or In_Progress Work Orders',
+          error: 'Station status can only be updated on Released or In_Progress Work Orders',
         });
       }
 
@@ -882,24 +787,15 @@ class WorkOrderModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, error: 'Station not found for this Work Order' });
       }
 
-      const job = await SWorkOrderStationJob.findOne({
-        where: { id: job_id, wo_station_id: station_id },
-        transaction: t,
-      });
-      if (!job) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 404, error: 'Station job not found' });
-      }
-
       const { status: newStatus } = validation.value;
 
-      // Enforce job sequence: all preceding jobs on this station must be Completed
+      // Enforce station sequence: station sebelumnya harus Completed sebelum yang ini bisa In_Progress
       if (newStatus === 'In_Progress' || newStatus === 'Completed') {
-        const blockerCount = await SWorkOrderStationJob.count({
+        const blockerCount = await SWorkOrderStation.count({
           where: {
-            wo_station_id: station_id,
-            sequence:      { [Op.lt]: job.sequence },
-            status:        { [Op.ne]: 'Completed' },
+            wo_id:    id,
+            sequence: { [Op.lt]: station.sequence },
+            status:   { [Op.ne]: 'Completed' },
           },
           transaction: t,
         });
@@ -908,50 +804,85 @@ class WorkOrderModule extends BaseModule {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error: `Cannot set job to '${newStatus}': ${blockerCount} preceding job(s) on this station are not yet Completed. Process sequence must be followed.`,
+            error: `Cannot set station to '${newStatus}': ${blockerCount} preceding station(s) are not yet Completed. Process sequence must be followed.`,
           });
         }
       }
 
-      await job.update(validation.value, { transaction: t });
+      await station.update({ status: newStatus }, { transaction: t });
+
+      // Jika station ini Completed, aktifkan station berikutnya (jika ada)
+      if (newStatus === 'Completed') {
+        const nextStation = await SWorkOrderStation.findOne({
+          where: {
+            wo_id:    id,
+            sequence: { [Op.gt]: station.sequence },
+            status:   'Pending',
+          },
+          order:       [['sequence', 'ASC']],
+          transaction: t,
+        });
+        if (nextStation) {
+          await nextStation.update({ status: 'In_Progress' }, { transaction: t });
+        }
+      }
 
       await t.commit();
       return helper.sendResponse(res, {
-        status: true, code: 200, message: 'Station job status updated',
-        data: job,
+        status: true, code: 200, message: 'Station status updated',
+        data: station,
       });
     } catch (error) {
       await t.rollback();
-      console.log('[WorkOrderModule][updateStationJobStatus]:', error);
+      console.log('[WorkOrderModule][updateStationStatus]:', error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // ── Scan Operator ─────────────────────────────────────────────────────────────
+  // ── Materials ─────────────────────────────────────────────────────────────
 
   /**
-   * [FITUR BARU #4] POST /work-orders/:id/stations/:station_id/jobs/:job_id/scan-operator
-   * Body: { operator_id }
-   *
-   * Endpoint untuk assignasi operator ke job tertentu melalui mekanisme scan (QR/barcode).
-   * Alur:
-   *   1. Validasi WO ada dan statusnya Released atau In_Progress.
-   *   2. Validasi Job ada pada stasiun yang dimaksud.
-   *   3. Sequence Enforcer: semua job dengan sequence lebih rendah harus sudah Completed.
-   *   4. Update operator_id pada job tersebut.
-   *   5. Jika status job masih Pending, otomatis ubah ke In_Progress (operator mulai bekerja).
-   *      Jika sudah In_Progress, biarkan (operator hanya mengganti/assign ulang).
-   *   6. Catat log aktivitas dan kembalikan data job terbaru.
+   * GET /work-orders/:id/materials
+   * Menampilkan daftar material kebutuhan WO beserta status ketersediaan stok.
    */
-  async scanOperator(req, res) {
+  async getMaterials(req, res) {
+    try {
+      const { id } = req.params;
+
+      const wo = await SWorkOrder.findOne({ where: { id, deleted_at: null } });
+      if (!wo) return helper.sendResponse(res, { status: false, code: 404, error: 'Work Order not found' });
+
+      const materials = await SWorkOrderMaterial.findAll({
+        where:   { wo_id: id },
+        include: [{
+          model:      SParts,
+          as:         'material_part',
+          attributes: ['id', 'part_number', 'part_name'],
+          foreignKey: 'material_part_id',
+          required:   false,
+        }],
+        order: [['id', 'ASC']],
+      });
+
+      return helper.sendResponse(res, { status: true, code: 200, data: materials });
+    } catch (error) {
+      console.log('[WorkOrderModule][getMaterials]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
+
+  /**
+   * PUT /work-orders/:id/materials/:material_id/actual
+   * Body: { actual_quantity }
+   * Update kuantitas material aktual yang digunakan.
+   */
+  async updateMaterialActual(req, res) {
     const t = await sequelize.transaction();
     try {
-      // a. Ambil parameter dari req.params dan req.body
-      const { id, station_id, job_id } = req.params;
+      const { id, material_id } = req.params;
 
-      // b. Validasi Joi — operator_id wajib diisi
       const schema = Joi.object({
-        operator_id: Joi.number().integer().min(1).required(),
+        actual_quantity: Joi.number().min(0).required(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -960,101 +891,35 @@ class WorkOrderModule extends BaseModule {
         return helper.sendResponse(res, validation);
       }
 
-      const { operator_id } = validation.value;
-
-      // c. Pastikan Work Order ada dan statusnya Released atau In_Progress
-      const wo = await SWorkOrder.findOne({
-        where: { id, deleted_at: null },
-        transaction: t,
-      });
-
+      const wo = await SWorkOrder.findOne({ where: { id, deleted_at: null }, transaction: t });
       if (!wo) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 404,
-          error: 'Work Order not found',
-        });
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Work Order not found' });
       }
-
       if (!['Released', 'In_Progress'].includes(wo.status)) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error: `Operator can only be assigned on Released or In_Progress Work Orders. Current status: '${wo.status}'`,
+          error: 'Material actual can only be updated on Released or In_Progress Work Orders',
         });
       }
 
-      // d. Ambil data SWorkOrderStationJob berdasarkan job_id dan station_id
-      const job = await SWorkOrderStationJob.findOne({
-        where: {
-          id:            job_id,
-          wo_station_id: station_id,
-        },
+      const material = await SWorkOrderMaterial.findOne({
+        where: { id: material_id, wo_id: id },
         transaction: t,
       });
-
-      if (!job) {
+      if (!material) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 404,
-          error: 'Station job not found for the given station',
-        });
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Material not found for this Work Order' });
       }
 
-      // e. Sequence Enforcer: pastikan semua job dengan sequence lebih rendah
-      //    di stasiun yang sama sudah berstatus 'Completed'.
-      const blockerCount = await SWorkOrderStationJob.count({
-        where: {
-          wo_station_id: station_id,
-          sequence:      { [Op.lt]: job.sequence },
-          status:        { [Op.ne]: 'Completed' },
-        },
-        transaction: t,
-      });
-
-      if (blockerCount > 0) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error: `Cannot assign operator: ${blockerCount} preceding job(s) on this station are not yet Completed. Process sequence must be followed.`,
-        });
-      }
-
-      // f. Update job: set operator_id dan ubah status jika masih Pending.
-      //    Jika status saat ini 'Pending' → otomatis jadikan 'In_Progress'
-      //    (operator scan = tanda mulai mengeksekusi tugas tersebut).
-      //    Jika status sudah 'In_Progress' → biarkan (mungkin ganti operator di tengah jalan).
-      const newJobStatus = job.status === 'Pending' ? 'In_Progress' : job.status;
-
-      await job.update(
-        {
-          operator_id,
-          status: newJobStatus,
-        },
-        { transaction: t },
-      );
-
-      // h. Catat log aktivitas — format parameter mengikuti method lain di modul ini
-      await this.logActivity(req, {
-        moduleCode:  'work_order',
-        activityCode: 'SCAN_OPERATOR',
-        resourceId:  wo.id,
-        newData:     job,
-        description: `Operator ID ${operator_id} assigned to Job ID ${job_id} (Station ID ${station_id}) on WO ${wo.wo_number} — job status: ${newJobStatus}`,
-        transaction: t,
-      });
+      await material.update({ actual_quantity: validation.value.actual_quantity }, { transaction: t });
 
       await t.commit();
-
-      // i. Kembalikan data job terbaru yang berhasil diupdate
-      return helper.sendResponse(res, {
-        status: true, code: 200,
-        message: 'Operator assigned successfully',
-        data: job,
-      });
+      return helper.sendResponse(res, { status: true, code: 200, message: 'Material actual updated', data: material });
     } catch (error) {
       await t.rollback();
-      console.log('[WorkOrderModule][scanOperator]:', error);
+      console.log('[WorkOrderModule][updateMaterialActual]:', error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }

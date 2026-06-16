@@ -98,6 +98,23 @@ class ForecastModule extends BaseModule {
 
       const { count, rows } = await SSalesForecasts.findAndCountAll({
         where,
+        attributes: {
+          include: [
+            [
+              db.sequelize.literal(`(
+          SELECT COALESCE(
+            ROUND(
+              COUNT(CASE WHEN forecast_qty > 0 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0)
+            ),
+            100
+          )
+          FROM s_sales_forecast_details
+          WHERE s_sales_forecast_details.forecast_id = "SSalesForecasts".id
+        )`),
+              'fill_completeness'
+            ]
+          ]
+        },
         include,
         limit,
         offset,

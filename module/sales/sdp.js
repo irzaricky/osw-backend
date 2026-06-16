@@ -65,9 +65,7 @@ class SDPModule extends BaseModule {
         order: [['name', 'ASC']]
       });
       
-      const filteredDocks = docks.filter(d => d.area?.warehouse?.category);
-      
-      const data = filteredDocks.map(d => ({
+      const data = docks.map(d => ({
         id: d.id,
         name: d.name,
         area_id: d.area_id,
@@ -237,7 +235,7 @@ class SDPModule extends BaseModule {
   async list(req) {
     try {
       const params = req.query;
-      const { start_date, end_date, status, search } = params;
+      const { start_date, end_date, status, search, warehouse_id } = params;
       const { limit, page, offset } = helper.getPagination(params);
 
       const where = {};
@@ -251,9 +249,20 @@ class SDPModule extends BaseModule {
           { destination: { [Op.iLike]: `%${search}%` } }
         ];
       }
+      if (warehouse_id) where.warehouse_id = warehouse_id;
 
       const include = [
-        { model: SWarehouses, as: 'warehouse', attributes: ['id', 'name', ['warehouse_code', 'code']] },
+        {
+          model: SWarehouses, as: 'warehouse',
+          attributes: ['id', 'name', ['warehouse_code', 'code']],
+          required: true,
+          include: [{
+            model: RefWarehouseCategories,
+            as: 'category',
+            attributes: [],
+            where: { name: 'Finish Good' }
+          }]
+        },
         { model: SDocks, as: 'dock', attributes: ['id', 'name'] },
         {
           model: SUsers, as: 'creator', attributes: ['id', 'email'],
@@ -313,7 +322,7 @@ class SDPModule extends BaseModule {
   }
 
   async _generateDPNumber(transaction) {
-    const prefix = `SDP-${dayjs().format('YYYY-MM')}`;
+    const prefix = `DP-${dayjs().format('YYYY-MM')}`;
     const last = await SDeliveryPlans.findOne({
       where: { dp_number: { [Op.like]: `${prefix}-%` } },
       order: [['dp_number', 'DESC']],
@@ -376,8 +385,15 @@ class SDPModule extends BaseModule {
       const warehouse = await SWarehouses.findByPk(warehouse_id, { transaction: t });
       if (!warehouse) { await t.rollback(); return { status: false, message: 'Warehouse not found', code: 404 }; }
 
-      const dock = await SDocks.findByPk(dock_id, { transaction: t });
+      const dock = await SDocks.findByPk(dock_id, {
+        include: [{ model: SWarehouseAreas, as: 'area', attributes: ['warehouse_id'] }],
+        transaction: t
+      });
       if (!dock) { await t.rollback(); return { status: false, message: 'Dock not found', code: 404 }; }
+      if (dock.area?.warehouse_id !== warehouse_id) {
+        await t.rollback();
+        return { status: false, message: 'Dock does not belong to the specified warehouse', code: 400 };
+      }
 
       // Conflict detection
       // Two time ranges overlap when: existing.start < new.end AND existing.end > new.start
@@ -566,6 +582,18 @@ class SDPModule extends BaseModule {
           message: `Dock conflict with plan ${conflict.dp_number} (${conflict.time_start} – ${conflict.time_end})`,
           code: 409
         };
+      }
+
+      if (updates.warehouse_id || updates.dock_id) {
+        const dock = await SDocks.findByPk(newDock, {
+          include: [{ model: SWarehouseAreas, as: 'area', attributes: ['warehouse_id'] }],
+          transaction: t
+        });
+        if (!dock) { await t.rollback(); return { status: false, message: 'Dock not found', code: 404 }; }
+        if (dock.area?.warehouse_id !== newWarehouse) {
+          await t.rollback();
+          return { status: false, message: 'Dock does not belong to the specified warehouse', code: 400 };
+        }
       }
 
       // Validate scheduled date against SPO due dates and check remaining quantities

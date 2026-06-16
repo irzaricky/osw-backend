@@ -254,6 +254,35 @@ class SDOModule extends BaseModule {
       }
       sdo.dataValues.sla_status = status;
 
+      // Fetch related Take Out Work Orders
+      const takeOutWorkOrders = await TWorkOrderStoring.findAll({
+        where: {
+          ref_doc_number: sdo.do_number,
+          wo_category: 'Take Out'
+        },
+        include: [
+          {
+            model: TWorkOrderStoringItem,
+            as: 'items',
+            include: [
+              { model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name'] }
+            ]
+          },
+          {
+            model: db.RefWorkOrderStoringStatus,
+            as: 'status',
+            attributes: ['id', 'name']
+          },
+          {
+            model: SWarehouseAreas,
+            as: 'area',
+            attributes: ['id', 'name', 'area_code']
+          }
+        ],
+        order: [['created_at', 'ASC']]
+      });
+      sdo.dataValues.take_out_wos = takeOutWorkOrders;
+
       return { status: true, data: sdo };
     } catch (error) {
       if (config.debug) return { status: false, error: error.message, code: 500 };
@@ -679,6 +708,41 @@ class SDOModule extends BaseModule {
       if (!sdo.dispatch_approved_by) {
         await t.rollback();
         return { status: false, message: 'Cannot start delivery: Dispatch must be approved by a Supervisor first', code: 400 };
+      }
+
+      // Check if there are any Take Out Work Orders for this SDO that are not completed (wo_status_id !== 4)
+      const incompleteTakeOut = await TWorkOrderStoring.findOne({
+        where: {
+          ref_doc_number: sdo.do_number,
+          wo_category: 'Take Out',
+          wo_status_id: { [Op.ne]: 4 }
+        },
+        transaction: t
+      });
+
+      if (incompleteTakeOut) {
+        const { bypass } = req.body;
+        const allowedBypassRoles = ['Admin sales', 'Superadmin', 'Supervisor Sales'];
+        const isAuthorized = req.user && req.user.role && allowedBypassRoles.includes(req.user.role);
+
+        if (bypass === true) {
+          if (!isAuthorized) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Forbidden: You are not authorized to bypass the Take Out validation. Only Admin sales, Superadmin, or Supervisor Sales can bypass.',
+              code: 403
+            };
+          }
+        } else {
+          await t.rollback();
+          return {
+            status: false,
+            require_bypass: true,
+            message: 'Cannot start delivery: Take Out items are not completed yet.',
+            code: 400
+          };
+        }
       }
 
       await sdo.update({

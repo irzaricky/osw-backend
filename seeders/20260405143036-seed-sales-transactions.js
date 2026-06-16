@@ -126,7 +126,7 @@ export default {
       const spoRow=spoRows[si],sd=new Date(spoRow.created_at);sd.setDate(sd.getDate()+5+si%5);
       const st=si%10<5?'Scheduled':si%10<8?'Shipped':'Draft';
       const dnum=`DP-${sd.getFullYear()}-${pad(sd.getMonth()+1)}-${pad(dpNums.length+1)}`;
-      dpRows.push({dp_number:dnum,scheduled_date:`${sd.getFullYear()}-${pad(sd.getMonth()+1)}-${pad(Math.min(sd.getDate(),28))}`,time_start:'08:00:00',time_end:'12:00:00',warehouse_id:1,dock_id:1,destination:DEST[(si+spoRows[si].customer_id)%DEST.length],status:st,created_by:1,created_at:sd,updated_at:sd});
+      dpRows.push({dp_number:dnum,scheduled_date:`${sd.getFullYear()}-${pad(sd.getMonth()+1)}-${pad(Math.min(sd.getDate(),28))}`,time_start:'08:00:00',time_end:'12:00:00',warehouse_id:3,dock_id:7+(si%3),destination:DEST[(si+spoRows[si].customer_id)%DEST.length],status:st,created_by:1,created_at:sd,updated_at:sd});
       dpNums.push(dnum);
     }
     await queryInterface.bulkInsert('s_delivery_plans',dpRows,{ignoreDuplicates:true});

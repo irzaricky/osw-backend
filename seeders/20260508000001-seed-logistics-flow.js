@@ -134,7 +134,7 @@ export default {
     const dockTimeSlots = {};
 
     const deliveryPlanData = allEntries.map((e, idx) => {
-      const dockId   = ((e.globalIdx - 1) % 3) + 1;
+      const dockId   = ((e.globalIdx - 1) % 3) + 7;
       const slotKey  = `${dockId}-${e.shipmentDate}`;
       if (dockTimeSlots[slotKey] === undefined) dockTimeSlots[slotKey] = 8;
       const startHour = dockTimeSlots[slotKey];
@@ -146,7 +146,7 @@ export default {
         scheduled_date: d(`${e.shipmentDate}T00:00:00Z`),
         time_start:     `${String(startHour).padStart(2, '0')}:00:00`,
         time_end:       `${String(endHour).padStart(2, '0')}:00:00`,
-        warehouse_id:   ((e.globalIdx - 1) % 3) + 1,
+        warehouse_id:   3,
         dock_id:        dockId,
         destination:    `Destination Address ${e.globalIdx}`,
         status:         'Scheduled',

@@ -153,7 +153,7 @@ class SDOModule extends BaseModule {
         { model: SCustomers, as: 'customer', attributes: ['id', 'name', 'customer_code'] },
         { model: SVehicles, as: 'vehicle', attributes: ['id', ['plate_number', 'license_plate']] },
         { model: SUserDetail, as: 'driver', attributes: ['user_id', 'full_name'] },
-        { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'time_end'] },
+        { model: SDeliveryPlans, as: 'deliveryPlan', attributes: ['id', 'dp_number', 'scheduled_date', 'destination', 'time_end'] },
         {
           model: SUsers, as: 'creator', attributes: ['id', 'email'],
           include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]

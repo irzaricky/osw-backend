@@ -1,6 +1,6 @@
 'use strict'
 
-module.exports = {
+export default {
   async up(queryInterface, Sequelize) {
     await queryInterface.createTable('t_production_material_result', {
       id: {
@@ -10,6 +10,17 @@ module.exports = {
         allowNull: false
       },
 
+      production_wo_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 's_work_orders',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
+
       production_date: {
         type: Sequelize.DATEONLY,
         allowNull: false
@@ -17,20 +28,13 @@ module.exports = {
 
       shift_id: {
         type: Sequelize.INTEGER,
-        allowNull: false
-      },
-
-      production_wo_id: {
-        type: Sequelize.INTEGER,
-        allowNull: true,
-
+        allowNull: false,
         references: {
-          model: 't_production_wo',
+          model: 's_shifts',
           key: 'id'
         },
-
         onUpdate: 'CASCADE',
-        onDelete: 'SET NULL'
+        onDelete: 'RESTRICT'
       },
 
       station_id: {
@@ -68,31 +72,30 @@ module.exports = {
 
       planning_qty: {
         type: Sequelize.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       actual_qty: {
         type: Sequelize.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       total_ok: {
         type: Sequelize.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       total_ng: {
         type: Sequelize.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       remarks: {
         type: Sequelize.TEXT,
-        allowNull: true
-      },
-
-      batch_number: {
-        type: Sequelize.STRING,
         allowNull: true
       },
 
@@ -102,14 +105,14 @@ module.exports = {
       },
 
       created_at: {
-        allowNull: false,
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.literal('NOW()')
       },
 
       updated_at: {
-        allowNull: false,
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.literal('NOW()')
       },
 
@@ -118,6 +121,11 @@ module.exports = {
         allowNull: true
       }
     })
+
+    await queryInterface.addIndex('t_production_material_result', ['production_wo_id'])
+    await queryInterface.addIndex('t_production_material_result', ['shift_id'])
+    await queryInterface.addIndex('t_production_material_result', ['station_id'])
+    await queryInterface.addIndex('t_production_material_result', ['part_id'])
   },
 
   async down(queryInterface) {

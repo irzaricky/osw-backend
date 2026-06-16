@@ -3,54 +3,55 @@ import { Model, DataTypes } from 'sequelize'
 export default (sequelize) => {
   class TProductionMaterialResult extends Model {
     static associate(models) {
-      // station
+      TProductionMaterialResult.belongsTo(models.SWorkOrder, {
+        foreignKey: 'production_wo_id',
+        as: 'production_wo'
+      })
+
+      TProductionMaterialResult.belongsTo(models.SShifts, {
+        foreignKey: 'shift_id',
+        as: 'shift'
+      })
+
       TProductionMaterialResult.belongsTo(models.SStations, {
         foreignKey: 'station_id',
         as: 'station'
       })
 
-      // product
       TProductionMaterialResult.belongsTo(models.SParts, {
         foreignKey: 'part_id',
         as: 'product_part'
       })
 
-      // material (optional direct)
       TProductionMaterialResult.belongsTo(models.SParts, {
         foreignKey: 'material_part_id',
         as: 'material_part'
       })
 
-     
-      TProductionMaterialResult.hasMany(
-        models.TProductionMaterialReplacement,
-        {
-          foreignKey: 'production_result_id',
-          as: 'replacements'
-        }
-      )
+      TProductionMaterialResult.hasMany(models.TProductionMaterialResultNgDetail, {
+        foreignKey: 'production_result_id',
+        as: 'ng_details'
+      })
 
-    
-      TProductionMaterialResult.hasMany(
-        models.TProductionMaterialScrap,
-        {
-          foreignKey: 'production_result_id',
-          as: 'scraps'
-        }
-      )
+      TProductionMaterialResult.hasMany(models.TProductionMaterialReplacement, {
+        foreignKey: 'production_result_id',
+        as: 'replacements'
+      })
 
-      TProductionMaterialResult.belongsTo(
-        models.SWorkOrder,
-        {
-          foreignKey: 'production_wo_id',
-          as: 'production_wo'
-        }
-      )
+      TProductionMaterialResult.hasMany(models.TProductionMaterialScrap, {
+        foreignKey: 'production_result_id',
+        as: 'scraps'
+      })
     }
   }
 
   TProductionMaterialResult.init(
     {
+      production_wo_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+      },
+
       production_date: {
         type: DataTypes.DATEONLY,
         allowNull: false
@@ -59,11 +60,6 @@ export default (sequelize) => {
       shift_id: {
         type: DataTypes.INTEGER,
         allowNull: false
-      },
-
-      production_wo_id: {
-        type: DataTypes.INTEGER,
-        allowNull: true
       },
 
       station_id: {
@@ -83,35 +79,36 @@ export default (sequelize) => {
 
       planning_qty: {
         type: DataTypes.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       actual_qty: {
         type: DataTypes.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       total_ok: {
         type: DataTypes.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       total_ng: {
         type: DataTypes.INTEGER,
+        allowNull: false,
         defaultValue: 0
       },
 
       remarks: {
-        type: DataTypes.TEXT
+        type: DataTypes.TEXT,
+        allowNull: true
       },
 
-      // batch_number: {
-      //   type: DataTypes.STRING,
-      //   allowNull: true
-      // },
-
       created_by: {
-        type: DataTypes.INTEGER
+        type: DataTypes.INTEGER,
+        allowNull: true
       }
     },
     {
@@ -119,6 +116,7 @@ export default (sequelize) => {
       modelName: 'TProductionMaterialResult',
       tableName: 't_production_material_result',
       underscored: true,
+      timestamps: true,
       paranoid: true,
       deletedAt: 'deleted_at'
     }

@@ -1,7 +1,6 @@
 'use strict'
 
-/** @type {import('sequelize-cli').Migration} */
-module.exports = {
+export default {
   async up(queryInterface, Sequelize) {
     await queryInterface.createTable('t_production_material_replacement', {
       id: {
@@ -44,16 +43,6 @@ module.exports = {
         onDelete: 'RESTRICT'
       },
 
-      warehouse_stock_id: {
-        type: Sequelize.INTEGER,
-        allowNull: true
-      },
-
-      label_number: {
-        type: Sequelize.STRING,
-        allowNull: true
-      },
-
       qty_replacement: {
         type: Sequelize.INTEGER,
         allowNull: false,
@@ -65,14 +54,31 @@ module.exports = {
         allowNull: true
       },
 
-      status: {
-        type: Sequelize.ENUM(
-          'PENDING',
-          'APPROVED',
-          'USED',
-          'REJECTED'
-        ),
-        defaultValue: 'PENDING'
+      source_label_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 't_part_labels',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
+
+      source_label_number: {
+        type: Sequelize.STRING(120),
+        allowNull: true
+      },
+
+      source_wo_item_label_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 't_work_order_storing_item_label',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
       },
 
       created_by: {
@@ -81,14 +87,14 @@ module.exports = {
       },
 
       created_at: {
-        allowNull: false,
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.literal('NOW()')
       },
 
       updated_at: {
-        allowNull: false,
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.literal('NOW()')
       },
 
@@ -97,14 +103,15 @@ module.exports = {
         allowNull: true
       }
     })
+
+    await queryInterface.addIndex('t_production_material_replacement', ['production_result_id'])
+    await queryInterface.addIndex('t_production_material_replacement', ['station_id'])
+    await queryInterface.addIndex('t_production_material_replacement', ['material_part_id'])
+    await queryInterface.addIndex('t_production_material_replacement', ['source_label_id'])
+    await queryInterface.addIndex('t_production_material_replacement', ['source_wo_item_label_id'])
   },
 
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface) {
     await queryInterface.dropTable('t_production_material_replacement')
-
-    // penting untuk ENUM cleanup (postgres)
-    await queryInterface.sequelize.query(
-      `DROP TYPE IF EXISTS "enum_t_production_material_replacement_status";`
-    )
   }
 }

@@ -3,7 +3,6 @@ import { Model, DataTypes } from 'sequelize'
 export default (sequelize) => {
   class TProductionMaterialReplacement extends Model {
     static associate(models) {
-     
       TProductionMaterialReplacement.belongsTo(
         models.TProductionMaterialResult,
         {
@@ -12,7 +11,6 @@ export default (sequelize) => {
         }
       )
 
-      
       TProductionMaterialReplacement.belongsTo(
         models.SStations,
         {
@@ -21,7 +19,6 @@ export default (sequelize) => {
         }
       )
 
-      
       TProductionMaterialReplacement.belongsTo(
         models.SParts,
         {
@@ -30,12 +27,19 @@ export default (sequelize) => {
         }
       )
 
-     
       TProductionMaterialReplacement.belongsTo(
-        models.TWarehouseStock,
+        models.TPartLabels,
         {
-          foreignKey: 'warehouse_stock_id',
-          as: 'warehouse_stock'
+          foreignKey: 'source_label_id',
+          as: 'source_label'
+        }
+      )
+
+      TProductionMaterialReplacement.belongsTo(
+        models.TWorkOrderStoringItemLabel,
+        {
+          foreignKey: 'source_wo_item_label_id',
+          as: 'source_wo_item_label'
         }
       )
     }
@@ -43,7 +47,6 @@ export default (sequelize) => {
 
   TProductionMaterialReplacement.init(
     {
-     
       production_result_id: {
         type: DataTypes.INTEGER,
         allowNull: false
@@ -59,18 +62,6 @@ export default (sequelize) => {
         allowNull: false
       },
 
-      
-      warehouse_stock_id: {
-        type: DataTypes.INTEGER,
-        allowNull: true
-      },
-
-      label_number: {
-        type: DataTypes.STRING,
-        allowNull: true
-      },
-
-      
       qty_replacement: {
         type: DataTypes.INTEGER,
         allowNull: false,
@@ -82,18 +73,21 @@ export default (sequelize) => {
         allowNull: true
       },
 
-      
-      status: {
-        type: DataTypes.ENUM(
-          'PENDING',
-          'APPROVED',
-          'USED',
-          'REJECTED'
-        ),
-        defaultValue: 'PENDING'
+      source_label_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
       },
 
-      
+      source_label_number: {
+        type: DataTypes.STRING(120),
+        allowNull: true
+      },
+
+      source_wo_item_label_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+      },
+
       created_by: {
         type: DataTypes.INTEGER,
         allowNull: true
@@ -104,9 +98,9 @@ export default (sequelize) => {
       modelName: 'TProductionMaterialReplacement',
       tableName: 't_production_material_replacement',
       underscored: true,
+      timestamps: true,
       paranoid: true,
-      deletedAt: 'deleted_at',
-      timestamps: true
+      deletedAt: 'deleted_at'
     }
   )
 

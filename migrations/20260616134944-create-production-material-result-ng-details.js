@@ -34,6 +34,22 @@ export default {
           onDelete: 'RESTRICT'
         },
 
+        source_label_id: {
+          type: Sequelize.INTEGER,
+          allowNull: true,
+          references: {
+            model: 't_part_labels',
+            key: 'id'
+          },
+          onUpdate: 'CASCADE',
+          onDelete: 'SET NULL'
+        },
+
+        source_label_number: {
+          type: Sequelize.STRING(120),
+          allowNull: true
+        },
+
         qty_ng: {
           type: Sequelize.INTEGER,
           allowNull: false,
@@ -53,13 +69,13 @@ export default {
         created_at: {
           type: Sequelize.DATE,
           allowNull: false,
-          defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+          defaultValue: Sequelize.literal('NOW()')
         },
 
         updated_at: {
           type: Sequelize.DATE,
           allowNull: false,
-          defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
+          defaultValue: Sequelize.literal('NOW()')
         },
 
         deleted_at: {
@@ -77,6 +93,11 @@ export default {
     await queryInterface.addIndex(
       't_production_material_result_ng_details',
       ['material_part_id']
+    )
+
+    await queryInterface.addIndex(
+      't_production_material_result_ng_details',
+      ['source_label_id']
     )
   },
 

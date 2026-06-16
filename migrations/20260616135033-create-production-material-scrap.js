@@ -1,6 +1,6 @@
 'use strict'
 
-module.exports = {
+export default {
   async up(queryInterface, Sequelize) {
     await queryInterface.createTable('t_production_material_scrap', {
       id: {
@@ -28,7 +28,7 @@ module.exports = {
 
       station_id: {
         type: Sequelize.INTEGER,
-        allowNull: true,
+        allowNull: false,
         references: {
           model: 's_stations',
           key: 'id'
@@ -75,6 +75,22 @@ module.exports = {
         allowNull: true
       },
 
+      source_label_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        references: {
+          model: 't_part_labels',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
+
+      source_label_number: {
+        type: Sequelize.STRING(120),
+        allowNull: true
+      },
+
       remarks: {
         type: Sequelize.TEXT,
         allowNull: true
@@ -86,14 +102,14 @@ module.exports = {
       },
 
       created_at: {
-        allowNull: false,
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.literal('NOW()')
       },
 
       updated_at: {
-        allowNull: false,
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.literal('NOW()')
       },
 
@@ -102,6 +118,12 @@ module.exports = {
         allowNull: true
       }
     })
+
+    await queryInterface.addIndex('t_production_material_scrap', ['production_result_id'])
+    await queryInterface.addIndex('t_production_material_scrap', ['station_id'])
+    await queryInterface.addIndex('t_production_material_scrap', ['part_id'])
+    await queryInterface.addIndex('t_production_material_scrap', ['material_part_id'])
+    await queryInterface.addIndex('t_production_material_scrap', ['source_label_id'])
   },
 
   async down(queryInterface) {

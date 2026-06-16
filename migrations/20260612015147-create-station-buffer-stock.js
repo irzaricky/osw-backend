@@ -1,84 +1,88 @@
-export async function up(queryInterface, Sequelize) {
-  await queryInterface.createTable('t_station_buffer_stock', {
-    id: {
-      type: Sequelize.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-      allowNull: false
-    },
+'use strict'
 
-    station_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      references: {
-        model: 's_stations',
-        key: 'id'
+export default {
+  async up(queryInterface, Sequelize) {
+    await queryInterface.createTable('t_station_buffer_stock', {
+      id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true,
+        allowNull: false
       },
-      onUpdate: 'CASCADE',
-      onDelete: 'RESTRICT'
-    },
 
-    part_id: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      references: {
-        model: 's_parts',
-        key: 'id'
+      station_id: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        references: {
+          model: 's_stations',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'RESTRICT'
       },
-      onUpdate: 'CASCADE',
-      onDelete: 'RESTRICT'
-    },
 
-    qty_kanban: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      defaultValue: 0
-    },
+      part_id: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        references: {
+          model: 's_parts',
+          key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'RESTRICT'
+      },
 
-    qty_pcs: {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      defaultValue: 0
-    },
+      qty_kanban: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0
+      },
 
-    oldest_supply_at: {
-      type: Sequelize.DATE,
-      allowNull: true
-    },
+      qty_pcs: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0
+      },
 
-    latest_supply_at: {
-      type: Sequelize.DATE,
-      allowNull: true
-    },
+      oldest_supply_at: {
+        type: Sequelize.DATE,
+        allowNull: true
+      },
 
-    created_at: {
-      type: Sequelize.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
+      latest_supply_at: {
+        type: Sequelize.DATE,
+        allowNull: true
+      },
 
-    updated_at: {
-      type: Sequelize.DATE,
-      allowNull: false,
-      defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
-    },
+      created_at: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.literal('NOW()')
+      },
 
-    deleted_at: {
-      type: Sequelize.DATE,
-      allowNull: true
-    }
-  });
+      updated_at: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.literal('NOW()')
+      },
 
-  await queryInterface.addIndex(
-    't_station_buffer_stock',
-    ['station_id', 'part_id'],
-    {
-      unique: true,
-      name: 'uq_station_buffer_stock_station_part'
-    }
-  );
-}
+      deleted_at: {
+        type: Sequelize.DATE,
+        allowNull: true
+      }
+    })
 
-export async function down(queryInterface, Sequelize) {
-  await queryInterface.dropTable('t_station_buffer_stock');
+    await queryInterface.addIndex(
+      't_station_buffer_stock',
+      ['station_id', 'part_id'],
+      {
+        unique: true,
+        name: 'uq_station_buffer_stock_station_part'
+      }
+    )
+  },
+
+  async down(queryInterface) {
+    await queryInterface.dropTable('t_station_buffer_stock')
+  }
 }

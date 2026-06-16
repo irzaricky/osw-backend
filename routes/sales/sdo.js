@@ -41,7 +41,7 @@ router.put('/:id/approve-dispatch', session.sessionChecker, session.permissionCh
 });
 
 // ── Status Update: Start Delivery: Loading → In Transit
-router.put('/:id/start-delivery', session.sessionChecker, session.permissionChecker(['Superadmin', 'Driver', 'Staff Sales Delivery', 'Admin sales']), async (req, res) => {
+router.put('/:id/start-delivery', session.sessionChecker, session.permissionChecker(['Superadmin', 'Driver', 'Staff Sales Delivery', 'Admin sales', 'Supervisor Sales']), async (req, res) => {
   return helper.sendResponse(res, await sdo.startDelivery(req));
 });
 

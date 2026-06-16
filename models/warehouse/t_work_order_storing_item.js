@@ -29,6 +29,17 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
+    buffer_used_qty_pcs: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0
+    },
+
+    buffer_added_qty_pcs: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0
+    },
     total_kanban: {
       type: DataTypes.INTEGER,
       allowNull: false

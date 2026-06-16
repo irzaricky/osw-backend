@@ -12,6 +12,14 @@ export default (sequelize) => {
         foreignKey: 'part_id',
         as: 'part'
       });
+
+      TStationBufferStock.belongsTo(
+        models.TPartLabels,
+        {
+          foreignKey: 'label_id',
+          as: 'label'
+        }
+      );
     }
   }
 
@@ -23,6 +31,10 @@ export default (sequelize) => {
     part_id: {
       type: DataTypes.INTEGER,
       allowNull: false
+    },
+    label_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     },
     qty_kanban: {
       type: DataTypes.INTEGER,

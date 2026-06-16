@@ -94,6 +94,55 @@ class ProductionMaterialControlModule {
       type: QueryTypes.SELECT
     })
 
+    const productionResultIds = rows.map(row => row.id)
+
+let ngDetails = []
+
+if (productionResultIds.length) {
+  ngDetails = await db.sequelize.query(`
+    SELECT
+      ng.id,
+      ng.production_result_id,
+      ng.material_part_id,
+
+      part.part_number AS material_part_number,
+      part.part_name AS material_part_name,
+
+      ng.qty_ng,
+      ng.remarks,
+      ng.created_at
+
+    FROM t_production_material_result_ng_details ng
+    JOIN s_parts part
+      ON part.id = ng.material_part_id
+
+    WHERE ng.production_result_id IN (:production_result_ids)
+      AND ng.deleted_at IS NULL
+
+    ORDER BY ng.id ASC
+  `, {
+    replacements: {
+      production_result_ids: productionResultIds
+    },
+    type: QueryTypes.SELECT
+  })
+}
+
+    const ngDetailsMap = ngDetails.reduce((map, item) => {
+      if (!map[item.production_result_id]) {
+        map[item.production_result_id] = []
+      }
+
+      map[item.production_result_id].push(item)
+
+      return map
+    }, {})
+
+    const rowsWithNgMaterials = rows.map(row => ({
+      ...row,
+      ng_materials: ngDetailsMap[row.id] || []
+    }))
+
     const countRows = await db.sequelize.query(`
       SELECT COUNT(*)::int AS total
       FROM t_production_material_result pmr
@@ -110,7 +159,7 @@ class ProductionMaterialControlModule {
 
     return {
       status: true,
-      data: rows,
+      data: rowsWithNgMaterials,
       meta: {
         page: Number(page),
         limit: Number(limit),
@@ -152,6 +201,7 @@ class ProductionMaterialControlModule {
     }
 
     const result = await db.TProductionMaterialResult.create({
+      production_wo_id: data.production_wo_id || null,
       production_date: data.production_date,
       shift_id: data.shift_id,
       station_id: data.station_id,
@@ -818,7 +868,15 @@ async dropdowns(req) {
   try {
     const [shifts, stations, products] = await Promise.all([
       db.sequelize.query(`
-        SELECT id, name
+        SELECT
+        id,
+        name,
+        description,
+        start_time,
+        end_time,
+        shift_number,
+        category,
+        type
         FROM s_shifts
         WHERE deleted_at IS NULL
         ORDER BY name ASC
@@ -951,6 +1009,113 @@ async getReplacementByProductionResult(req) {
       ORDER BY p.part_number ASC
     `, {
       replacements: { production_result_id },
+      type: QueryTypes.SELECT
+    })
+
+    return {
+      status: true,
+      data: rows
+    }
+  } catch (error) {
+    return {
+      status: false,
+      message: error.message,
+      code: 500
+    }
+  }
+}
+async getProductionWos(req) {
+  try {
+    const rows = await db.sequelize.query(`
+      SELECT
+        wo.id AS wo_id,
+        wo.wo_number,
+        wo.planned_quantity,
+
+        wo.part_id,
+        product.part_number,
+        product.part_name,
+
+        wos.station_id,
+        st.name AS station_name
+
+      FROM s_work_orders wo
+      JOIN s_parts product
+        ON product.id = wo.part_id
+
+      LEFT JOIN t_work_order_storing wos
+        ON wos.production_wo_id = wo.id
+        AND wos.take_out_purpose = 'production'
+        AND wos.deleted_at IS NULL
+
+      LEFT JOIN s_stations st
+        ON st.id = wos.station_id
+
+      WHERE wo.deleted_at IS NULL
+
+      ORDER BY wo.wo_number DESC
+    `, {
+      type: QueryTypes.SELECT
+    })
+
+    return {
+      status: true,
+      data: rows
+    }
+  } catch (error) {
+    return {
+      status: false,
+      message: error.message,
+      code: 500
+    }
+  }
+}
+async getProductionWoMaterialLabels(req) {
+  try {
+    const { production_wo_id } = req.params
+
+    const rows = await db.sequelize.query(`
+      SELECT
+        wil.id AS wo_item_label_id,
+        lbl.id AS label_id,
+        lbl.label_number,
+
+        item.part_id AS material_part_id,
+        part.part_number,
+        part.part_name,
+
+        wos.id AS wo_storing_id,
+        wos.wo_number AS wo_storing_number,
+        wos.station_id,
+        st.name AS station_name
+
+      FROM t_work_order_storing wos
+      JOIN t_work_order_storing_item item
+        ON item.wo_id = wos.id
+        AND item.deleted_at IS NULL
+
+      JOIN t_work_order_storing_item_label wil
+        ON wil.wo_item_id = item.id
+        AND wil.deleted_at IS NULL
+
+      JOIN t_part_labels lbl
+        ON lbl.id = wil.label_id
+        AND lbl.deleted_at IS NULL
+
+      JOIN s_parts part
+        ON part.id = item.part_id
+        AND part.deleted_at IS NULL
+
+      LEFT JOIN s_stations st
+        ON st.id = wos.station_id
+
+      WHERE wos.production_wo_id = :production_wo_id
+        AND wos.take_out_purpose = 'production'
+        AND wos.deleted_at IS NULL
+
+      ORDER BY part.part_number ASC, lbl.label_number ASC
+    `, {
+      replacements: { production_wo_id },
       type: QueryTypes.SELECT
     })
 

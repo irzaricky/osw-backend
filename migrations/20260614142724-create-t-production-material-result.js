@@ -20,6 +20,19 @@ module.exports = {
         allowNull: false
       },
 
+      production_wo_id: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+
+        references: {
+          model: 't_production_wo',
+          key: 'id'
+        },
+
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+      },
+
       station_id: {
         type: Sequelize.INTEGER,
         allowNull: false,

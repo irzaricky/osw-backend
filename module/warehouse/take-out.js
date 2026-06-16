@@ -528,6 +528,123 @@ class TakeOutModule extends BaseModule {
   }
 }
 
+async applyBufferAdjustment(woId, transaction) {
+  const workOrder = await TWorkOrderStoring.findByPk(woId, {
+    attributes: ['id', 'station_id', 'take_out_purpose'],
+    include: [
+      {
+        model: TWorkOrderStoringItem,
+        as: 'items',
+        attributes: [
+          'id',
+          'part_id',
+          'buffer_used_qty_pcs',
+          'buffer_added_qty_pcs'
+        ]
+      }
+    ],
+    transaction
+  });
+
+  if (!workOrder) {
+    throw new Error('Work Order not found');
+  }
+
+  if (workOrder.take_out_purpose !== 'production') {
+    return;
+  }
+
+  if (!workOrder.station_id) {
+    throw new Error('Station is required for production take out buffer adjustment');
+  }
+
+  for (const item of workOrder.items) {
+    const bufferUsedQty = Number(item.buffer_used_qty_pcs || 0);
+    const bufferAddedQty = Number(item.buffer_added_qty_pcs || 0);
+
+    if (bufferUsedQty <= 0 && bufferAddedQty <= 0) {
+      continue;
+    }
+
+    let bufferStock = await db.TStationBufferStock.findOne({
+      where: {
+        station_id: workOrder.station_id,
+        part_id: item.part_id
+      },
+      transaction
+    });
+
+    if (bufferUsedQty > 0) {
+      if (!bufferStock) {
+        throw new Error(`Buffer stock not found for part ${item.part_id}`);
+      }
+
+      if (Number(bufferStock.qty_pcs || 0) < bufferUsedQty) {
+        throw new Error(
+          `Insufficient buffer stock for part ${item.part_id}. Available ${bufferStock.qty_pcs}, requested ${bufferUsedQty}`
+        );
+      }
+
+      await bufferStock.update({
+        qty_pcs: Number(bufferStock.qty_pcs || 0) - bufferUsedQty
+      }, {
+        transaction
+      });
+
+      await db.TStationBufferStockLog.create({
+        buffer_stock_id: bufferStock.id,
+        transaction_type: 'OUT',
+        qty_kanban: 0,
+        qty_pcs: bufferUsedQty,
+        reference_type: 'WO_TAKE_OUT_BUFFER_USED',
+        reference_id: workOrder.id,
+        remarks: 'Buffer used for production take out',
+        created_by: null
+      }, {
+        transaction
+      });
+    }
+
+    if (bufferAddedQty > 0) {
+      const now = new Date();
+
+      if (!bufferStock) {
+        bufferStock = await db.TStationBufferStock.create({
+          station_id: workOrder.station_id,
+          part_id: item.part_id,
+          qty_kanban: 0,
+          qty_pcs: 0,
+          oldest_supply_at: now,
+          latest_supply_at: now
+        }, {
+          transaction
+        });
+      }
+
+      await bufferStock.update({
+        qty_pcs: Number(bufferStock.qty_pcs || 0) + bufferAddedQty,
+        oldest_supply_at: bufferStock.oldest_supply_at || now,
+        latest_supply_at: now
+      }, {
+        transaction
+      });
+
+      await db.TStationBufferStockLog.create({
+        buffer_stock_id: bufferStock.id,
+        transaction_type: 'IN',
+        qty_kanban: 0,
+        qty_pcs: bufferAddedQty,
+        reference_type: 'WO_TAKE_OUT_BUFFER_ADDED',
+        reference_id: workOrder.id,
+        remarks: 'Remaining material added to buffer from production take out',
+        created_by: null
+      }, {
+        transaction
+      });
+    }
+  }
+}
+
 async scanLabelOut(req) {
   const t = await db.sequelize.transaction();
 
@@ -791,6 +908,8 @@ async scanLabelOut(req) {
     if (
       Number(totalScannedOut) >= Number(totalTargetKanban)
     ) {
+      await this.applyBufferAdjustment(workOrder.id, t);
+
       await workOrder.update({
         wo_status_id: 4
       }, {

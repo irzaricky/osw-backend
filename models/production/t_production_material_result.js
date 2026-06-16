@@ -38,6 +38,14 @@ export default (sequelize) => {
           as: 'scraps'
         }
       )
+
+      TProductionMaterialResult.belongsTo(
+        models.SWorkOrder,
+        {
+          foreignKey: 'production_wo_id',
+          as: 'production_wo'
+        }
+      )
     }
   }
 
@@ -51,6 +59,11 @@ export default (sequelize) => {
       shift_id: {
         type: DataTypes.INTEGER,
         allowNull: false
+      },
+
+      production_wo_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
       },
 
       station_id: {

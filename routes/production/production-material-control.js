@@ -61,6 +61,16 @@ router.get('/dropdowns', auth.sessionChecker, async (req, res) => {
   return res.status(result.code || 200).json(result)
 })
 
+router.get('/production-wos', auth.sessionChecker, async (req, res) => {
+  const result = await productionMaterialControlModule.getProductionWos(req)
+  return res.status(result.code || 200).json(result)
+})
+
+router.get('/production-wos/:production_wo_id/material-labels', auth.sessionChecker, async (req, res) => {
+  const result = await productionMaterialControlModule.getProductionWoMaterialLabels(req)
+  return res.status(result.code || 200).json(result)
+})
+
 router.get('/bom-materials/:product_part_id', auth.sessionChecker, async (req, res) => {
   const result = await productionMaterialControlModule.getBomMaterials(req)
   return res.status(result.code || 200).json(result)

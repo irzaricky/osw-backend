@@ -34,7 +34,8 @@ const {
   TMaterialReceivingItem, 
   TMaterialReceivingItemLabel, 
   SMaterialDeliveryOrder, 
-  TMaterialDeliveryOrderDetail
+  TMaterialDeliveryOrderDetail,
+  TStationBufferStock
 } = db;
 
 class WorkOrderStoringModule extends BaseModule {
@@ -389,15 +390,60 @@ class WorkOrderStoringModule extends BaseModule {
       }
     }
 
+    const partIds = items.map(
+      item => item.part_id
+    );
+
+    const parts = await SParts.findAll({
+      where: {
+        id: {
+          [Op.in]: partIds
+        }
+      },
+      include: [
+        {
+          model: SPackages,
+          as: 'package',
+          attributes: ['id', 'capacity']
+        }
+      ],
+      transaction
+    });
+
+    const partMap = new Map(
+      parts.map(
+        part => [part.id, part]
+      )
+    );
+
+    const itemResults = [];
+
     for (const item of items) {
       if (!allowedPartIds.has(item.part_id)) {
         throw new Error(
           `Part ${item.part_id} is not allowed for selected buffer station`
         );
       }
-    }
 
-    return true;
+      const part = partMap.get(item.part_id);
+
+      if (!part) {
+        throw new Error(
+          `Part ${item.part_id} not found`
+        );
+      }
+
+      const capacity = Number(part.package?.capacity || 1);
+
+      const qtyPcs = item.total_kanban * capacity;
+
+      itemResults.push({
+        part_id: item.part_id,
+        buffer_used_qty_pcs: 0,
+        buffer_added_qty_pcs: qtyPcs
+      });
+    }
+    return itemResults;
   }
 
   async getFirstAssemblyStation(productionWoId, transaction) {
@@ -459,6 +505,8 @@ class WorkOrderStoringModule extends BaseModule {
   }
 
   async validateProductionTakeOut({production_wo_id, items, transaction}) {
+    const itemResults = [];
+
     const wo = await SWorkOrder.findByPk(
       production_wo_id,
       {
@@ -495,7 +543,7 @@ class WorkOrderStoringModule extends BaseModule {
       d => d.type === 'RAW'
     );
 
-    if (rawMaterials.length === 0) {
+    if (!rawMaterials.length) {
       throw new Error('Production WO has no raw material requirement');
     }
 
@@ -531,18 +579,24 @@ class WorkOrderStoringModule extends BaseModule {
       parts.map(part => [part.id, part])
     );
 
-    // VALIDATE PART EXIST
+    const firstAssemblyStation = await this.getFirstAssemblyStation(production_wo_id, transaction);
+
+    if (!firstAssemblyStation) {
+      throw new Error(
+        'First assembly station not found'
+      );
+    }
+
+    // VALIDATE EACH ITEM
     for (const item of items) {
-      if (!requiredMap.has(item.part_id)) {
+      const requiredQty = requiredMap.get(item.part_id);
+
+      if (!requiredQty) {
         throw new Error(
           `Part ${item.part_id} is not required by Production WO`
         );
       }
-    }
 
-    // VALIDATE SUPPLIED QTY
-    for (const item of items) {
-      const requiredQty = requiredMap.get(item.part_id);
       const part = partMap.get(item.part_id);
 
       if (!part) {
@@ -576,10 +630,32 @@ class WorkOrderStoringModule extends BaseModule {
         }
       ) || 0;
 
-      const suppliedQty = suppliedKanban * capacity;
+      const warehouseSuppliedQty = suppliedKanban * capacity;
 
-      const requestedQty = item.total_kanban * capacity;
+      const bufferUsedQty = await TWorkOrderStoringItem.sum(
+        'buffer_used_qty_pcs',
+        {
+          include: [
+            {
+              model: TWorkOrderStoring,
+              as: 'work_order',
+              required: true,
+              where: {
+                production_wo_id,
+                wo_status_id: {
+                  [Op.in]: [2, 3, 4]
+                }
+              }
+            }
+          ],
+          where: {
+            part_id: item.part_id
+          },
+          transaction
+        }
+      ) || 0;
 
+      const suppliedQty = warehouseSuppliedQty + bufferUsedQty;
       const remainingQty = requiredQty - suppliedQty;
 
       if (remainingQty <= 0) {
@@ -588,13 +664,78 @@ class WorkOrderStoringModule extends BaseModule {
         );
       }
 
-      if (requestedQty > remainingQty) {
+      const requestedQty = item.total_kanban * capacity;
+      const remainingAfterSupply = remainingQty - requestedQty;
+
+      // exactly fulfill the remaining requirement
+      if (remainingAfterSupply === 0) {
+        itemResults.push({
+          part_id: item.part_id,
+          buffer_used_qty_pcs: 0,
+          buffer_added_qty_pcs: 0
+        });
+
+        continue;
+      }
+
+      // under supply but still enough to fulfill next kanban
+      if (remainingAfterSupply >= capacity) {
+        itemResults.push({
+          part_id: item.part_id,
+          buffer_used_qty_pcs: 0,
+          buffer_added_qty_pcs: 0
+        });
+
+        continue;
+      }
+
+      // under supply and not enough to fulfill next kanban, check buffer stock
+      if (remainingAfterSupply > 0 && remainingAfterSupply < capacity) {
+        const bufferStock = await TStationBufferStock.findOne({
+          where: {
+            station_id: firstAssemblyStation.id,
+            part_id: item.part_id
+          },
+          transaction
+        });
+
+        const bufferQty = Number(bufferStock?.qty_pcs || 0);
+
+        if (bufferQty >= remainingAfterSupply) {
+          itemResults.push({
+            part_id: item.part_id,
+            buffer_used_qty_pcs: remainingAfterSupply,
+            buffer_added_qty_pcs: 0
+          });
+
+          continue;
+        }
+
         throw new Error(
-          `Part ${item.part_id} exceeds remaining requirement. Remaining: ${remainingQty}`
+          `Part ${part.part_number} still requires ${remainingAfterSupply} pcs but buffer stock only has ${bufferQty} pcs. Please take 1 more kanban.`
         );
       }
+
+      // over supply
+      if (remainingAfterSupply < 0) {
+        const overSupplyQty = Math.abs(remainingAfterSupply);
+
+        if (overSupplyQty >= capacity) {
+          throw new Error(
+            `Part ${part.part_number} exceeds remaining requirement`
+          );
+        }
+
+        itemResults.push({
+          part_id: item.part_id,
+          buffer_used_qty_pcs: 0,
+          buffer_added_qty_pcs: overSupplyQty
+        });
+
+        continue;
+      }
     }
-    return true;
+    return itemResults;
   }
 
   async add(req) {
@@ -632,6 +773,8 @@ class WorkOrderStoringModule extends BaseModule {
 
       const value = validation.value;
 
+      let itemResults = [];
+
       try {
         await helper.checkExists(SWarehouseAreas, value.warehouse_area_id, 'Warehouse Area', t);
         await helper.checkExists(RefWorkOrderStoringType, value.wo_type_id, 'Work Order Type', t);
@@ -662,7 +805,11 @@ class WorkOrderStoringModule extends BaseModule {
 
           try {
             await this.validateFirstAssemblyBufferStation(value.station_id, t);
-            await this.validateBufferItems(value.station_id, value.items, t);
+            itemResults = await this.validateBufferItems(
+              value.station_id,
+              value.items,
+              t
+            );
           } catch (err) {
             await t.rollback();
             return {
@@ -685,7 +832,11 @@ class WorkOrderStoringModule extends BaseModule {
 
           try {
             await helper.checkExists(SWorkOrder, value.production_wo_id, 'Production Work Order', t);
-            await this.validateProductionTakeOut(value.production_wo_id, value.items, t);
+            itemResults = await this.validateProductionTakeOut({
+              production_wo_id: value.production_wo_id,
+              items: value.items,
+              transaction: t
+            });
             value.station_id = await this.getFirstAssemblyStation(value.production_wo_id, t);
           } catch (err) {
             await t.rollback();
@@ -971,16 +1122,34 @@ class WorkOrderStoringModule extends BaseModule {
         }, { transaction: t });
       }
 
-      const items = value.items.map(item => ({
-        wo_id: workOrder.id,
-        part_id: item.part_id,
-        total_kanban: item.total_kanban
-      }));
+      const resultMap = new Map(
+        itemResults.map(
+          result => [
+            result.part_id, result
+          ]
+        )
+      );
+      
+      const items = value.items.map(item => {
+        const result = resultMap.get(item.part_id);
 
-      const createdItems = await TWorkOrderStoringItem.bulkCreate(items, {
-        transaction: t,
-        returning: true
+        return {
+          wo_id: workOrder.id,
+          part_id: item.part_id,
+          total_kanban: item.total_kanban,
+
+          buffer_used_qty_pcs: result?.buffer_used_qty_pcs || 0,
+          buffer_added_qty_pcs: result?.buffer_added_qty_pcs || 0
+        };
       });
+
+      const createdItems = await TWorkOrderStoringItem.bulkCreate(
+        items, 
+        {
+          transaction: t,
+          returning: true
+        }
+      );
 
       if (value.wo_status_id === 2 && value.wo_category === 'Placement' && value.ref_doc_id) {
         const labels = [];

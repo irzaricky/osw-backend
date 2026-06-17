@@ -538,32 +538,53 @@ async applyBufferAdjustment(woId, transaction) {
         attributes: [
           'id',
           'part_id',
+          'total_kanban',
           'buffer_used_qty_pcs',
           'buffer_added_qty_pcs'
+        ],
+        include: [
+          {
+            model: SParts,
+            as: 'part',
+            attributes: ['id', 'package_id'],
+            include: [
+              {
+                model: SPackages,
+                as: 'package',
+                attributes: ['id', 'capacity']
+              }
+            ]
+          }
         ]
       }
     ],
     transaction
-  });
+  })
 
   if (!workOrder) {
-    throw new Error('Work Order not found');
+    throw new Error('Work Order not found')
   }
 
-  if (workOrder.take_out_purpose !== 'production') {
-    return;
+  if (!['production', 'buffer'].includes(workOrder.take_out_purpose)) {
+    return
   }
 
   if (!workOrder.station_id) {
-    throw new Error('Station is required for production take out buffer adjustment');
+    throw new Error('Station is required for take out buffer adjustment')
   }
 
   for (const item of workOrder.items) {
-    const bufferUsedQty = Number(item.buffer_used_qty_pcs || 0);
-    const bufferAddedQty = Number(item.buffer_added_qty_pcs || 0);
+    let bufferUsedQty = Number(item.buffer_used_qty_pcs || 0)
+    let bufferAddedQty = Number(item.buffer_added_qty_pcs || 0)
+
+    if (workOrder.take_out_purpose === 'buffer') {
+      const capacity = Number(item.part?.package?.capacity || 1)
+      bufferUsedQty = 0
+      bufferAddedQty = Number(item.total_kanban || 0) * capacity
+    }
 
     if (bufferUsedQty <= 0 && bufferAddedQty <= 0) {
-      continue;
+      continue
     }
 
     let bufferStock = await db.TStationBufferStock.findOne({
@@ -572,24 +593,24 @@ async applyBufferAdjustment(woId, transaction) {
         part_id: item.part_id
       },
       transaction
-    });
+    })
 
     if (bufferUsedQty > 0) {
       if (!bufferStock) {
-        throw new Error(`Buffer stock not found for part ${item.part_id}`);
+        throw new Error(`Buffer stock not found for part ${item.part_id}`)
       }
 
       if (Number(bufferStock.qty_pcs || 0) < bufferUsedQty) {
         throw new Error(
           `Insufficient buffer stock for part ${item.part_id}. Available ${bufferStock.qty_pcs}, requested ${bufferUsedQty}`
-        );
+        )
       }
 
       await bufferStock.update({
         qty_pcs: Number(bufferStock.qty_pcs || 0) - bufferUsedQty
       }, {
         transaction
-      });
+      })
 
       await db.TStationBufferStockLog.create({
         buffer_stock_id: bufferStock.id,
@@ -602,11 +623,11 @@ async applyBufferAdjustment(woId, transaction) {
         created_by: null
       }, {
         transaction
-      });
+      })
     }
 
     if (bufferAddedQty > 0) {
-      const now = new Date();
+      const now = new Date()
 
       if (!bufferStock) {
         bufferStock = await db.TStationBufferStock.create({
@@ -618,7 +639,7 @@ async applyBufferAdjustment(woId, transaction) {
           latest_supply_at: now
         }, {
           transaction
-        });
+        })
       }
 
       await bufferStock.update({
@@ -627,20 +648,29 @@ async applyBufferAdjustment(woId, transaction) {
         latest_supply_at: now
       }, {
         transaction
-      });
+      })
 
       await db.TStationBufferStockLog.create({
         buffer_stock_id: bufferStock.id,
         transaction_type: 'IN',
-        qty_kanban: 0,
+        qty_kanban:
+          workOrder.take_out_purpose === 'buffer'
+            ? Number(item.total_kanban || 0)
+            : 0,
         qty_pcs: bufferAddedQty,
-        reference_type: 'WO_TAKE_OUT_BUFFER_ADDED',
+        reference_type:
+          workOrder.take_out_purpose === 'buffer'
+            ? 'WO_TAKE_OUT_TO_BUFFER'
+            : 'WO_TAKE_OUT_BUFFER_ADDED',
         reference_id: workOrder.id,
-        remarks: 'Remaining material added to buffer from production take out',
+        remarks:
+          workOrder.take_out_purpose === 'buffer'
+            ? 'Material added to station buffer from buffer take out'
+            : 'Remaining material added to buffer from production take out',
         created_by: null
       }, {
         transaction
-      });
+      })
     }
   }
 }

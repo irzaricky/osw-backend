@@ -169,7 +169,7 @@ if (productionResultIds.length) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }
@@ -180,8 +180,74 @@ if (productionResultIds.length) {
 
   try {
     const data = req.body
-
+    const actualQty = Number(data.actual_qty || 0)
+    const totalOk = Number(data.total_ok || 0)
     const totalNg = Number(data.total_ng || 0)
+    const planningQty = Number(data.planning_qty || 0)
+
+    if (!data.production_date) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Production date is required',
+        code: 400
+      }
+    }
+
+    if (!data.shift_id) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Shift is required',
+        code: 400
+      }
+    }
+
+    if (!data.station_id) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Station is required',
+        code: 400
+      }
+    }
+
+    if (!data.part_id) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Product part is required',
+        code: 400
+      }
+    }
+
+    if (actualQty <= 0) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Actual quantity must be greater than 0',
+        code: 400
+      }
+    }
+
+    if (totalOk + totalNg !== actualQty) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: `Actual quantity (${actualQty}) must be equal to OK (${totalOk}) + NG (${totalNg})`,
+        code: 400
+      }
+    }
+
+    if (planningQty > 0 && actualQty > planningQty) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Actual quantity cannot exceed planning quantity',
+        code: 400
+      }
+    }
+
     const ngMaterials = Array.isArray(data.ng_materials)
       ? data.ng_materials
       : []
@@ -223,30 +289,39 @@ if (productionResultIds.length) {
       if (qtyNg > 0) {
         await db.sequelize.query(`
           INSERT INTO t_production_material_result_ng_details
-            (
-              production_result_id,
-              material_part_id,
-              qty_ng,
-              remarks,
-              created_at,
-              updated_at
-            )
-          VALUES
-            (
-              :production_result_id,
-              :material_part_id,
-              :qty_ng,
-              :remarks,
-              NOW(),
-              NOW()
-            )
+          (
+            production_result_id,
+            material_part_id,
+            source_label_id,
+            source_label_number,
+            qty_ng,
+            remarks,
+            created_by,
+            created_at,
+            updated_at
+          )
+        VALUES
+          (
+            :production_result_id,
+            :material_part_id,
+            :source_label_id,
+            :source_label_number,
+            :qty_ng,
+            :remarks,
+            :created_by,
+            NOW(),
+            NOW()
+          )
         `, {
           replacements: {
-            production_result_id: result.id,
-            material_part_id: item.material_part_id,
-            qty_ng: qtyNg,
-            remarks: item.remarks || null
-          },
+          production_result_id: result.id,
+          material_part_id: item.material_part_id,
+          source_label_id: item.label_id || null,
+          source_label_number: item.label_number || null,
+          qty_ng: qtyNg,
+          remarks: item.remarks || null,
+          created_by: req.user?.id || null
+        },
           type: QueryTypes.INSERT,
           transaction
         })
@@ -367,7 +442,7 @@ if (productionResultIds.length) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }
@@ -550,7 +625,7 @@ async listReplacement(req) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }
@@ -734,7 +809,7 @@ async dashboard(req) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }
@@ -859,7 +934,7 @@ async listBufferStatus(req) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }
@@ -911,7 +986,7 @@ async dropdowns(req) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }
@@ -970,7 +1045,7 @@ async getBomMaterials(req) {
   } catch (error) {
     return {
       status: false,
-      error: error.message,
+      message: error.message,
       code: 500
     }
   }

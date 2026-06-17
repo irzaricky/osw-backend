@@ -130,7 +130,7 @@ class SDOModule extends BaseModule {
   async list(req) {
     try {
       const params = req.query;
-      const { delivery_status, search, start_date, end_date } = params;
+      const { delivery_status, search, start_date, end_date, sort_by } = params;
       const { limit, page, offset } = helper.getPagination(params);
 
       const where = {};

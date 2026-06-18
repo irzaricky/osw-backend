@@ -71,12 +71,6 @@ export default (sequelize) => {
       allowNull: false,
       defaultValue: 1
     },
-
-    is_bottleneck: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
-    }
   }, {
     sequelize,
     modelName: 'SPartRoutingDetails',

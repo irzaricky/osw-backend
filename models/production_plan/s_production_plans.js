@@ -6,11 +6,11 @@ export default (sequelize) => {
       SProductionPlan.hasMany(models.SProductionPlanDetail, { foreignKey: 'plan_id', as: 'details' });
       SProductionPlan.hasMany(models.SProductionPlanCapacityParam, { foreignKey: 'plan_id', as: 'capacity_params' });
       SProductionPlan.hasMany(models.SProductionPlanCapacityResult, { foreignKey: 'plan_id', as: 'capacity_results' });
+      SProductionPlan.hasMany(models.SProductionPlanCalendarAdjustment, { foreignKey: 'plan_id', as: 'calendar_adjustments' });
       SProductionPlan.hasMany(models.SProductionOrder, { foreignKey: 'plan_id', as: 'production_orders' });
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'created_by', as: 'creator' });
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'approved_by', as: 'approver' });
       SProductionPlan.belongsTo(models.SUsers, { foreignKey: 'rejected_by', as: 'rejector' });
-      SProductionPlan.belongsTo(models.SLines, { foreignKey: 'bottleneck_line_id', as: 'bottleneck_line' });
       SProductionPlan.belongsTo(models.SProductionPlan, { foreignKey: 'parent_plan_id', as: 'parent_plan' });
     }
   }
@@ -66,9 +66,6 @@ export default (sequelize) => {
     },
     rejection_reason: {
       type: DataTypes.TEXT
-    },
-    bottleneck_line_id: {
-      type: DataTypes.INTEGER,
     },
     plan_month: {
       type: DataTypes.STRING(7),

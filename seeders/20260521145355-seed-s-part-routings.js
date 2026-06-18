@@ -395,50 +395,50 @@ export default {
     const buildProductRoutingDetails = (routingId, startId) => {
       const steps = [
         // Frame Line
-        { seq: 10,  station_id: 1,  job_id: 1,  std: 120,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 20,  station_id: 2,  job_id: 2,  std: 240,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 30,  station_id: 3,  job_id: 3,  std: 300,  setup: 30,  queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 40,  station_id: 4,  job_id: 4,  std: 360,  setup: 30,  queue: 0, move: 5,  mp: 2, bottleneck: false },
-        { seq: 50,  station_id: 5,  job_id: 5,  std: 180,  setup: 0,   queue: 0, move: 10, mp: 1, bottleneck: false },
+        { seq: 10,  station_id: 1,  job_id: 1,  std: 120,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 20,  station_id: 2,  job_id: 2,  std: 240,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 30,  station_id: 3,  job_id: 3,  std: 300,  setup: 30,  queue: 0, move: 5,  mp: 1 },
+        { seq: 40,  station_id: 4,  job_id: 4,  std: 360,  setup: 30,  queue: 0, move: 5,  mp: 2 },
+        { seq: 50,  station_id: 5,  job_id: 5,  std: 180,  setup: 0,   queue: 0, move: 10, mp: 1 },
         // Paint Primer
-        { seq: 60,  station_id: 21, job_id: 17, std: 180,  setup: 60,  queue: 0, move: 10, mp: 1, bottleneck: false },
-        { seq: 70,  station_id: 22, job_id: 11, std: 360,  setup: 60,  queue: 0, move: 10, mp: 1, bottleneck: false },
-        { seq: 80,  station_id: 23, job_id: 12, std: 900,  setup: 0,   queue: 0, move: 10, mp: 0, bottleneck: false },
-        { seq: 90,  station_id: 24, job_id: 13, std: 180,  setup: 0,   queue: 0, move: 10, mp: 1, bottleneck: false },
+        { seq: 60,  station_id: 21, job_id: 17, std: 180,  setup: 60,  queue: 0, move: 10, mp: 1 },
+        { seq: 70,  station_id: 22, job_id: 11, std: 360,  setup: 60,  queue: 0, move: 10, mp: 1 },
+        { seq: 80,  station_id: 23, job_id: 12, std: 900,  setup: 0,   queue: 0, move: 10, mp: 0 },
+        { seq: 90,  station_id: 24, job_id: 13, std: 180,  setup: 0,   queue: 0, move: 10, mp: 1 },
         // Paint Color
-        { seq: 100, station_id: 25, job_id: 14, std: 480,  setup: 60,  queue: 0, move: 10, mp: 1, bottleneck: false },
-        { seq: 110, station_id: 26, job_id: 15, std: 1200, setup: 0,   queue: 0, move: 10, mp: 0, bottleneck: true  },
-        { seq: 120, station_id: 27, job_id: 16, std: 240,  setup: 0,   queue: 0, move: 10, mp: 1, bottleneck: false },
+        { seq: 100, station_id: 25, job_id: 14, std: 480,  setup: 60,  queue: 0, move: 10, mp: 1 },
+        { seq: 110, station_id: 26, job_id: 15, std: 1200, setup: 0,   queue: 0, move: 10, mp: 0  },
+        { seq: 120, station_id: 27, job_id: 16, std: 240,  setup: 0,   queue: 0, move: 10, mp: 1 },
         // Paint Color Coat
-        { seq: 130, station_id: 28, job_id: 17, std: 180,  setup: 60,  queue: 0, move: 10, mp: 1, bottleneck: false },
-        { seq: 140, station_id: 29, job_id: 18, std: 360,  setup: 60,  queue: 0, move: 10, mp: 1, bottleneck: false },
-        { seq: 150, station_id: 30, job_id: 19, std: 1080, setup: 0,   queue: 0, move: 10, mp: 0, bottleneck: false },
-        { seq: 160, station_id: 31, job_id: 20, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 170, station_id: 32, job_id: 21, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
+        { seq: 130, station_id: 28, job_id: 17, std: 180,  setup: 60,  queue: 0, move: 10, mp: 1 },
+        { seq: 140, station_id: 29, job_id: 18, std: 360,  setup: 60,  queue: 0, move: 10, mp: 1 },
+        { seq: 150, station_id: 30, job_id: 19, std: 1080, setup: 0,   queue: 0, move: 10, mp: 0 },
+        { seq: 160, station_id: 31, job_id: 20, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 170, station_id: 32, job_id: 21, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1 },
         // Electrical
-        { seq: 180, station_id: 6,  job_id: 6,  std: 360,  setup: 30,  queue: 0, move: 5,  mp: 2, bottleneck: false },
-        { seq: 190, station_id: 7,  job_id: 7,  std: 300,  setup: 30,  queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 200, station_id: 8,  job_id: 8,  std: 420,  setup: 30,  queue: 0, move: 5,  mp: 2, bottleneck: true  },
-        { seq: 210, station_id: 9,  job_id: 9,  std: 360,  setup: 30,  queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 220, station_id: 10, job_id: 10, std: 300,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
+        { seq: 180, station_id: 6,  job_id: 6,  std: 360,  setup: 30,  queue: 0, move: 5,  mp: 2 },
+        { seq: 190, station_id: 7,  job_id: 7,  std: 300,  setup: 30,  queue: 0, move: 5,  mp: 1 },
+        { seq: 200, station_id: 8,  job_id: 8,  std: 420,  setup: 30,  queue: 0, move: 5,  mp: 2  },
+        { seq: 210, station_id: 9,  job_id: 9,  std: 360,  setup: 30,  queue: 0, move: 5,  mp: 1 },
+        { seq: 220, station_id: 10, job_id: 10, std: 300,  setup: 0,   queue: 0, move: 5,  mp: 1 },
         // Final Assembly
-        { seq: 230, station_id: 11, job_id: 38, std: 240,  setup: 30,  queue: 0, move: 5,  mp: 2, bottleneck: false },
-        { seq: 240, station_id: 12, job_id: 39, std: 240,  setup: 30,  queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 250, station_id: 13, job_id: 41, std: 180,  setup: 30,  queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 260, station_id: 14, job_id: 43, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 270, station_id: 15, job_id: 44, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
+        { seq: 230, station_id: 11, job_id: 38, std: 240,  setup: 30,  queue: 0, move: 5,  mp: 2 },
+        { seq: 240, station_id: 12, job_id: 39, std: 240,  setup: 30,  queue: 0, move: 5,  mp: 1 },
+        { seq: 250, station_id: 13, job_id: 41, std: 180,  setup: 30,  queue: 0, move: 5,  mp: 1 },
+        { seq: 260, station_id: 14, job_id: 43, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 270, station_id: 15, job_id: 44, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1 },
         // Charging & Testing
-        { seq: 280, station_id: 37, job_id: 63, std: 720,  setup: 0,   queue: 0, move: 5,  mp: 0, bottleneck: false },
-        { seq: 290, station_id: 38, job_id: 65, std: 300,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 300, station_id: 39, job_id: 66, std: 480,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
+        { seq: 280, station_id: 37, job_id: 63, std: 720,  setup: 0,   queue: 0, move: 5,  mp: 0 },
+        { seq: 290, station_id: 38, job_id: 65, std: 300,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 300, station_id: 39, job_id: 66, std: 480,  setup: 0,   queue: 0, move: 5,  mp: 1 },
         // QC Final
-        { seq: 310, station_id: 16, job_id: 46, std: 300,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 320, station_id: 17, job_id: 48, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
+        { seq: 310, station_id: 16, job_id: 46, std: 300,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 320, station_id: 17, job_id: 48, std: 180,  setup: 0,   queue: 0, move: 5,  mp: 1 },
         // Packing
-        { seq: 330, station_id: 18, job_id: 50, std: 120,  setup: 0,   queue: 0, move: 5,  mp: 1, bottleneck: false },
-        { seq: 340, station_id: 19, job_id: 52, std: 240,  setup: 0,   queue: 0, move: 5,  mp: 2, bottleneck: false },
+        { seq: 330, station_id: 18, job_id: 50, std: 120,  setup: 0,   queue: 0, move: 5,  mp: 1 },
+        { seq: 340, station_id: 19, job_id: 52, std: 240,  setup: 0,   queue: 0, move: 5,  mp: 2 },
         // Finished Goods
-        { seq: 350, station_id: 20, job_id: 54, std: 120,  setup: 0,   queue: 0, move: 0,  mp: 1, bottleneck: false },
+        { seq: 350, station_id: 20, job_id: 54, std: 120,  setup: 0,   queue: 0, move: 0,  mp: 1 },
       ];
 
       return steps.map((s, i) => ({
@@ -452,7 +452,6 @@ export default {
         queue_time: s.queue,
         move_time: s.move,
         manpower_required: s.mp,
-        is_bottleneck: s.bottleneck,
         created_at: now,
         updated_at: now,
       }));
@@ -479,98 +478,111 @@ export default {
       // routing_id 13: ASSY-WHEEL-F-26 (Front Wheel 26" Volt)
       // Line Final Assembly, stations: ST-FNL-WHEEL(11)
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 13, sequence: 10, station_id: 11, job_id: 38, standard_time: 240, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: false },
-      { id: wipId++, routing_id: 13, sequence: 20, station_id: 15, job_id: 44, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 13, sequence: 10, station_id: 11, job_id: 38, standard_time: 240, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 13, sequence: 20, station_id: 15, job_id: 44, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 14: ASSY-WHEEL-F-20 (Front Wheel 20" Eco)
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 14, sequence: 10, station_id: 11, job_id: 38, standard_time: 240, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: false },
-      { id: wipId++, routing_id: 14, sequence: 20, station_id: 15, job_id: 44, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 14, sequence: 10, station_id: 11, job_id: 38, standard_time: 240, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 14, sequence: 20, station_id: 15, job_id: 44, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 15: ASSY-WHEEL-R-MOTOR-26 (Rear Motor Wheel 26" 350W)
       // Line Electrical: ST-EL-MOTOR(8) → ST-EL-TEST(10)
+      // FIX: manpower_required sebelumnya hilang (null). Disamakan dengan
+      // step sejenis di buildProductRoutingDetails seq 200 (station 8/job 8) = 2.
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 15, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: true  },
-      { id: wipId++, routing_id: 15, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 15, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 15, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 16: ASSY-WHEEL-R-MOTOR-20 (Rear Motor Wheel 20" 250W)
+      // FIX: sama seperti routing_id 15 di atas.
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 16, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: true  },
-      { id: wipId++, routing_id: 16, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 16, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 16, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 17: ASSY-HANDLEBAR-VC
       // Line Final Assembly: ST-FNL-HMI(13) → ST-FNL-FQC(15)
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 17, sequence: 10, station_id: 13, job_id: 41, standard_time: 180, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 17, sequence: 20, station_id: 15, job_id: 44, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 17, sequence: 10, station_id: 13, job_id: 41, standard_time: 180, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 17, sequence: 20, station_id: 15, job_id: 44, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 18: ASSY-HUB-F (Front Hub System Assembly)
       // Line Final Assembly: ST-FNL-WHEEL(11) → ST-FNL-FQC(15)
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 18, sequence: 10, station_id: 11, job_id: 38, standard_time: 180, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 18, sequence: 20, station_id: 15, job_id: 45, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 18, sequence: 10, station_id: 11, job_id: 38, standard_time: 180, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 18, sequence: 20, station_id: 15, job_id: 45, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 19: ASSY-MOTOR-HUB-48V (Hub Motor 48V)
       // Line Electrical: ST-EL-MOTOR(8) → ST-EL-TEST(10)
+      // FIX: manpower_required sebelumnya hilang (null). Sama alasan dengan
+      // routing_id 15/16.
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 19, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: true  },
-      { id: wipId++, routing_id: 19, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 19, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 19, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 20: ASSY-MOTOR-HUB-36V (Hub Motor 36V)
+      // FIX: sama seperti routing_id 19 di atas.
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 20, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: true  },
-      { id: wipId++, routing_id: 20, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 20, sequence: 10, station_id: 8,  job_id: 8,  standard_time: 420, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 20, sequence: 20, station_id: 10, job_id: 10, standard_time: 300, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 21: PART-FRAME-VC (Main Frame VoltCity Unpainted)
       // Line Frame: ST-FRM-INSP(1) → ST-FRM-WELD(2) → ST-FRM-ALIGN(3) →
       //             ST-FRM-BRKT(4) → ST-FRM-FQC(5)
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 21, sequence: 10, station_id: 1,  job_id: 1,  standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 21, sequence: 20, station_id: 2,  job_id: 2,  standard_time: 240, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 21, sequence: 30, station_id: 3,  job_id: 3,  standard_time: 300, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 21, sequence: 40, station_id: 4,  job_id: 4,  standard_time: 360, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: false },
-      { id: wipId++, routing_id: 21, sequence: 50, station_id: 5,  job_id: 5,  standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 21, sequence: 10, station_id: 1,  job_id: 1,  standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 21, sequence: 20, station_id: 2,  job_id: 2,  standard_time: 240, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 21, sequence: 30, station_id: 3,  job_id: 3,  standard_time: 300, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 21, sequence: 40, station_id: 4,  job_id: 4,  standard_time: 360, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 21, sequence: 50, station_id: 5,  job_id: 5,  standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 22: PART-FRAME-EF (Main Frame EcoFold Unpainted)
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 22, sequence: 10, station_id: 1,  job_id: 1,  standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 22, sequence: 20, station_id: 2,  job_id: 2,  standard_time: 240, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 22, sequence: 30, station_id: 3,  job_id: 3,  standard_time: 300, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 22, sequence: 40, station_id: 4,  job_id: 4,  standard_time: 360, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: false },
-      { id: wipId++, routing_id: 22, sequence: 50, station_id: 5,  job_id: 5,  standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 22, sequence: 10, station_id: 1,  job_id: 1,  standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 22, sequence: 20, station_id: 2,  job_id: 2,  standard_time: 240, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 22, sequence: 30, station_id: 3,  job_id: 3,  standard_time: 300, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 22, sequence: 40, station_id: 4,  job_id: 4,  standard_time: 360, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 22, sequence: 50, station_id: 5,  job_id: 5,  standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 23: PART-BATT-48V (Battery Pack 48V 15Ah)
       // Line Battery: ST-BATT-CELL(33) → ST-BATT-ASSY(34) →
       //               ST-BATT-TEST(35) → ST-BATT-QC(36)
+      // FIX (seq 30): manpower_required sebelumnya hilang (null). Tidak ada
+      // baris pembanding lain di file ini untuk job_id 58 — nilai 2 dipakai
+      // mengikuti pola tetangga (seq 40 di line yang sama, setup time tinggi
+      // = assembly manual = mp 2). INI ASUMSI, BUKAN FAKTA — tolong verifikasi
+      // ke proses aktual battery assembly Anda.
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 23, sequence: 10, station_id: 33, job_id: 56, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 23, sequence: 20, station_id: 33, job_id: 57, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 23, sequence: 30, station_id: 34, job_id: 58, standard_time: 600, setup_time: 60, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: true  },
-      { id: wipId++, routing_id: 23, sequence: 40, station_id: 34, job_id: 59, standard_time: 480, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: false },
-      { id: wipId++, routing_id: 23, sequence: 50, station_id: 35, job_id: 60, standard_time: 900, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 0, is_bottleneck: false },
-      { id: wipId++, routing_id: 23, sequence: 60, station_id: 35, job_id: 61, standard_time: 480, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 23, sequence: 70, station_id: 36, job_id: 62, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 23, sequence: 10, station_id: 33, job_id: 56, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 23, sequence: 20, station_id: 33, job_id: 57, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 23, sequence: 30, station_id: 34, job_id: 58, standard_time: 600, setup_time: 60, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 23, sequence: 40, station_id: 34, job_id: 59, standard_time: 480, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 23, sequence: 50, station_id: 35, job_id: 60, standard_time: 900, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 0 },
+      { id: wipId++, routing_id: 23, sequence: 60, station_id: 35, job_id: 61, standard_time: 480, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 23, sequence: 70, station_id: 36, job_id: 62, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
 
       // -----------------------------------------------------------------------
       // routing_id 24: PART-BATT-36V (Battery Pack 36V 10Ah)
+      // FIX (seq 30): sama seperti routing_id 23 di atas — nilai 2 adalah
+      // asumsi, mohon diverifikasi.
       // -----------------------------------------------------------------------
-      { id: wipId++, routing_id: 24, sequence: 10, station_id: 33, job_id: 56, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 24, sequence: 20, station_id: 33, job_id: 57, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 24, sequence: 30, station_id: 34, job_id: 58, standard_time: 600, setup_time: 60, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: true  },
-      { id: wipId++, routing_id: 24, sequence: 40, station_id: 34, job_id: 59, standard_time: 480, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2, is_bottleneck: false },
-      { id: wipId++, routing_id: 24, sequence: 50, station_id: 35, job_id: 60, standard_time: 900, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 0, is_bottleneck: false },
-      { id: wipId++, routing_id: 24, sequence: 60, station_id: 35, job_id: 61, standard_time: 480, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
-      { id: wipId++, routing_id: 24, sequence: 70, station_id: 36, job_id: 62, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1, is_bottleneck: false },
+      { id: wipId++, routing_id: 24, sequence: 10, station_id: 33, job_id: 56, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 24, sequence: 20, station_id: 33, job_id: 57, standard_time: 120, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 24, sequence: 30, station_id: 34, job_id: 58, standard_time: 600, setup_time: 60, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 24, sequence: 40, station_id: 34, job_id: 59, standard_time: 480, setup_time: 30, queue_time: 0, move_time: 5, manpower_required: 2 },
+      { id: wipId++, routing_id: 24, sequence: 50, station_id: 35, job_id: 60, standard_time: 900, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 0 },
+      { id: wipId++, routing_id: 24, sequence: 60, station_id: 35, job_id: 61, standard_time: 480, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
+      { id: wipId++, routing_id: 24, sequence: 70, station_id: 36, job_id: 62, standard_time: 180, setup_time: 0,  queue_time: 0, move_time: 5, manpower_required: 1 },
     ];
 
     // Inject timestamps for WIP details

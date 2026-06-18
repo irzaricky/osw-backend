@@ -546,7 +546,8 @@ async listReplacement(req) {
         p.part_number ILIKE :search OR
         p.part_name ILIKE :search OR
         st.name ILIKE :search OR
-        r.replacement_reason ILIKE :search
+        r.replacement_reason ILIKE :search OR
+        u.email ILIKE :search
       )`)
       replacements.search = `%${search}%`
     }
@@ -582,14 +583,20 @@ async listReplacement(req) {
 
         r.qty_replacement,
         r.replacement_reason,
+
         r.source_label_number,
         r.source_label_id,
         r.source_wo_item_label_id,
+
+        r.created_by,
+        u.email AS created_by_email,
+
         r.created_at
 
       FROM t_production_material_replacement r
       JOIN s_stations st ON st.id = r.station_id
       JOIN s_parts p ON p.id = r.material_part_id
+      LEFT JOIN s_users u ON u.id = r.created_by
 
       ${whereClause}
 
@@ -600,11 +607,64 @@ async listReplacement(req) {
       type: QueryTypes.SELECT
     })
 
+    const replacementIds = rows.map(row => row.id)
+
+    let detailRows = []
+
+    if (replacementIds.length) {
+      detailRows = await db.sequelize.query(`
+        SELECT
+          detail.id,
+          detail.used_reference_id AS replacement_id,
+          detail.source_label_id,
+          detail.source_label_number,
+          detail.source_wo_item_label_id,
+          detail.pcs_no,
+          detail.pcs_label_number,
+          detail.status,
+          detail.created_by,
+          supplied_user.email AS supplied_by_email,
+          detail.used_at,
+          detail.created_at
+
+        FROM t_station_buffer_stock_detail detail
+        LEFT JOIN s_users supplied_user
+          ON supplied_user.id = detail.created_by
+
+        WHERE detail.used_reference_type = 'PRODUCTION_REPLACEMENT'
+          AND detail.used_reference_id IN (:replacement_ids)
+          AND detail.deleted_at IS NULL
+
+        ORDER BY detail.used_reference_id ASC, detail.used_at ASC, detail.id ASC
+      `, {
+        replacements: {
+          replacement_ids: replacementIds
+        },
+        type: QueryTypes.SELECT
+      })
+    }
+
+    const detailMap = detailRows.reduce((map, item) => {
+      if (!map[item.replacement_id]) {
+        map[item.replacement_id] = []
+      }
+
+      map[item.replacement_id].push(item)
+
+      return map
+    }, {})
+
+    const rowsWithDetails = rows.map(row => ({
+      ...row,
+      used_buffer_details: detailMap[row.id] || []
+    }))
+
     const countRows = await db.sequelize.query(`
       SELECT COUNT(*)::int AS total
       FROM t_production_material_replacement r
       JOIN s_stations st ON st.id = r.station_id
       JOIN s_parts p ON p.id = r.material_part_id
+      LEFT JOIN s_users u ON u.id = r.created_by
       ${whereClause}
     `, {
       replacements,
@@ -615,7 +675,7 @@ async listReplacement(req) {
 
     return {
       status: true,
-      data: rows,
+      data: rowsWithDetails,
       meta: {
         page: Number(page),
         limit: Number(limit),
@@ -672,37 +732,30 @@ async createReplacement(req) {
       }
     }
 
-    const labelRows = await db.sequelize.query(`
-      SELECT
-        pl.id AS label_id,
-        pl.label_number,
-        wil.id AS wo_item_label_id,
-        ws.id AS stock_id,
-        COALESCE(MIN(wsl.created_at), ws.created_at) AS placement_at
-      FROM t_warehouse_stock ws
-      JOIN t_work_order_storing_item_label wil
-        ON wil.id = ws.wo_item_label_id
-      JOIN t_part_labels pl
-        ON pl.id = wil.label_id
-      LEFT JOIN t_warehouse_stock_log wsl
-        ON wsl.wh_stock_id = ws.id
-        AND wsl.is_placement = true
-      WHERE pl.part_id = :part_id
-      GROUP BY
-        pl.id,
-        pl.label_number,
-        wil.id,
-        ws.id,
-        ws.created_at
-      ORDER BY placement_at ASC, ws.id ASC
-      LIMIT 1
-    `, {
-      replacements: {
-        part_id: data.material_part_id
+    const bufferDetails = await db.TStationBufferStockDetail.findAll({
+      where: {
+        buffer_stock_id: bufferStock.id,
+        status: 'AVAILABLE'
       },
-      type: QueryTypes.SELECT,
-      transaction
+      order: [
+        ['created_at', 'ASC'],
+        ['id', 'ASC']
+      ],
+      limit: qtyReplacement,
+      transaction,
+      lock: transaction.LOCK.UPDATE
     })
+
+    if (bufferDetails.length < qtyReplacement) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: `Available buffer label detail only ${bufferDetails.length} PCS, requested ${qtyReplacement} PCS`,
+        code: 400
+      }
+    }
+
+    const firstDetail = bufferDetails[0]
 
     const sourceLabel = labelRows[0] || null
 
@@ -713,12 +766,24 @@ async createReplacement(req) {
       qty_replacement: qtyReplacement,
       replacement_reason: data.replacement_reason || null,
 
-      source_label_id: sourceLabel?.label_id || null,
-      source_label_number: sourceLabel?.label_number || null,
-      source_wo_item_label_id: sourceLabel?.wo_item_label_id || null,
+      source_label_id: firstDetail?.source_label_id || null,
+      source_label_number: firstDetail?.source_label_number || null,
+      source_wo_item_label_id: firstDetail?.source_wo_item_label_id || null,
 
       created_by: req.user?.id || null
     }, {
+      transaction
+    })
+
+    await db.TStationBufferStockDetail.update({
+      status: 'USED',
+      used_reference_type: 'PRODUCTION_REPLACEMENT',
+      used_reference_id: replacement.id,
+      used_at: new Date()
+    }, {
+      where: {
+        id: bufferDetails.map(item => item.id)
+      },
       transaction
     })
 
@@ -728,12 +793,28 @@ async createReplacement(req) {
       transaction
     })
 
+    await db.TStationBufferStockLog.create({
+      buffer_stock_id: bufferStock.id,
+      transaction_type: 'OUT',
+      qty_kanban: 0,
+      qty_pcs: qtyReplacement,
+      reference_type: 'PRODUCTION_REPLACEMENT',
+      reference_id: replacement.id,
+      remarks: 'Material replacement from station buffer',
+      created_by: req.user?.id || null
+    }, {
+      transaction
+    })
+
     await transaction.commit()
 
     return {
       status: true,
       message: 'Replacement created successfully',
-      data: replacement
+      data: {
+        ...replacement.toJSON(),
+        used_buffer_details: bufferDetails
+      }
     }
   } catch (error) {
     await transaction.rollback()
@@ -902,6 +983,52 @@ async listBufferStatus(req) {
       type: QueryTypes.SELECT
     })
 
+    const bufferStockIds = rows.map(row => row.id)
+
+    let detailRows = []
+
+    if (bufferStockIds.length) {
+      detailRows = await db.sequelize.query(`
+        SELECT
+          detail.id,
+          detail.buffer_stock_id,
+          detail.source_label_id,
+          detail.source_label_number,
+          detail.source_wo_item_label_id,
+          detail.pcs_no,
+          detail.pcs_label_number,
+          detail.status,
+          detail.created_by,
+          usr.email AS supplied_by_email,
+          detail.created_at
+        FROM t_station_buffer_stock_detail
+        LEFT JOIN s_users usr
+          ON usr.id = detail.created_by
+        WHERE buffer_stock_id IN (:buffer_stock_ids)
+          AND detail.status = 'AVAILABLE'
+          AND detail.deleted_at IS NULL
+        ORDER BY detail.created_at ASC, detail.id ASC
+      `, {
+        replacements: { buffer_stock_ids: bufferStockIds },
+        type: QueryTypes.SELECT
+      })
+    }
+
+    const detailMap = detailRows.reduce((map, item) => {
+      if (!map[item.buffer_stock_id]) {
+        map[item.buffer_stock_id] = []
+      }
+
+      map[item.buffer_stock_id].push(item)
+
+      return map
+    }, {})
+
+    const rowsWithDetails = rows.map(row => ({
+      ...row,
+      buffer_details: detailMap[row.id] || []
+    }))
+
     const countRows = await db.sequelize.query(`
       SELECT COUNT(*)::int AS total
       FROM (
@@ -924,7 +1051,7 @@ async listBufferStatus(req) {
 
     return {
       status: true,
-      data: rows,
+      data: rowsWithDetails,
       meta: {
         page: Number(page),
         limit: Number(limit),

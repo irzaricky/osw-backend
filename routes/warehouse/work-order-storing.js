@@ -17,6 +17,12 @@ router.get('/statuses/dropdown', session.sessionChecker, session.permissionCheck
   helper.sendResponse(res, result);
 });
 
+// get dropdown buffer station
+router.get('/buffer-station/dropdown', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Supervisor Warehouse', 'Warehouse Staff']), async (req, res) => {
+  const result = await workOrderStoringModule.getDropdownBufferStation(req);
+  helper.sendResponse(res, result);
+});
+
 // get dropdown work order production
 router.get('/wo-production/dropdown', session.sessionChecker, session.permissionChecker(['Superadmin', 'Admin Warehouse', 'Supervisor Warehouse', 'Warehouse Staff']), async (req, res) => {
   const result = await workOrderStoringModule.getDropdownWoProduction(req);

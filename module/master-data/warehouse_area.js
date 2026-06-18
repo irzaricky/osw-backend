@@ -5,7 +5,20 @@ import helper from '../../class/helper.class.js'
 import BaseModule from '../../class/base.module.js'
 import Joi from 'joi'
 
-const { SWarehouseAreas, SWarehouseBins, SWarehouses, RefWarehouseCategories, SAreaLayout } = db
+const { 
+  SWarehouseAreas, 
+  SWarehouseBins, 
+  SWarehouses, 
+  RefWarehouseCategories, 
+  SAreaLayout, 
+  SWorkOrder, 
+  SParts,
+  SPackages,
+  SBoms, 
+  SBomDetails, 
+  TWorkOrderStoring,
+  TWorkOrderStoringItem 
+} = db
 
 class WarehouseAreaModule extends BaseModule {
   async list(req) {
@@ -316,10 +329,135 @@ class WarehouseAreaModule extends BaseModule {
 
   async getDropdown(req) {
     try {
-      const { category_id, warehouse_id, wo_category, exclude_has_layout } = req.query || {}
+      const { category_id, warehouse_id, wo_category, exclude_has_layout, production_wo_id } = req.query || {}
 
       // Take Out Flow
       if (category_id && wo_category === 'take_out') {
+        let partIds = [];
+
+        // Take Out Supply Production
+        if (production_wo_id) {
+          const wo = await SWorkOrder.findByPk(
+            production_wo_id,
+            {
+              attributes: ['id', 'part_id', 'planned_quantity']
+            }
+          );
+
+          if (!wo) {
+            return {
+              status: false,
+              message: 'Production Work Order not found',
+              code: 404
+            };
+          }
+
+          const bom = await SBoms.findOne({
+            where: {
+              parent_part_id: wo.part_id,
+              doc_status_id: 3, // Approved
+              activation_status_id: 2 // Active
+            },
+            include: [
+              {
+                model: SBomDetails,
+                as: 'details',
+                required: true,
+                where: {
+                  type: 'RAW'
+                },
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    required: true,
+                    attributes: ['id'],
+                    include: [
+                      {
+                        model: SPackages,
+                        as: 'package',
+                        attributes: ['capacity'],
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          });
+
+          if (!bom) {
+            return {
+              status: false,
+              message: 'Active BOM not found',
+              code: 404
+            };
+          }
+
+          const rawMaterials = bom.details.filter(
+            detail => detail.type === 'RAW'
+          );
+
+          for (const detail of rawMaterials) {
+            const requiredQty = Number(detail.qty_required) * Number(wo.planned_quantity);
+            const packageCapacity = Number(detail.part?.package?.capacity || 1);
+
+            const suppliedKanban = await TWorkOrderStoringItem.sum(
+              'total_kanban',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    required: true,
+                    where: {
+                      production_wo_id: wo.id,
+                      wo_status_id: {
+                        [Op.in]: [2, 3, 4]
+                      }
+                    }
+                  }
+                ],
+                where: {
+                  part_id: detail.part_id
+                }
+              }
+            ) || 0;
+
+            const warehouseSuppliedQty = suppliedKanban * packageCapacity;
+
+            const bufferUsedQty = await TWorkOrderStoringItem.sum(
+              'buffer_used_qty_pcs',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    required: true,
+                    where: {
+                      production_wo_id: wo.id,
+                      wo_status_id: {
+                        [Op.in]: [2, 3, 4]
+                      }
+                    }
+                  }
+                ],
+                where: {
+                  part_id: detail.part_id
+                }
+              }
+            ) || 0;
+
+            const suppliedQty = warehouseSuppliedQty + Number(bufferUsedQty);
+            const remainingQty = Math.max(requiredQty - suppliedQty, 0);
+
+            if (remainingQty > 0 && !partIds.includes(detail.part_id)) {
+              partIds.push(
+                detail.part_id
+              );
+            }
+          }
+        }
+
         const areas = await db.sequelize.query(`
           SELECT DISTINCT 
             wa.id,
@@ -330,10 +468,16 @@ class WarehouseAreaModule extends BaseModule {
           JOIN s_warehouses wh ON wh.id = wa.warehouse_id AND wh.deleted_at IS NULL
           JOIN s_warehouse_bins b ON b.area_id = wa.id AND b.deleted_at IS NULL
           JOIN t_warehouse_stock ws ON ws.bin_id = b.id AND ws.deleted_at IS NULL
+          JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+          JOIN t_part_labels pl ON pl.id = wil.label_id AND pl.deleted_at IS NULL
           WHERE wa.deleted_at IS NULL AND wh.category_id = :category_id
+          ${ partIds.length ? 'AND pl.part_id IN (:partIds)' : '' }
           ORDER BY wa.name ASC
         `, {
-          replacements: { category_id },
+          replacements: { 
+            category_id,
+            ...(partIds.length && { partIds })
+          },
           type: QueryTypes.SELECT
         })
 

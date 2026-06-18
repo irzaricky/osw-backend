@@ -6,7 +6,25 @@ import BaseModule from '../../class/base.module.js'
 import ExcelJS from 'exceljs'
 import Joi from 'joi'
 
-const { SParts, SUom, SPackages, SPartSuppliers, RefPartTypes, SSuppliers, sequelize, TWorkOrderStoring, TWorkOrderStoringItem } = db
+const { 
+  SStations,
+  RefStationTypes,
+  SParts, 
+  SUom, 
+  SPackages, 
+  SPartSuppliers, 
+  RefPartTypes, 
+  SBoms,
+  SBomDetails,
+  SSuppliers,
+  SWorkOrder, 
+  TWorkOrderStoring, 
+  TWorkOrderStoringItem,
+  TStationBufferStock,
+  SPartRoutings,
+  SPartRoutingDetails,
+  sequelize
+} = db
 
 class PartsModule extends BaseModule {
   async dropdown(req, res) {
@@ -17,6 +35,7 @@ class PartsModule extends BaseModule {
       const wo_category = (params.wo_category || '').trim()
       const area_id = params.area_id ? parseInt(params.area_id) : null
       const ref_doc_id = params.ref_doc_id ? parseInt(params.ref_doc_id) : null
+      const production_wo_id = params.production_wo_id ? parseInt(params.production_wo_id) : null
 
       let rows
 
@@ -107,6 +126,200 @@ class PartsModule extends BaseModule {
         let whereClause = ''
         const replacements = { area_id }
 
+        const requiredPartIds = []
+        const maxKanbanMap = new Map();
+
+        // Take Out Supply Production
+        if (production_wo_id) {
+          const wo = await SWorkOrder.findByPk(
+            production_wo_id,
+            {
+              attributes: ['id', 'part_id', 'planned_quantity']
+            }
+          );
+
+          if (!wo) {
+            return helper.sendResponse(res, {
+              status: false,
+              code: 404,
+              message: 'Production Work Order not found'
+            });
+          }
+
+          const bom = await SBoms.findOne({
+            where: {
+              parent_part_id: wo.part_id,
+              doc_status_id: 3, // Approved
+              activation_status_id: 2 // Active
+            },
+            include: [
+              {
+                model: SBomDetails,
+                as: 'details',
+                required: true,
+                where: {
+                  type: 'RAW'
+                },
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    required: true,
+                    attributes: ['id'],
+                    include: [
+                      {
+                        model: SPackages,
+                        as: 'package',
+                        attributes: ['capacity']
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          });
+
+          if (!bom) {
+            return helper.sendResponse(res, {
+              status: false,
+              code: 404,
+              message: 'Active BOM not found'
+            });
+          }
+
+          let firstAssemblyStation = null;
+
+          const routing = await SPartRoutings.findOne({
+            where: { 
+              part_id: wo.part_id,
+              active: true
+            },
+            include: [
+              {
+                model: SPartRoutingDetails,
+                as: 'routing_details',
+                include: [
+                  {
+                    model: SStations,
+                    as: 'station',
+                    include: [
+                      {
+                        model: RefStationTypes,
+                        as: 'station_type'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          })
+
+          if (routing?.routing_details?.length) {
+            const sorted = [...routing.routing_details]
+              .sort((a, b) => a.sequence - b.sequence);
+
+            firstAssemblyStation = sorted.find(
+              r => r.station?.station_type?.name?.toLowerCase().includes('assembly')
+            )?.station;
+
+            if (!firstAssemblyStation) {
+              firstAssemblyStation = sorted[0]?.station ?? null;
+            }
+          }
+
+          for (const detail of bom.details) {
+            const requiredQty = Number(detail.qty_required) * Number(wo.planned_quantity);
+            const packageCapacity = Number(detail.part?.package?.capacity || 1);
+
+            const suppliedKanban = await TWorkOrderStoringItem.sum(
+              'total_kanban',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    required: true,
+                    where: {
+                      production_wo_id: wo.id,
+                      wo_status_id: {
+                        [Op.in]: [2, 3, 4]
+                      }
+                    }
+                  }
+                ],
+                where: {
+                  part_id: detail.part_id
+                }
+              }
+            ) || 0;
+
+            const warehouseSuppliedQty = suppliedKanban * packageCapacity;
+
+            const bufferUsedQty = await TWorkOrderStoringItem.sum(
+              'buffer_used_qty_pcs',
+              {
+                include: [
+                  {
+                    model: TWorkOrderStoring,
+                    as: 'work_order',
+                    required: true,
+                    where: {
+                      production_wo_id: wo.id,
+                      wo_status_id: {
+                        [Op.in]: [2, 3, 4]
+                      }
+                    }
+                  }
+                ],
+                where: {
+                  part_id: detail.part_id
+                }
+              }
+            ) || 0;
+
+            const suppliedQty = warehouseSuppliedQty + Number(bufferUsedQty);
+            const remainingQty = Math.max(requiredQty - suppliedQty, 0);
+
+            const bufferStock = await TStationBufferStock.findOne({
+              where: {
+                station_id: firstAssemblyStation?.id,
+                part_id: detail.part_id
+              }
+            });
+
+            const bufferQty = Number(bufferStock?.qty_pcs || 0);
+
+            let maxKanban = Math.floor(remainingQty / packageCapacity);
+            const remainder = remainingQty % packageCapacity;
+
+            if (remainder > 0 && bufferQty < remainder) {
+              maxKanban += 1;
+            }
+
+            maxKanbanMap.set(
+              detail.part_id,
+              maxKanban
+            );
+
+            if (remainingQty > 0 && !requiredPartIds.includes(detail.part_id)) {
+              requiredPartIds.push(
+                detail.part_id
+              );
+            }
+          }
+
+          if (!requiredPartIds.length) {
+            return helper.sendResponse(res, {
+              status: true,
+              code: 200,
+              data: []
+            });
+          }
+
+          whereClause += ` AND part.id IN (:requiredPartIds)`;
+          replacements.requiredPartIds = requiredPartIds;
+        }
+
         if (partTypeCode) {
           whereClause += ' AND part.part_type_code = :part_type_code'
           replacements.part_type_code = partTypeCode
@@ -147,6 +360,7 @@ class PartsModule extends BaseModule {
           part_number: row.part_number,
           part_name: row.part_name,
           part_type_code: row.part_type_code,
+          max_kanban: maxKanbanMap.get(row.id) || 0,
           available_stock: row.available_stock,
           uom: row.uom_id
           ? {

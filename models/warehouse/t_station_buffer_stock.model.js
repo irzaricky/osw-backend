@@ -12,6 +12,11 @@ export default (sequelize) => {
         foreignKey: 'part_id',
         as: 'part'
       })
+
+      TStationBufferStock.hasMany(models.TStationBufferStockDetail, {
+        foreignKey: 'buffer_stock_id',
+        as: 'details'
+      })
     }
   }
 

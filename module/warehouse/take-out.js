@@ -528,7 +528,7 @@ class TakeOutModule extends BaseModule {
   }
 }
 
-async applyBufferAdjustment(woId, transaction) {
+async applyBufferAdjustment(woId, transaction, userId = null) {
   const workOrder = await TWorkOrderStoring.findByPk(woId, {
     attributes: ['id', 'station_id', 'take_out_purpose'],
     include: [
@@ -620,7 +620,7 @@ async applyBufferAdjustment(woId, transaction) {
         reference_type: 'WO_TAKE_OUT_BUFFER_USED',
         reference_id: workOrder.id,
         remarks: 'Buffer used for production take out',
-        created_by: null
+        created_by: userId
       }, {
         transaction
       })
@@ -667,10 +667,70 @@ async applyBufferAdjustment(woId, transaction) {
           workOrder.take_out_purpose === 'buffer'
             ? 'Material added to station buffer from buffer take out'
             : 'Remaining material added to buffer from production take out',
-        created_by: null
+        created_by: userId
       }, {
         transaction
       })
+      const scannedLabels = await db.sequelize.query(`
+        SELECT
+          wil.id AS source_wo_item_label_id,
+          lbl.id AS source_label_id,
+          lbl.label_number AS source_label_number
+        FROM t_work_order_storing_item_label wil
+        JOIN t_part_labels lbl
+          ON lbl.id = wil.label_id
+        WHERE wil.wo_item_id = :wo_item_id
+          AND wil.is_scanned_out = true
+          AND wil.deleted_at IS NULL
+          AND lbl.deleted_at IS NULL
+        ORDER BY wil.id ASC
+      `, {
+        replacements: {
+          wo_item_id: item.id
+        },
+        type: QueryTypes.SELECT,
+        transaction
+      })
+
+      const detailRows = []
+
+      let remainingPcsToCreate = bufferAddedQty
+
+      for (const label of scannedLabels) {
+        if (remainingPcsToCreate <= 0) break
+
+        const capacity = Number(item.part?.package?.capacity || 1)
+
+        const pcsCount = Math.min(capacity, remainingPcsToCreate)
+
+        for (let pcsNo = 1; pcsNo <= pcsCount; pcsNo++) {
+          detailRows.push({
+            buffer_stock_id: bufferStock.id,
+            station_id: workOrder.station_id,
+            part_id: item.part_id,
+            source_label_id: label.source_label_id,
+            source_label_number: label.source_label_number,
+            source_wo_item_label_id: label.source_wo_item_label_id,
+            pcs_no: pcsNo,
+            pcs_label_number: `${label.source_label_number} - ${pcsNo}`,
+            status: 'AVAILABLE',
+            source_reference_type:
+              workOrder.take_out_purpose === 'buffer'
+                ? 'WO_TAKE_OUT_TO_BUFFER'
+                : 'WO_TAKE_OUT_BUFFER_ADDED',
+            source_reference_id: workOrder.id,
+            created_by: userId
+          })
+        }
+
+        remainingPcsToCreate -= pcsCount
+      }
+
+      if (detailRows.length) {
+        await db.TStationBufferStockDetail.bulkCreate(detailRows, {
+          transaction
+        })
+      }
     }
   }
 }
@@ -938,7 +998,7 @@ async scanLabelOut(req) {
     if (
       Number(totalScannedOut) >= Number(totalTargetKanban)
     ) {
-      await this.applyBufferAdjustment(workOrder.id, t);
+      await this.applyBufferAdjustment(workOrder.id, t, req.user?.id || null)
 
       await workOrder.update({
         wo_status_id: 4

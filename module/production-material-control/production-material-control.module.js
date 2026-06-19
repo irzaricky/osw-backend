@@ -1066,6 +1066,196 @@ async listBufferStatus(req) {
     }
   }
 }
+async listBufferTransaction(req) {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      transaction_type,
+      station_id,
+      date_from,
+      date_to
+    } = req.query
+
+    const offset = (Number(page) - 1) * Number(limit)
+
+    const where = ['log.deleted_at IS NULL']
+    const replacements = {
+      limit: Number(limit),
+      offset
+    }
+
+    if (search) {
+      where.push(`(
+        p.part_number ILIKE :search OR
+        p.part_name ILIKE :search OR
+        st.name ILIKE :search OR
+        usr.email ILIKE :search
+      )`)
+      replacements.search = `%${search}%`
+    }
+
+    if (transaction_type) {
+      where.push(`log.transaction_type = :transaction_type`)
+      replacements.transaction_type = transaction_type
+    }
+
+    if (station_id) {
+      where.push(`bs.station_id = :station_id`)
+      replacements.station_id = station_id
+    }
+
+    if (date_from) {
+      where.push(`DATE(log.created_at) >= DATE(:date_from)`)
+      replacements.date_from = date_from
+    }
+
+    if (date_to) {
+      where.push(`DATE(log.created_at) <= DATE(:date_to)`)
+      replacements.date_to = date_to
+    }
+
+    const whereClause = `WHERE ${where.join(' AND ')}`
+
+    const rows = await db.sequelize.query(`
+      SELECT
+        log.id,
+        log.buffer_stock_id,
+        log.transaction_type,
+        log.qty_kanban,
+        log.qty_pcs,
+        log.reference_type,
+        log.reference_id,
+        log.remarks,
+        log.created_by,
+        usr.email AS user_email,
+        log.created_at,
+
+        bs.station_id,
+        st.name AS station_name,
+
+        bs.part_id,
+        p.part_number,
+        p.part_name
+
+      FROM t_station_buffer_stock_log log
+      JOIN t_station_buffer_stock bs
+        ON bs.id = log.buffer_stock_id
+      JOIN s_stations st
+        ON st.id = bs.station_id
+      JOIN s_parts p
+        ON p.id = bs.part_id
+      LEFT JOIN s_users usr
+        ON usr.id = log.created_by
+
+      ${whereClause}
+
+      ORDER BY log.created_at DESC, log.id DESC
+      LIMIT :limit OFFSET :offset
+    `, {
+      replacements,
+      type: QueryTypes.SELECT
+    })
+
+    const logIds = rows.map(row => row.id)
+    const referenceIds = rows.map(row => row.reference_id).filter(Boolean)
+
+    let detailRows = []
+
+    if (rows.length) {
+      detailRows = await db.sequelize.query(`
+        SELECT
+          detail.id,
+          detail.source_reference_id,
+          detail.used_reference_id,
+          detail.source_reference_type,
+          detail.used_reference_type,
+          detail.source_label_number,
+          detail.pcs_label_number,
+          detail.status,
+          detail.created_at,
+          detail.used_at
+
+        FROM t_station_buffer_stock_detail detail
+
+        WHERE detail.deleted_at IS NULL
+          AND (
+            detail.source_reference_id IN (:reference_ids)
+            OR detail.used_reference_id IN (:reference_ids)
+          )
+
+        ORDER BY detail.created_at ASC, detail.id ASC
+      `, {
+        replacements: {
+          reference_ids: referenceIds.length ? referenceIds : [0]
+        },
+        type: QueryTypes.SELECT
+      })
+    }
+
+    const rowsWithDetails = rows.map(row => {
+      const details = detailRows.filter(detail => {
+        if (row.transaction_type === 'IN') {
+          return (
+            Number(detail.source_reference_id) === Number(row.reference_id) &&
+            detail.source_reference_type === row.reference_type
+          )
+        }
+
+        if (row.transaction_type === 'OUT') {
+          return (
+            Number(detail.used_reference_id) === Number(row.reference_id) &&
+            detail.used_reference_type === row.reference_type
+          )
+        }
+
+        return false
+      })
+
+      return {
+        ...row,
+        labels: details
+      }
+    })
+
+    const countRows = await db.sequelize.query(`
+      SELECT COUNT(*)::int AS total
+
+      FROM t_station_buffer_stock_log log
+      JOIN t_station_buffer_stock bs
+        ON bs.id = log.buffer_stock_id
+      JOIN s_stations st
+        ON st.id = bs.station_id
+      JOIN s_parts p
+        ON p.id = bs.part_id
+      LEFT JOIN s_users usr
+        ON usr.id = log.created_by
+
+      ${whereClause}
+    `, {
+      replacements,
+      type: QueryTypes.SELECT
+    })
+
+    return {
+      status: true,
+      data: rowsWithDetails,
+      meta: {
+        page: Number(page),
+        limit: Number(limit),
+        total: Number(countRows[0]?.total || 0)
+      }
+    }
+  } catch (error) {
+    return {
+      status: false,
+      message: error.message,
+      code: 500
+    }
+  }
+}
+
 async dropdowns(req) {
   try {
     const [shifts, stations, products] = await Promise.all([

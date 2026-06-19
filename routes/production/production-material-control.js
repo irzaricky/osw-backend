@@ -81,4 +81,8 @@ router.get('/production-results/:production_result_id/replacements', auth.sessio
   return res.status(result.code || 200).json(result)
 })
 
+router.get('/buffer-transactions', auth.sessionChecker, async (req, res) => {
+  const result = await productionMaterialControlModule.listBufferTransaction(req)
+  return res.status(result.code || 200).json(result)
+})
 export default router

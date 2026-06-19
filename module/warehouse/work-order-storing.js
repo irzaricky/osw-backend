@@ -2285,8 +2285,6 @@ class WorkOrderStoringModule extends BaseModule {
         )
       };
     } catch (error) {
-      console.log(error);
-      console.log(error.parent?.sql);
       if (config.debug) {
         return {
           status: false,

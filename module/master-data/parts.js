@@ -36,6 +36,7 @@ class PartsModule extends BaseModule {
       const area_id = params.area_id ? parseInt(params.area_id) : null
       const ref_doc_id = params.ref_doc_id ? parseInt(params.ref_doc_id) : null
       const production_wo_id = params.production_wo_id ? parseInt(params.production_wo_id) : null
+      const station_id = params.station_id ? parseInt(params.station_id) : null
 
       let rows
 
@@ -305,6 +306,104 @@ class PartsModule extends BaseModule {
               requiredPartIds.push(
                 detail.part_id
               );
+            }
+          }
+
+          if (!requiredPartIds.length) {
+            return helper.sendResponse(res, {
+              status: true,
+              code: 200,
+              data: []
+            });
+          }
+
+          whereClause += ` AND part.id IN (:requiredPartIds)`;
+          replacements.requiredPartIds = requiredPartIds;
+        } else if (station_id) {
+          const routings = await SPartRoutings.findAll({
+            where: {
+              active: true
+            },
+            attributes: ['part_id'],
+            include: [
+              {
+                model: SPartRoutingDetails,
+                as: 'routing_details',
+                required: true,
+                attributes: ['station_id', 'sequence'],
+                include: [
+                  {
+                    model: SStations,
+                    as: 'station',
+                    required: true,
+                    include: [
+                      {
+                        model: RefStationTypes,
+                        as: 'station_type',
+                        required: true,
+                        where: {
+                          name: 'ASSEMBLY'
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          });
+
+          const parentPartIds = [];
+
+          for (const routing of routings) {
+            const firstAssembly = [...routing.routing_details]
+              .sort((a, b) => a.sequence - b.sequence)[0];
+
+            if (!firstAssembly) {
+              continue;
+            }
+
+            if (firstAssembly.station_id !== station_id) {
+              continue;
+            }
+
+            parentPartIds.push(routing.part_id);
+          }
+
+          if (!parentPartIds.length) {
+            return helper.sendResponse(res, {
+              status: true,
+              code: 200,
+              data: []
+            });
+          }
+
+          const boms = await SBoms.findAll({
+            where: {
+              parent_part_id: {
+                [Op.in]: parentPartIds
+              },
+              doc_status_id: 3, // Approved
+              activation_status_id: 2 // Active
+            },
+            include: [
+              {
+                model: SBomDetails,
+                as: 'details',
+                required: true,
+                where: {
+                  type: 'RAW'
+                }
+              }
+            ]
+          });
+
+          for (const bom of boms) {
+            for (const detail of bom.details) {
+              if (!requiredPartIds.includes(detail.part_id)) {
+                requiredPartIds.push(
+                  detail.part_id
+                );
+              }
             }
           }
 

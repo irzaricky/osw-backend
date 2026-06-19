@@ -12,8 +12,12 @@ const {
   RefWarehouseCategories, 
   SAreaLayout, 
   SWorkOrder, 
+  SStations,
+  RefStationTypes,
   SParts,
   SPackages,
+  SPartRoutings,
+  SPartRoutingDetails,
   SBoms, 
   SBomDetails, 
   TWorkOrderStoring,
@@ -329,7 +333,7 @@ class WarehouseAreaModule extends BaseModule {
 
   async getDropdown(req) {
     try {
-      const { category_id, warehouse_id, wo_category, exclude_has_layout, production_wo_id } = req.query || {}
+      const { category_id, warehouse_id, wo_category, exclude_has_layout, production_wo_id, station_id } = req.query || {}
 
       // Take Out Flow
       if (category_id && wo_category === 'take_out') {
@@ -455,6 +459,102 @@ class WarehouseAreaModule extends BaseModule {
                 detail.part_id
               );
             }
+          }
+        }
+
+        // Take Out Supply Buffer
+        else if (station_id) {
+          const routings = await SPartRoutings.findAll({
+            where: {
+              active: true
+            },
+            attributes: ['part_id'],
+            include: [
+              {
+                model: SPartRoutingDetails,
+                as: 'routing_details',
+                required: true,
+                attributes: ['station_id', 'sequence'],
+                include: [
+                  {
+                    model: SStations,
+                    as: 'station',
+                    required: true,
+                    include: [
+                      {
+                        model: RefStationTypes,
+                        as: 'station_type',
+                        required: true,
+                        where: {
+                          name: 'ASSEMBLY'
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          });
+
+          const parentPartIds = [];
+
+          for (const routing of routings) {
+            const firstAssembly = [...routing.routing_details]
+              .sort((a, b) => a.sequence - b.sequence)[0];
+
+            if (!firstAssembly) {
+              continue;
+            }
+
+            if (firstAssembly.station_id !== Number(station_id)) {
+              continue;
+            }
+
+            parentPartIds.push(routing.part_id);
+          }
+
+          if (!parentPartIds.length) {
+            return {
+              status: true,
+              data: []
+            };
+          }
+
+          const boms = await SBoms.findAll({
+            where: {
+              parent_part_id: {
+                [Op.in]: parentPartIds
+              },
+              doc_status_id: 3, // Approved
+              activation_status_id: 2 // Active
+            },
+            include: [
+              {
+                model: SBomDetails,
+                as: 'details',
+                required: true,
+                where: {
+                  type: 'RAW'
+                }
+              }
+            ]
+          });
+
+          for (const bom of boms) {
+            for (const detail of bom.details) {
+              if (!partIds.includes(detail.part_id)) {
+                partIds.push(
+                  detail.part_id
+                );
+              }
+            }
+          }
+
+          if (!partIds.length) {
+            return {
+              status: true,
+              data: []
+            };
           }
         }
 

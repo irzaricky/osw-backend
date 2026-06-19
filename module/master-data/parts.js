@@ -159,7 +159,7 @@ class PartsModule extends BaseModule {
                 as: 'details',
                 required: true,
                 where: {
-                  type: 'RAW'
+                  type: 'Raw Material'
                 },
                 include: [
                   {
@@ -391,7 +391,7 @@ class PartsModule extends BaseModule {
                 as: 'details',
                 required: true,
                 where: {
-                  type: 'RAW'
+                  type: 'Raw Material'
                 }
               }
             ]

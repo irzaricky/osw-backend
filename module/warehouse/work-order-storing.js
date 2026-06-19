@@ -374,7 +374,7 @@ class WorkOrderStoringModule extends BaseModule {
           as: 'details',
           required: true,
           where: {
-            type: 'RAW'
+            type: 'Raw Material'
           }
         }
       ],
@@ -541,7 +541,7 @@ class WorkOrderStoringModule extends BaseModule {
     }
 
     const rawMaterials = bom.details.filter(
-      d => d.type === 'RAW'
+      d => d.type === 'Raw Material'
     );
 
     if (!rawMaterials.length) {
@@ -2149,7 +2149,7 @@ class WorkOrderStoringModule extends BaseModule {
               as: 'details',
               required: true,
               where: {
-                type: 'RAW'
+                type: 'Raw Material'
               }
             }
           ]
@@ -2361,7 +2361,7 @@ class WorkOrderStoringModule extends BaseModule {
         }
 
         const rawMaterials = bom.details.filter(
-          d => d.type === 'RAW'
+          d => d.type === 'Raw Material'
         );
 
         let firstAssemblyStation = null;
@@ -2506,7 +2506,7 @@ class WorkOrderStoringModule extends BaseModule {
             part_id: detail.part.id,
             part_number: detail.part.part_number,
             part_name: detail.part.part_name,
-            uom: detail.part.uom.name,
+            uom: detail.part.uom.code,
             qty_per_kanban: qtyPerKanban,
             required_qty: requiredQty,
             supplied_qty: suppliedQty,
@@ -2534,7 +2534,7 @@ class WorkOrderStoringModule extends BaseModule {
           part_id: wo.part.id,
           part_number: wo.part.part_number,
           part_name: wo.part.part_name,
-          uom: wo.part.uom.name,
+          uom: wo.part.uom.code,
 
           station: firstAssemblyStation
             ? {

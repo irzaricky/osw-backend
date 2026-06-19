@@ -368,7 +368,7 @@ class WarehouseAreaModule extends BaseModule {
                 as: 'details',
                 required: true,
                 where: {
-                  type: 'RAW'
+                  type: 'Raw Material'
                 },
                 include: [
                   {
@@ -398,7 +398,7 @@ class WarehouseAreaModule extends BaseModule {
           }
 
           const rawMaterials = bom.details.filter(
-            detail => detail.type === 'RAW'
+            detail => detail.type === 'Raw Material'
           );
 
           for (const detail of rawMaterials) {
@@ -534,7 +534,7 @@ class WarehouseAreaModule extends BaseModule {
                 as: 'details',
                 required: true,
                 where: {
-                  type: 'RAW'
+                  type: 'Raw Material'
                 }
               }
             ]

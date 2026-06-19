@@ -26,6 +26,171 @@ async function getRoutingId(queryInterface, routingCode) {
   return results[0].id;
 }
 
+function getMonthRange(year, month) {
+  const pad   = (n) => String(n).padStart(2, '0');
+  const start = new Date(year, month - 1, 1);
+  const end   = new Date(year, month, 0); // hari terakhir bulan ini
+  return {
+    startDate: `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`,
+    endDate:   `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`,
+  };
+}
+
+function calcNetMinutes(shiftEntries) {
+  let productive = 0;
+  for (const s of shiftEntries) {
+    if (s.category !== 'PRODUCTIVE') continue;
+    const [sh, sm] = s.start_time.split(':').map(Number);
+    const [eh, em] = s.end_time.split(':').map(Number);
+    let start = sh * 60 + sm;
+    let end   = eh * 60 + em;
+    if (end <= start) end += 24 * 60;
+    productive += end - start;
+  }
+  return productive;
+}
+
+/**
+ * Versi raw-SQL dari LineCapacityModule#resolveShiftCalendarParams.
+ * Mengambil shift calendar yang overlap dengan [startDate, endDate] untuk
+ * sebuah line, lalu menurunkan working_days, shifts_per_day,
+ * working_hours_per_shift, dan overtime_hours — persis logika di module.
+ */
+async function resolveShiftCalendarParamsSeeder(queryInterface, lineId, startDate, endDate) {
+  const [calendars] = await queryInterface.sequelize.query(
+    `
+      SELECT
+        sc.start_date,
+        sc.end_date,
+        rtc.is_holiday   AS is_holiday,
+        sh.shift_number  AS shift_number,
+        sh.type          AS type,
+        sh.start_time    AS start_time,
+        sh.end_time      AS end_time,
+        sh.category      AS category
+      FROM s_shift_calendars sc
+      JOIN s_shifts sh
+        ON sh.id = sc.shift_id
+       AND sh.active = true
+       AND sh.deleted_at IS NULL
+      JOIN ref_type_calendars rtc
+        ON rtc.id = sc.ref_type_calendar_id
+      WHERE sc.line_id    = $1
+        AND sc.active     = true
+        AND sc.deleted_at IS NULL
+        AND sc.start_date <= $3
+        AND sc.end_date   >= $2
+      ORDER BY sc.start_date ASC
+    `,
+    { bind: [lineId, startDate, endDate] }
+  );
+
+  if (!calendars.length) return null;
+
+  const rangeStart = new Date(startDate);
+  const rangeEnd   = new Date(endDate);
+
+  // Expand ke per-hari, diklem dalam [startDate, endDate]
+  const dayMap = new Map(); // dateStr → { is_holiday, regularShifts[], overtimeShifts[] }
+
+  for (const cal of calendars) {
+    const calStart  = new Date(cal.start_date);
+    const calEnd    = new Date(cal.end_date);
+    const loopStart = calStart < rangeStart ? rangeStart : calStart;
+    const loopEnd   = calEnd   > rangeEnd   ? rangeEnd   : calEnd;
+
+    for (let d = new Date(loopStart); d <= loopEnd; d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().split('T')[0];
+
+      if (!dayMap.has(key)) {
+        dayMap.set(key, { is_holiday: cal.is_holiday, regularShifts: [], overtimeShifts: [] });
+      }
+      const day      = dayMap.get(key);
+      day.is_holiday = cal.is_holiday; // entry terbaru menang jika konflik
+
+      if (cal.type === 'REGULAR') {
+        day.regularShifts.push(cal);
+      } else if (cal.type === 'NON REGULAR') {
+        day.overtimeShifts.push(cal);
+      }
+    }
+  }
+
+  // Pisahkan hari kerja vs hari overtime
+  const workingDays  = [];
+  const overtimeDays = [];
+
+  for (const [, day] of dayMap) {
+    if (!day.is_holiday) workingDays.push(day);
+    else overtimeDays.push(day);
+  }
+
+  if (workingDays.length === 0) return null;
+
+  // working_days
+  const working_days = workingDays.length;
+
+  // shifts_per_day
+  const shiftsPerDayArr = workingDays.map((day) => {
+    const uniqueNums = new Set(day.regularShifts.map((s) => s.shift_number));
+    return uniqueNums.size;
+  });
+  const shifts_per_day = Math.round(
+    shiftsPerDayArr.reduce((a, b) => a + b, 0) / shiftsPerDayArr.length
+  );
+
+  // working_hours_per_shift
+  const netMinutesPerWorkingDay = workingDays.map((day) => calcNetMinutes(day.regularShifts));
+  const avgNetMinutesPerDay =
+    netMinutesPerWorkingDay.reduce((a, b) => a + b, 0) / netMinutesPerWorkingDay.length;
+  const working_hours_per_shift =
+    shifts_per_day > 0
+      ? parseFloat((avgNetMinutesPerDay / 60 / shifts_per_day).toFixed(2))
+      : 0;
+
+  // overtime_hours
+  const netMinutesPerOvertimeDay = overtimeDays.map((day) => calcNetMinutes(day.overtimeShifts));
+  const avgOvertimeMinutesPerDay =
+    netMinutesPerOvertimeDay.length > 0
+      ? netMinutesPerOvertimeDay.reduce((a, b) => a + b, 0) / netMinutesPerOvertimeDay.length
+      : 0;
+  const overtime_hours = parseFloat((avgOvertimeMinutesPerDay / 60).toFixed(2));
+
+  return { working_days, shifts_per_day, working_hours_per_shift, overtime_hours };
+}
+
+/**
+ * Versi raw-SQL dari LineCapacityModule#_getLineSummary, hanya bagian yang
+ * dibutuhkan di seeder: max_takt_time_seconds = takt time station tertinggi
+ * (sum standard_time semua job aktif dalam station tersebut), dihitung dari
+ * s_stations + s_station_jobs + s_jobs yang sudah di-insert di langkah 3 & 4.
+ */
+async function getMaxTaktTimeSeeder(queryInterface, lineId) {
+  const [rows] = await queryInterface.sequelize.query(
+    `
+      SELECT sj.station_id AS station_id, SUM(j.standard_time) AS takt_time
+      FROM s_station_jobs sj
+      JOIN s_jobs j
+        ON j.id = sj.job_id
+       AND j.active = true
+       AND j.deleted_at IS NULL
+      JOIN s_stations st
+        ON st.id = sj.station_id
+       AND st.status = true
+       AND st.deleted_at IS NULL
+      WHERE sj.active = true
+        AND sj.deleted_at IS NULL
+        AND st.line_id = $1
+      GROUP BY sj.station_id
+      ORDER BY takt_time DESC
+      LIMIT 1
+    `,
+    { bind: [lineId] }
+  );
+
+  return rows.length ? Number(rows[0].takt_time) : 0;
+}
+
 export default {
   async up(queryInterface, Sequelize) {
     const now = new Date();
@@ -71,75 +236,75 @@ export default {
     // 4. Station jobs (job_id merujuk ke s_jobs yang sudah ada di DB)
     const stationJobsMap = {
       'ST-MAIN-01': [
-        { job_id: 1,  sequence: 10 },  // JOB-INSP-DIM  : Check Frame Dimension
-        { job_id: 2,  sequence: 20 },  // JOB-INSP-WELD : Welding Joint Inspection
-        { job_id: 3,  sequence: 30 },  // JOB-ALIGN-FRM : Frame Alignment Setting
-        { job_id: 4,  sequence: 40 },  // JOB-INST-BRKT : Install Frame Bracket
-        { job_id: 5,  sequence: 50 },  // JOB-QC-FRM    : Final Frame QC
+        { job_id: 1,  sequence: 10 },
+        { job_id: 2,  sequence: 20 },
+        { job_id: 3,  sequence: 30 },
+        { job_id: 4,  sequence: 40 },
+        { job_id: 5,  sequence: 50 },
       ],
       'ST-MAIN-02': [
-        { job_id: 56, sequence: 10 },  // JOB-BATT-INSP  : Cell Visual Inspection
-        { job_id: 57, sequence: 20 },  // JOB-BATT-VOLT  : Cell Voltage Check
-        { job_id: 58, sequence: 30 },  // JOB-BATT-BUILD : Build Battery Pack
-        { job_id: 59, sequence: 40 },  // JOB-BATT-WELD  : Spot Weld Cell Tabs
-        { job_id: 60, sequence: 50 },  // JOB-BATT-CHG   : Initial Charge Cycle
-        { job_id: 62, sequence: 60 },  // JOB-BATT-FQC   : Battery Final QC Check
+        { job_id: 56, sequence: 10 },
+        { job_id: 57, sequence: 20 },
+        { job_id: 58, sequence: 30 },
+        { job_id: 59, sequence: 40 },
+        { job_id: 60, sequence: 50 },
+        { job_id: 62, sequence: 60 },
       ],
       'ST-MAIN-03': [
-        { job_id: 6,  sequence: 10 },  // JOB-INST-WIRE : Install Wiring Harness
-        { job_id: 33, sequence: 20 },  // JOB-RT-WIRE   : Route & Clamp Wiring
+        { job_id: 6,  sequence: 10 },
+        { job_id: 33, sequence: 20 },
       ],
       'ST-MAIN-04': [
-        { job_id: 7,  sequence: 10 },  // JOB-INST-CTRL : Install Controller Unit
-        { job_id: 34, sequence: 20 },  // JOB-CN-CTRL   : Connect Controller Wiring
+        { job_id: 7,  sequence: 10 },
+        { job_id: 34, sequence: 20 },
       ],
       'ST-MAIN-05': [
-        { job_id: 8,  sequence: 10 },  // JOB-INST-MOTOR : Install Motor Hub
-        { job_id: 35, sequence: 20 },  // JOB-CN-MTR     : Motor Wiring Connection
+        { job_id: 8,  sequence: 10 },
+        { job_id: 35, sequence: 20 },
       ],
       'ST-MAIN-06': [
-        { job_id: 9,  sequence: 10 },  // JOB-INST-BATT : Install Battery Pack to Frame
-        { job_id: 36, sequence: 20 },  // JOB-SEC-BATT  : Secure Battery Lock
+        { job_id: 9,  sequence: 10 },
+        { job_id: 36, sequence: 20 },
       ],
       'ST-MAIN-07': [
-        { job_id: 38, sequence: 10 },  // JOB-INST-WHL : Install Front & Rear Wheel
-        { job_id: 40, sequence: 20 },  // JOB-ADJ-BRK  : Brake Adjustment (post-wheel)
+        { job_id: 38, sequence: 10 },
+        { job_id: 40, sequence: 20 },
       ],
       'ST-MAIN-08': [
-        { job_id: 39, sequence: 10 },  // JOB-INST-BRK : Install Brake Cables & Levers
-        { job_id: 40, sequence: 20 },  // JOB-ADJ-BRK  : Brake Adjustment
+        { job_id: 39, sequence: 10 },
+        { job_id: 40, sequence: 20 },
       ],
       'ST-MAIN-09': [
-        { job_id: 41, sequence: 10 },  // JOB-INST-HND : Install Handlebar
-        { job_id: 42, sequence: 20 },  // JOB-ALN-HND  : Handlebar Alignment
+        { job_id: 41, sequence: 10 },
+        { job_id: 42, sequence: 20 },
       ],
       'ST-MAIN-10': [
-        { job_id: 43, sequence: 10 },  // JOB-INST-ACC : Install Lamp & Accessories
+        { job_id: 43, sequence: 10 },
       ],
       'ST-MAIN-11': [
-        { job_id: 10, sequence: 10 },  // JOB-TEST-ELEC : Electrical Functional Test
-        { job_id: 37, sequence: 20 },  // JOB-ERR-CODE  : Error Code Verification
+        { job_id: 10, sequence: 10 },
+        { job_id: 37, sequence: 20 },
       ],
       'ST-MAIN-12': [
-        { job_id: 63, sequence: 10 },  // JOB-TST-FULLCHG : Full Charge Test ← BOTTLENECK
-        { job_id: 65, sequence: 20 },  // JOB-TST-ELEC-SF : Electrical Safety Verify
-        { job_id: 66, sequence: 30 },  // JOB-TST-SPEED   : Speed Performance Test
+        { job_id: 63, sequence: 10 },  // ← BOTTLENECK
+        { job_id: 65, sequence: 20 },
+        { job_id: 66, sequence: 30 },
       ],
       'ST-MAIN-13': [
-        { job_id: 44, sequence: 10 },  // JOB-CHK-ASSY : Overall Assembly Check
-        { job_id: 45, sequence: 20 },  // JOB-CHK-TRQ  : Torque Final Check
-        { job_id: 48, sequence: 30 },  // JOB-VIS-FIN  : Final Visual Inspection
-        { job_id: 49, sequence: 40 },  // JOB-APP-FUN  : Functional Approval
+        { job_id: 44, sequence: 10 },
+        { job_id: 45, sequence: 20 },
+        { job_id: 48, sequence: 30 },
+        { job_id: 49, sequence: 40 },
       ],
       'ST-MAIN-14': [
-        { job_id: 50, sequence: 10 },  // JOB-CLN-UNIT : Cleaning Unit
-        { job_id: 51, sequence: 20 },  // JOB-ATT-LBL  : Attach Manual & Label
-        { job_id: 52, sequence: 30 },  // JOB-PCK-BOX  : Pack E-Bike into Carton
-        { job_id: 53, sequence: 40 },  // JOB-SEAL-BOX : Seal & Strap Carton
+        { job_id: 50, sequence: 10 },
+        { job_id: 51, sequence: 20 },
+        { job_id: 52, sequence: 30 },
+        { job_id: 53, sequence: 40 },
       ],
       'ST-MAIN-15': [
-        { job_id: 54, sequence: 10 },  // JOB-MOV-FG : Move to FG Area
-        { job_id: 55, sequence: 20 },  // JOB-SCN-SN : Scan Serial Number
+        { job_id: 54, sequence: 10 },
+        { job_id: 55, sequence: 20 },
       ],
     };
 
@@ -152,14 +317,7 @@ export default {
     }
     await queryInterface.bulkInsert('s_station_jobs', stationJobsRows);
 
-    // 5. Line capacity params — bottleneck ST-MAIN-12: VOLT=1200s, ECO=900s per unit
-    await queryInterface.bulkInsert('s_line_capacity_params', [
-      { line_id: lineId, default_working_days: 21, default_shifts_per_day: 1, default_working_hours_per_shift: 7.33, default_efficiency_factor: 0.85, default_overtime_hours: 0.00, default_manpower: 20, default_max_takt_time: 420, param_year: 2026, param_month: 5,  created_at: now, updated_at: now },
-      { line_id: lineId, default_working_days: 22, default_shifts_per_day: 1, default_working_hours_per_shift: 7.33, default_efficiency_factor: 0.85, default_overtime_hours: 0.00, default_manpower: 20, default_max_takt_time: 420, param_year: 2026, param_month: 6,  created_at: now, updated_at: now },
-      { line_id: lineId, default_working_days: 23, default_shifts_per_day: 1, default_working_hours_per_shift: 7.33, default_efficiency_factor: 0.85, default_overtime_hours: 0.00, default_manpower: 20, default_max_takt_time: 420, param_year: 2026, param_month: 7,  created_at: now, updated_at: now },
-    ]);
-
-    // 6. Copy shift calendars working days dari line_id=1 ke ASSY-MAIN
+    // 5. Copy shift calendars working days dari line_id=1 ke ASSY-MAIN
     const [calendarRows] = await queryInterface.sequelize.query(`
       SELECT sc.shift_id, sc.start_date, sc.end_date, sc.ref_type_calendar_id, sc.date_event
       FROM   s_shift_calendars sc
@@ -187,6 +345,55 @@ export default {
         }))
       );
     }
+
+    // 6. Line capacity params — DIHITUNG, bukan hardcode.
+    //    working_days / shifts_per_day / working_hours_per_shift / overtime_hours
+    //    diturunkan dari s_shift_calendars (resolveShiftCalendarParamsSeeder,
+    //    sama persis dengan logika resolveShiftCalendarParams di LineCapacityModule).
+    //    default_max_takt_time diturunkan dari station dengan total standard_time
+    //    job tertinggi (sama dengan _getLineSummary().max_takt_time_seconds di module).
+    //    efficiency_factor & manpower tetap input eksplisit, sesuai kontrak module
+    //    (manpower wajib diisi user / caller, tidak diderivasi otomatis).
+    const DEFAULT_EFFICIENCY_FACTOR = 0.85;
+    const DEFAULT_MANPOWER          = 20;
+
+    const periodsToCalculate = [
+      { year: 2026, month: 5 },
+      { year: 2026, month: 6 },
+      { year: 2026, month: 7 },
+    ];
+
+    const maxTaktTime = await getMaxTaktTimeSeeder(queryInterface, lineId);
+
+    const capacityParamRows = [];
+    for (const { year, month } of periodsToCalculate) {
+      const { startDate, endDate } = getMonthRange(year, month);
+      const calendarParams = await resolveShiftCalendarParamsSeeder(queryInterface, lineId, startDate, endDate);
+
+      if (!calendarParams) {
+        throw new Error(
+          `Shift calendar tidak ditemukan untuk line ASSY-MAIN periode ${year}-${String(month).padStart(2, '0')}. ` +
+          `Pastikan source line_id=1 punya shift calendar pada periode tersebut sebelum seeder dijalankan.`
+        );
+      }
+
+      capacityParamRows.push({
+        line_id:                          lineId,
+        default_working_days:             calendarParams.working_days,
+        default_shifts_per_day:           calendarParams.shifts_per_day,
+        default_working_hours_per_shift:  calendarParams.working_hours_per_shift,
+        default_efficiency_factor:        DEFAULT_EFFICIENCY_FACTOR,
+        default_overtime_hours:           calendarParams.overtime_hours,
+        default_manpower:                 DEFAULT_MANPOWER,
+        default_max_takt_time:            maxTaktTime,
+        param_year:                       year,
+        param_month:                      month,
+        created_at:                       now,
+        updated_at:                       now,
+      });
+    }
+
+    await queryInterface.bulkInsert('s_line_capacity_params', capacityParamRows);
 
     // 7. Routing headers — 24 part diarahkan ke ASSY-MAIN
     await queryInterface.bulkInsert('s_part_routings', [
@@ -217,150 +424,123 @@ export default {
     ]);
 
     // 8. Routing details
-    // Format: [sequence, stationCode, jobId, stdTime(s), setupTime(s), moveTime(s), manpower, isBottleneck]
-    //
-    // Perbedaan VOLT vs ECO:
-    //   ST-MAIN-01 Frame: ECO lebih ringan → Frame Alignment & Bracket lebih cepat
-    //   ST-MAIN-02 Battery: ECO 36V 10Ah vs VOLT 48V 15Ah → Build & Weld lebih cepat, Initial Charge jauh lebih singkat
-    //   ST-MAIN-05 Motor: ECO 250W vs VOLT 350W → instalasi sedikit lebih mudah
-    //   ST-MAIN-06 Battery Mounting: ECO pack lebih ringan → lebih cepat
-    //   ST-MAIN-12 Charging Test: ECO 900s vs VOLT 1200s (proporsional kapasitas baterai 10/15Ah)
-    //   ST-MAIN-14 Packing: ECO frame lebih kecil → packing lebih cepat
-
     const stIds = {};
     for (let i = 1; i <= 15; i++) {
       const code = `ST-MAIN-${String(i).padStart(2, '0')}`;
       stIds[code] = await getStationId(queryInterface, code);
     }
 
-    // --- 8A. VOLT full assembly (part 1–6) ---
-    // Bottleneck: ST-MAIN-12, 1200s (Full Charge + Performance Test 48V 15Ah)
     const voltAssySteps = [
-      [10,  'ST-MAIN-01', 1,   120,  0,   5,  1, false],  // Check Frame Dimension
-      [20,  'ST-MAIN-01', 2,   240,  0,   5,  1, false],  // Welding Joint Inspection
-      [30,  'ST-MAIN-01', 3,   300,  30,  5,  1, false],  // Frame Alignment Setting
-      [40,  'ST-MAIN-01', 4,   360,  30,  5,  2, false],  // Install Frame Bracket
-      [50,  'ST-MAIN-01', 5,   180,  0,   10, 1, false],  // Final Frame QC
-      [60,  'ST-MAIN-02', 56,  180,  0,   5,  1, false],  // Cell Visual Inspection
-      [70,  'ST-MAIN-02', 58,  600,  0,   5,  2, false],  // Build Battery Pack
-      [80,  'ST-MAIN-03', 6,   360,  30,  5,  2, false],  // Install Wiring Harness
-      [90,  'ST-MAIN-04', 7,   300,  30,  5,  1, false],  // Install Controller Unit
-      [100, 'ST-MAIN-05', 8,   420,  30,  5,  2, false],  // Install Motor Hub (350W)
-      [110, 'ST-MAIN-06', 9,   360,  30,  5,  1, false],  // Install Battery Pack to Frame
-      [120, 'ST-MAIN-07', 38,  240,  30,  5,  2, false],  // Install Front & Rear Wheel
-      [130, 'ST-MAIN-08', 39,  240,  30,  5,  1, false],  // Install Brake System
-      [140, 'ST-MAIN-09', 41,  180,  30,  5,  1, false],  // Install Handlebar
-      [150, 'ST-MAIN-10', 43,  180,  0,   5,  1, false],  // Install Lamp & Accessories
-      [160, 'ST-MAIN-11', 10,  300,  0,   5,  1, false],  // Electrical Functional Test
-      [170, 'ST-MAIN-12', 63, 1200,  0,   10, 2, true ],  // Full Charge + Perf Test 48V ← BOTTLENECK
-      [180, 'ST-MAIN-13', 44,  180,  0,   5,  1, false],  // Overall Assembly Check
-      [190, 'ST-MAIN-13', 48,  180,  0,   5,  1, false],  // Final Visual Inspection
-      [200, 'ST-MAIN-14', 52,  240,  0,   5,  1, false],  // Pack E-Bike into Carton
-      [210, 'ST-MAIN-14', 53,  120,  0,   5,  1, false],  // Seal & Strap Carton
-      [220, 'ST-MAIN-15', 54,  120,  0,   0,  1, false],  // Move to FG Area
+      [10,  'ST-MAIN-01', 1,   120,  0,   5,  1],
+      [20,  'ST-MAIN-01', 2,   240,  0,   5,  1],
+      [30,  'ST-MAIN-01', 3,   300,  30,  5,  1],
+      [40,  'ST-MAIN-01', 4,   360,  30,  5,  2],
+      [50,  'ST-MAIN-01', 5,   180,  0,   10, 1],
+      [60,  'ST-MAIN-02', 56,  180,  0,   5,  1],
+      [70,  'ST-MAIN-02', 58,  600,  0,   5,  2],
+      [80,  'ST-MAIN-03', 6,   360,  30,  5,  2],
+      [90,  'ST-MAIN-04', 7,   300,  30,  5,  1],
+      [100, 'ST-MAIN-05', 8,   420,  30,  5,  2],
+      [110, 'ST-MAIN-06', 9,   360,  30,  5,  1],
+      [120, 'ST-MAIN-07', 38,  240,  30,  5,  2],
+      [130, 'ST-MAIN-08', 39,  240,  30,  5,  1],
+      [140, 'ST-MAIN-09', 41,  180,  30,  5,  1],
+      [150, 'ST-MAIN-10', 43,  180,  0,   5,  1],
+      [160, 'ST-MAIN-11', 10,  300,  0,   5,  1],
+      [170, 'ST-MAIN-12', 63, 1200,  0,   10, 2],
+      [180, 'ST-MAIN-13', 44,  180,  0,   5,  1],
+      [190, 'ST-MAIN-13', 48,  180,  0,   5,  1],
+      [200, 'ST-MAIN-14', 52,  240,  0,   5,  1],
+      [210, 'ST-MAIN-14', 53,  120,  0,   5,  1],
+      [220, 'ST-MAIN-15', 54,  120,  0,   0,  1],
     ];
 
-    // --- 8B. ECO full assembly (part 7–12) ---
-    // Perbedaan vs VOLT: frame lebih ringan, baterai lebih kecil, motor 250W
-    // Bottleneck: ST-MAIN-12, 900s (Full Charge + Performance Test 36V 10Ah)
     const ecoAssySteps = [
-      [10,  'ST-MAIN-01', 1,   120,  0,   5,  1, false],  // Check Frame Dimension (sama)
-      [20,  'ST-MAIN-01', 2,   180,  0,   5,  1, false],  // Welding Joint Inspection (frame lebih tipis, lebih cepat)
-      [30,  'ST-MAIN-01', 3,   240,  30,  5,  1, false],  // Frame Alignment Setting (frame lebih ringan)
-      [40,  'ST-MAIN-01', 4,   300,  30,  5,  1, false],  // Install Frame Bracket (lebih sedikit bracket)
-      [50,  'ST-MAIN-01', 5,   180,  0,   10, 1, false],  // Final Frame QC (sama)
-      [60,  'ST-MAIN-02', 56,  150,  0,   5,  1, false],  // Cell Visual Inspection (sel lebih sedikit)
-      [70,  'ST-MAIN-02', 58,  420,  0,   5,  2, false],  // Build Battery Pack (36V 10Ah, lebih kecil)
-      [80,  'ST-MAIN-03', 6,   300,  30,  5,  1, false],  // Install Wiring Harness (harness lebih ringkas)
-      [90,  'ST-MAIN-04', 7,   240,  30,  5,  1, false],  // Install Controller Unit (36V controller lebih kecil)
-      [100, 'ST-MAIN-05', 8,   360,  30,  5,  1, false],  // Install Motor Hub (250W, lebih ringan)
-      [110, 'ST-MAIN-06', 9,   300,  30,  5,  1, false],  // Install Battery Pack (pack lebih kecil/ringan)
-      [120, 'ST-MAIN-07', 38,  210,  30,  5,  2, false],  // Install Wheel (roda 20", lebih kecil)
-      [130, 'ST-MAIN-08', 39,  210,  30,  5,  1, false],  // Install Brake System (sama minus satu kaliper)
-      [140, 'ST-MAIN-09', 41,  180,  30,  5,  1, false],  // Install Handlebar (sama)
-      [150, 'ST-MAIN-10', 43,  150,  0,   5,  1, false],  // Install Lamp & Accessories (lebih sedikit aksesori)
-      [160, 'ST-MAIN-11', 10,  240,  0,   5,  1, false],  // Electrical Functional Test (sistem lebih simpel)
-      [170, 'ST-MAIN-12', 63,  900,  0,   10, 2, true ],  // Full Charge + Perf Test 36V ← BOTTLENECK
-      [180, 'ST-MAIN-13', 44,  180,  0,   5,  1, false],  // Overall Assembly Check (sama)
-      [190, 'ST-MAIN-13', 48,  150,  0,   5,  1, false],  // Final Visual Inspection (unit lebih kecil)
-      [200, 'ST-MAIN-14', 52,  180,  0,   5,  1, false],  // Pack E-Bike into Carton (box lebih kecil)
-      [210, 'ST-MAIN-14', 53,  120,  0,   5,  1, false],  // Seal & Strap Carton (sama)
-      [220, 'ST-MAIN-15', 54,  120,  0,   0,  1, false],  // Move to FG Area (sama)
+      [10,  'ST-MAIN-01', 1,   120,  0,   5,  1],
+      [20,  'ST-MAIN-01', 2,   180,  0,   5,  1],
+      [30,  'ST-MAIN-01', 3,   240,  30,  5,  1],
+      [40,  'ST-MAIN-01', 4,   300,  30,  5,  1],
+      [50,  'ST-MAIN-01', 5,   180,  0,   10, 1],
+      [60,  'ST-MAIN-02', 56,  150,  0,   5,  1],
+      [70,  'ST-MAIN-02', 58,  420,  0,   5,  2],
+      [80,  'ST-MAIN-03', 6,   300,  30,  5,  1],
+      [90,  'ST-MAIN-04', 7,   240,  30,  5,  1],
+      [100, 'ST-MAIN-05', 8,   360,  30,  5,  1],
+      [110, 'ST-MAIN-06', 9,   300,  30,  5,  1],
+      [120, 'ST-MAIN-07', 38,  210,  30,  5,  2],
+      [130, 'ST-MAIN-08', 39,  210,  30,  5,  1],
+      [140, 'ST-MAIN-09', 41,  180,  30,  5,  1],
+      [150, 'ST-MAIN-10', 43,  150,  0,   5,  1],
+      [160, 'ST-MAIN-11', 10,  240,  0,   5,  1],
+      [170, 'ST-MAIN-12', 63,  900,  0,   10, 2],
+      [180, 'ST-MAIN-13', 44,  180,  0,   5,  1],
+      [190, 'ST-MAIN-13', 48,  150,  0,   5,  1],
+      [200, 'ST-MAIN-14', 52,  180,  0,   5,  1],
+      [210, 'ST-MAIN-14', 53,  120,  0,   5,  1],
+      [220, 'ST-MAIN-15', 54,  120,  0,   0,  1],
     ];
 
-    // --- 8C. Wheel sub-assembly ---
     const wheelSteps = [
-      [10, 'ST-MAIN-07', 38, 240, 30, 5, 2, false],  // Install Front & Rear Wheel
-      [20, 'ST-MAIN-07', 40, 180, 0,  5, 1, true ],  // Brake Adjustment ← bottleneck
+      [10, 'ST-MAIN-07', 38, 240, 30, 5, 2],
+      [20, 'ST-MAIN-07', 40, 180, 0,  5, 1],
     ];
     const wheelRoutings = ['ROUTE-WHL-F-26', 'ROUTE-WHL-F-20', 'ROUTE-WHL-R-26', 'ROUTE-WHL-R-20'];
 
-    // --- 8D. Handlebar sub-assembly ---
     const handlebarSteps = [
-      [10, 'ST-MAIN-09', 41, 180, 30, 5, 1, false],  // Install Handlebar
-      [20, 'ST-MAIN-09', 42, 120, 0,  5, 1, true ],  // Handlebar Alignment ← bottleneck
+      [10, 'ST-MAIN-09', 41, 180, 30, 5, 1],
+      [20, 'ST-MAIN-09', 42, 120, 0,  5, 1],
     ];
 
-    // --- 8E. Hub sub-assembly ---
     const hubSteps = [
-      [10, 'ST-MAIN-07', 38, 240, 30, 5, 2, true],   // Install Front Hub ← bottleneck
+      [10, 'ST-MAIN-07', 38, 240, 30, 5, 2, true],
     ];
 
-    // --- 8F. Motor sub-assembly ---
-    // VOLT 48V/350W lebih berat → instalasi lebih lama
     const motorVoltSteps = [
-      [10, 'ST-MAIN-05', 8,  420, 30, 5, 2, false],  // Install Motor Hub 350W
-      [20, 'ST-MAIN-05', 35, 150, 0,  5, 1, true ],  // Motor Wiring Connection ← bottleneck
+      [10, 'ST-MAIN-05', 8,  420, 30, 5, 2],
+      [20, 'ST-MAIN-05', 35, 150, 0,  5, 1],
     ];
-    // ECO 36V/250W lebih ringan
     const motorEcoSteps = [
-      [10, 'ST-MAIN-05', 8,  360, 30, 5, 1, false],  // Install Motor Hub 250W
-      [20, 'ST-MAIN-05', 35, 120, 0,  5, 1, true ],  // Motor Wiring Connection ← bottleneck
+      [10, 'ST-MAIN-05', 8,  360, 30, 5, 1],
+      [20, 'ST-MAIN-05', 35, 120, 0,  5, 1],
     ];
 
-    // --- 8G. Frame sub-assembly ---
-    // VOLT frame lebih berat/kompleks (VoltCity) vs ECO (EcoFold foldable lebih ringan)
     const frameVoltSteps = [
-      [10, 'ST-MAIN-01', 1, 120,  0,  5, 1, false],  // Check Frame Dimension
-      [20, 'ST-MAIN-01', 2, 240,  0,  5, 1, false],  // Welding Joint Inspection
-      [30, 'ST-MAIN-01', 3, 300,  30, 5, 1, false],  // Frame Alignment Setting
-      [40, 'ST-MAIN-01', 4, 360,  30, 5, 2, false],  // Install Frame Bracket
-      [50, 'ST-MAIN-01', 5, 180,  0,  5, 1, true ],  // Final Frame QC ← bottleneck
+      [10, 'ST-MAIN-01', 1, 120,  0,  5, 1],
+      [20, 'ST-MAIN-01', 2, 240,  0,  5, 1],
+      [30, 'ST-MAIN-01', 3, 300,  30, 5, 1],
+      [40, 'ST-MAIN-01', 4, 360,  30, 5, 2],
+      [50, 'ST-MAIN-01', 5, 180,  0,  5, 1],
     ];
     const frameEcoSteps = [
-      [10, 'ST-MAIN-01', 1, 120,  0,  5, 1, false],  // Check Frame Dimension
-      [20, 'ST-MAIN-01', 2, 180,  0,  5, 1, false],  // Welding Joint Inspection
-      [30, 'ST-MAIN-01', 3, 240,  30, 5, 1, false],  // Frame Alignment Setting
-      [40, 'ST-MAIN-01', 4, 300,  30, 5, 1, false],  // Install Frame Bracket
-      [50, 'ST-MAIN-01', 5, 180,  0,  5, 1, true ],  // Final Frame QC ← bottleneck
+      [10, 'ST-MAIN-01', 1, 120,  0,  5, 1],
+      [20, 'ST-MAIN-01', 2, 180,  0,  5, 1],
+      [30, 'ST-MAIN-01', 3, 240,  30, 5, 1],
+      [40, 'ST-MAIN-01', 4, 300,  30, 5, 1],
+      [50, 'ST-MAIN-01', 5, 180,  0,  5, 1],
     ];
 
-    // --- 8H. Battery pack sub-assembly ---
-    // VOLT 48V 15Ah: lebih banyak sel, build & weld lebih lama, initial charge lebih lama
     const batteryVoltSteps = [
-      [10, 'ST-MAIN-02', 56, 180, 0, 5,  1, false],  // Cell Visual Inspection (80 sel)
-      [20, 'ST-MAIN-02', 57, 120, 0, 5,  1, false],  // Cell Voltage Check
-      [30, 'ST-MAIN-02', 58, 600, 0, 5,  2, false],  // Build Battery Pack 48V
-      [40, 'ST-MAIN-02', 59, 480, 0, 5,  2, false],  // Spot Weld Cell Tabs
-      [50, 'ST-MAIN-02', 60, 900, 0, 10, 0, true ],  // Initial Charge Cycle 48V ← bottleneck
-      [60, 'ST-MAIN-02', 62, 180, 0, 5,  1, false],  // Battery Final QC Check
+      [10, 'ST-MAIN-02', 56, 180, 0, 5,  1],
+      [20, 'ST-MAIN-02', 57, 120, 0, 5,  1],
+      [30, 'ST-MAIN-02', 58, 600, 0, 5,  2],
+      [40, 'ST-MAIN-02', 59, 480, 0, 5,  2],
+      [50, 'ST-MAIN-02', 60, 900, 0, 10, 0],
+      [60, 'ST-MAIN-02', 62, 180, 0, 5,  1],
     ];
-    // ECO 36V 10Ah: ~60% jumlah sel VOLT → build, weld, charge lebih cepat
     const batteryEcoSteps = [
-      [10, 'ST-MAIN-02', 56, 120, 0, 5,  1, false],  // Cell Visual Inspection (50 sel)
-      [20, 'ST-MAIN-02', 57, 120, 0, 5,  1, false],  // Cell Voltage Check (sama prosedur)
-      [30, 'ST-MAIN-02', 58, 420, 0, 5,  2, false],  // Build Battery Pack 36V
-      [40, 'ST-MAIN-02', 59, 300, 0, 5,  2, false],  // Spot Weld Cell Tabs (lebih sedikit)
-      [50, 'ST-MAIN-02', 60, 600, 0, 10, 1, true ],  // Initial Charge Cycle 36V ← bottleneck
-      [60, 'ST-MAIN-02', 62, 180, 0, 5,  1, false],  // Battery Final QC Check (sama)
+      [10, 'ST-MAIN-02', 56, 120, 0, 5,  1],
+      [20, 'ST-MAIN-02', 57, 120, 0, 5,  1],
+      [30, 'ST-MAIN-02', 58, 420, 0, 5,  2],
+      [40, 'ST-MAIN-02', 59, 300, 0, 5,  2],
+      [50, 'ST-MAIN-02', 60, 600, 0, 10, 1],
+      [60, 'ST-MAIN-02', 62, 180, 0, 5,  1],
     ];
 
-    // Helper: build detail rows dari steps + routing codes
     const buildDetailRows = async (steps, routingCodes) => {
       const rows = [];
       for (const code of routingCodes) {
         const routingId = await getRoutingId(queryInterface, code);
-        for (const [seq, stCode, jobId, stdTime, setupTime, moveTime, manpower, isBottleneck] of steps) {
+        for (const [seq, stCode, jobId, stdTime, setupTime, moveTime, manpower] of steps) {
           rows.push({
             routing_id:        routingId,
             sequence:          seq,
@@ -371,7 +551,6 @@ export default {
             queue_time:        0,
             move_time:         moveTime,
             manpower_required: manpower,
-            is_bottleneck:     isBottleneck,
             created_at:        now,
             updated_at:        now,
           });

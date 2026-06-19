@@ -36,22 +36,16 @@ function formatPeriod(year, month) {
 
 function calcNetMinutes(shiftEntries) {
   let productive = 0;
-  let breakTime  = 0;
-
   for (const s of shiftEntries) {
+    if (s.category !== 'PRODUCTIVE') continue;
     const [sh, sm] = s.start_time.split(":").map(Number);
     const [eh, em] = s.end_time.split(":").map(Number);
-
     let start = sh * 60 + sm;
     let end   = eh * 60 + em;
-    if (end <= start) end += 24 * 60; // lintas tengah malam
-
-    const duration = end - start;
-    if (s.category === "PRODUCTIVE") productive += duration;
-    else if (s.category === "BREAK")  breakTime  += duration;
+    if (end <= start) end += 24 * 60;
+    productive += end - start;
   }
-
-  return Math.max(0, productive - breakTime);
+  return productive;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

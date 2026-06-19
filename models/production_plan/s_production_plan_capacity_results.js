@@ -23,15 +23,7 @@ export default (sequelize) => {
     capacity_per_hour: {
       type: DataTypes.DECIMAL(10, 2)
     },
-    total_capacity_minutes: {
-      type: DataTypes.DECIMAL(15, 2),
-      allowNull: false
-    },
-    total_required_minutes: {
-      type: DataTypes.DECIMAL(15, 2),
-      allowNull: false
-    },
-    capacity_gap_minutes: {
+    capacity_gap_units: {
       type: DataTypes.DECIMAL(15, 2)
     },
     utilization_pct: {

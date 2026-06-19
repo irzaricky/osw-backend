@@ -71,6 +71,10 @@ export default (sequelize) => {
     shift_name_snapshot: {
       type: DataTypes.STRING,
       allowNull: true
+    },
+    regular_cap_snapshot: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     sequelize,

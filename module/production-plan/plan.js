@@ -9,6 +9,7 @@ const {
   SProductionPlanDetail,
   SProductionPlanCapacityParam,
   SProductionPlanCapacityResult,
+  SProductionPlanCalendarAdjustment,
   SDeliveryOrders,
   SDeliveryOrderDetails,
   SDeliveryPlanDetails,
@@ -19,12 +20,13 @@ const {
   SUom,
   SLineCapacityParam,
   SPartRoutings,
-  SPartRoutingDetails,
-  SStations,
+  SShiftCalendars,
+  RefTypeCalendars,
+  SShifts,
   sequelize,
 } = db;
 
-// ─── HELPERS ────────────────────────────────────────────────────────────────
+// ─── DATE / RANGE HELPERS ────────────────────────────────────────────────────
 
 function getPlanMonthRange(plan_month) {
   const [year, month] = plan_month.split("-").map(Number);
@@ -46,50 +48,138 @@ function toDateStr(val) {
   return new Date(val).toISOString().split("T")[0];
 }
 
-/**
- * Menghitung kapasitas lini dalam satuan unit dan menit.
- * working_hours_per_shift : JAM
- * overtime_hours          : JAM PER HARI (total semua shift)
- * max_takt_time           : DETIK
- * efficiency_factor       : desimal (0–1)
- */
-function calcCapacityUnits(param) {
-  const taktMin = param.max_takt_time / 60;
+// ─── CAPACITY CALCULATION ────────────────────────────────────────────────────
+// Capacity is computed day-by-day: each day resolves its active shifts from the master
+// calendar plus ADD_SHIFT adjustments, then overtime per (date, shift) is applied.(baseParam, plan_month, planId, t) {
+async function buildEffectiveParams(baseParam, plan_month, planId, t) {
+  const { startStr, endStr } = getPlanMonthRange(plan_month);
 
-  const regular_min_per_shift   = param.working_hours_per_shift * 60;
-  const shifts_per_day          = param.shifts_per_day > 0 ? param.shifts_per_day : 1;
-  const ot_hours_per_shift      = (param.overtime_hours ?? 0) / shifts_per_day;
-  const ot_min_per_shift        = ot_hours_per_shift * 60;
-  const effective_min_per_shift = (regular_min_per_shift + ot_min_per_shift) * param.efficiency_factor;
+  const shiftCalendars = await SShiftCalendars.findAll({
+    where: {
+      line_id: baseParam.line_id,
+      active:  true,
+      [Op.or]: [
+        { start_date: { [Op.between]: [startStr, endStr] } },
+        { end_date:   { [Op.between]: [startStr, endStr] } },
+        {
+          start_date: { [Op.lte]: startStr },
+          end_date:   { [Op.gte]: endStr },
+        },
+      ],
+    },
+    include: [
+      { model: RefTypeCalendars, as: "type_calendar", attributes: ["is_holiday"] },
+      { model: SShifts,          as: "shift",         attributes: ["shift_number"] },
+    ],
+    transaction: t,
+  });
 
-  const cap_per_shift   = taktMin > 0 ? Math.floor(effective_min_per_shift / taktMin) : 0;
-  const cap_per_day     = cap_per_shift * param.shifts_per_day;
-  const total_cap_units = cap_per_day * param.working_days;
+  const adjustments = await SProductionPlanCalendarAdjustment.findAll({
+    where:   { plan_id: planId },
+    include: [{ model: SShifts, as: "shift", attributes: ["shift_number"], required: false }],
+    transaction: t,
+  });
 
-  const regular_minutes   = param.working_days * param.shifts_per_day * regular_min_per_shift;
-  const overtime_minutes  = param.working_days * param.shifts_per_day * ot_min_per_shift;
-  const available_minutes = regular_minutes + overtime_minutes;
-  const total_cap_minutes = available_minutes * param.efficiency_factor;
+  // ── Index master calendar per date: Set of active shift_number (empty if holiday or no row) ──
+  const masterShiftsByDate = new Map(); // dateStr -> Set<shift_number>
+  for (const entry of shiftCalendars) {
+    if (entry.type_calendar?.is_holiday) continue;
+    if (!entry.shift?.shift_number) continue;
+
+    const entryStart = new Date(Math.max(new Date(entry.start_date), new Date(startStr)));
+    const entryEnd   = new Date(Math.min(new Date(entry.end_date),   new Date(endStr)));
+
+    for (let d = new Date(entryStart); d <= entryEnd; d.setUTCDate(d.getUTCDate() + 1)) {
+      const dateStr = d.toISOString().split("T")[0];
+      if (!masterShiftsByDate.has(dateStr)) masterShiftsByDate.set(dateStr, new Set());
+      masterShiftsByDate.get(dateStr).add(entry.shift.shift_number);
+    }
+  }
+
+  // ── Index adjustments per date ──────────────────────────────────────────────
+  // ADD_SHIFT covers both "holiday → working day" and "add extra shift on working day".
+  const addShiftByDate      = new Map(); // dateStr -> Set<shift_number>
+  const overtimeByDateShift = new Map(); // `${dateStr}|${shift_number}` -> total overtime_minutes
+  let   total_overtime_minutes = 0;
+
+  for (const adj of adjustments) {
+    const shiftNumber = adj.shift?.shift_number ?? null;
+
+    if (adj.adjustment_type === "ADD_SHIFT" && shiftNumber != null) {
+      if (!addShiftByDate.has(adj.date)) addShiftByDate.set(adj.date, new Set());
+      addShiftByDate.get(adj.date).add(shiftNumber);
+    }
+    if (adj.adjustment_type === "ADD_OVERTIME" && shiftNumber != null && adj.overtime_minutes) {
+      const key = `${adj.date}|${shiftNumber}`;
+      overtimeByDateShift.set(key, (overtimeByDateShift.get(key) ?? 0) + adj.overtime_minutes);
+      total_overtime_minutes += adj.overtime_minutes;
+    }
+  }
+
+  // ── Compute capacity day-by-day ────────────────────────────────────────────
+  const taktMin = baseParam.max_takt_time / 60;
+  if (taktMin <= 0) {
+    return { ...(baseParam.dataValues ?? baseParam), working_days: 0, shifts_per_day: 0, total_cap_units: 0, total_cap_minutes: 0 };
+  }
+
+  const regular_min_per_shift     = parseFloat(baseParam.working_hours_per_shift) * 60;
+  const efficiency                 = parseFloat(baseParam.efficiency_factor);
+  const cap_per_shift_regular      = Math.floor((regular_min_per_shift * efficiency) / taktMin);
+  const minutes_per_shift_regular  = regular_min_per_shift * efficiency;
+
+  let working_days      = 0;
+  let max_shifts_in_day = 0;
+  let total_cap_units   = 0;
+  let total_cap_minutes = 0;
+
+  for (let d = new Date(startStr); d <= new Date(endStr); d.setUTCDate(d.getUTCDate() + 1)) {
+    const dateStr = d.toISOString().split("T")[0];
+
+    // 1. Base shifts from master calendar
+    const activeShifts = new Set(masterShiftsByDate.get(dateStr) ?? []);
+
+    // 2. Merge ADD_SHIFT adjustments (handles both holiday→workday and extra shift on workday)
+    if (addShiftByDate.has(dateStr)) {
+      for (const sn of addShiftByDate.get(dateStr)) activeShifts.add(sn);
+    }
+
+    if (activeShifts.size === 0) continue; // not an effective working day
+
+    working_days += 1;
+    max_shifts_in_day = Math.max(max_shifts_in_day, activeShifts.size);
+
+    for (const shiftNumber of activeShifts) {
+      total_cap_units   += cap_per_shift_regular;
+      total_cap_minutes += minutes_per_shift_regular;
+
+      const otMinutes = overtimeByDateShift.get(`${dateStr}|${shiftNumber}`) ?? 0;
+      if (otMinutes > 0) {
+        const otEffMinutes = otMinutes * efficiency;
+        total_cap_units   += Math.floor(otEffMinutes / taktMin);
+        total_cap_minutes += otEffMinutes;
+      }
+    }
+  }
 
   return {
-    regular_minutes,
-    overtime_minutes,
-    available_minutes,
-    total_cap_minutes,
-    total_cap_units,
-    cap_per_shift,
-    cap_per_day,
-    effective_min_per_shift,
+    ...(baseParam.dataValues ?? baseParam),
+    working_days,
+    shifts_per_day:              max_shifts_in_day,
+    overtime_hours:              parseFloat((total_overtime_minutes / 60).toFixed(2)),
+    effective_total_cap_units:   total_cap_units,
+    effective_total_cap_minutes: parseFloat(total_cap_minutes.toFixed(2)),
+    has_adjustments:             adjustments.length > 0,
   };
 }
 
-// Single-line: lookup routing aktif per part, kembalikan { line_id, routing_id } tunggal
+// ─── ROUTING HELPERS ─────────────────────────────────────────────────────────
+
 async function getRoutingByPartIds(partIds, t) {
   if (!partIds.length) return new Map();
 
   const routings = await SPartRoutings.findAll({
-    where:      { part_id: partIds, active: true, is_default: true },
-    attributes: ["id", "part_id", "line_id"],
+    where:       { part_id: partIds, active: true, is_default: true },
+    attributes:  ["id", "part_id", "line_id"],
     transaction: t,
   });
 
@@ -102,7 +192,6 @@ async function getRoutingByPartIds(partIds, t) {
   return map;
 }
 
-// Auto-assign assigned_line_id & routing_id pada detail, serta init BASE param bila belum ada
 async function autoAssignDetails(planId, details, routingMap, t, paramYear, paramMonth) {
   if (!details.length) return;
 
@@ -122,8 +211,6 @@ async function autoAssignDetails(planId, details, routingMap, t, paramYear, para
   }
 
   if (updateOps.length > 0) await Promise.all(updateOps);
-
-  // Init BASE capacity params untuk line yang belum punya
   if (assignedLineIds.size === 0) return;
 
   const masterParamsAll = await SLineCapacityParam.findAll({
@@ -134,7 +221,7 @@ async function autoAssignDetails(planId, details, routingMap, t, paramYear, para
         { param_year: paramYear, param_month: { [Op.lte]: paramMonth } },
       ],
     },
-    order: [["line_id", "ASC"], ["param_year", "DESC"], ["param_month", "DESC"]],
+    order:       [["line_id", "ASC"], ["param_year", "DESC"], ["param_month", "DESC"]],
     transaction: t,
   });
 
@@ -144,7 +231,7 @@ async function autoAssignDetails(planId, details, routingMap, t, paramYear, para
   }
 
   const existingParams = await SProductionPlanCapacityParam.findAll({
-    where: { plan_id: planId, line_id: [...assignedLineIds] },
+    where:       { plan_id: planId, line_id: [...assignedLineIds] },
     transaction: t,
   });
   const existingParamLineIds = new Set(existingParams.map((p) => p.line_id));
@@ -167,35 +254,42 @@ async function autoAssignDetails(planId, details, routingMap, t, paramYear, para
       max_takt_time:           m.default_max_takt_time,
     });
   }
+
   if (paramsToCreate.length > 0) {
     await SProductionPlanCapacityParam.bulkCreate(paramsToCreate, { transaction: t });
   }
 }
 
-async function _calcLineCapacity({ plan_id, line_id, param, t }) {
+// ─── CAPACITY ENGINE ─────────────────────────────────────────────────────────
+
+async function _calcLineCapacity({ plan_id, line_id, plan_month, param, planId, t }) {
   if (!param.max_takt_time || param.max_takt_time <= 0) {
     return { line_id, skipped: true, reason: "max_takt_time is 0 or not set" };
   }
 
-  const {
-    regular_minutes, overtime_minutes, available_minutes,
-    total_cap_minutes, total_cap_units,
-    cap_per_shift, cap_per_day, effective_min_per_shift,
-  } = calcCapacityUnits({
-    working_days:            param.working_days,
-    shifts_per_day:          param.shifts_per_day,
-    working_hours_per_shift: parseFloat(param.working_hours_per_shift),
-    manpower:                param.manpower,
-    efficiency_factor:       parseFloat(param.efficiency_factor),
-    overtime_hours:          parseFloat(param.overtime_hours ?? 0),
-    max_takt_time:           param.max_takt_time,
-  });
+  const effective = await buildEffectiveParams(param, plan_month, planId, t);
+  const total_cap_units = effective.effective_total_cap_units;
 
+  // Persist working_days, shifts_per_day, overtime_hours dari kalender
+  if (
+    param.working_days    !== effective.working_days ||
+    param.shifts_per_day  !== effective.shifts_per_day ||
+    parseFloat(param.overtime_hours) !== effective.overtime_hours
+  ) {
+    await param.update(
+      {
+        working_days:   effective.working_days,
+        shifts_per_day: effective.shifts_per_day,
+        overtime_hours: effective.overtime_hours,
+      },
+      { transaction: t }
+    );
+  }
+
+  const taktMin             = param.max_takt_time / 60;
+  const capacity_per_hour   = parseFloat((60 / taktMin).toFixed(4));
   const max_takt_time_seconds = param.max_takt_time;
-  const max_takt_time_minutes = max_takt_time_seconds / 60;
-  const capacity_per_hour     = parseFloat((60 / max_takt_time_minutes).toFixed(4));
 
-  // Ambil semua detail yang assigned ke lini ini dalam plan ini
   const assignedDetails = await SProductionPlanDetail.findAll({
     where:      { plan_id, assigned_line_id: line_id },
     attributes: ["id", "qty_request"],
@@ -204,13 +298,18 @@ async function _calcLineCapacity({ plan_id, line_id, param, t }) {
 
   const total_qty_this_line = assignedDetails.reduce((s, d) => s + d.qty_request, 0);
   const line_status         = total_cap_units >= total_qty_this_line ? "POSSIBLE" : "IMPOSSIBLE";
+  const capacity_gap_units  = total_cap_units - total_qty_this_line;
 
-  // Update status & qty_capacity di setiap detail
   const ratio = total_qty_this_line > 0 ? Math.min(total_cap_units / total_qty_this_line, 1) : 1;
+  const utilization_pct = total_cap_units > 0
+    ? parseFloat(((total_qty_this_line / total_cap_units) * 100).toFixed(2))
+    : 0;
+
+  // Update detail per part
   await Promise.all(
     assignedDetails.map((d) => {
       const qty_capacity = Math.floor(d.qty_request * ratio);
-      const capacity_gap = total_cap_units - total_qty_this_line;
+      const capacity_gap = qty_capacity - d.qty_request;
       return SProductionPlanDetail.update(
         { qty_capacity, capacity_gap, status: line_status },
         { where: { id: d.id }, transaction: t }
@@ -218,44 +317,32 @@ async function _calcLineCapacity({ plan_id, line_id, param, t }) {
     })
   );
 
-  const takt_time_minutes         = max_takt_time_seconds / 60;
-  const effective_capacity_minutes = parseFloat(total_cap_minutes.toFixed(2));
-  const serial_required_minutes    = parseFloat((total_qty_this_line * takt_time_minutes).toFixed(2));
-  const utilization_pct            = total_cap_units > 0
-    ? parseFloat(((total_qty_this_line / total_cap_units) * 100).toFixed(2))
-    : 0;
-  const capacity_gap_minutes = parseFloat(
-    (effective_capacity_minutes - serial_required_minutes).toFixed(2)
-  );
-
-  // Upsert capacity result
+  // Persist result
   const [result, created] = await SProductionPlanCapacityResult.findOrCreate({
     where:    { plan_id, line_id },
     defaults: {
-      plan_id, line_id,
-      max_takt_time:           max_takt_time_seconds,
+      plan_id,
+      line_id,
+      max_takt_time:        max_takt_time_seconds,
       capacity_per_hour,
-      total_capacity_minutes:  effective_capacity_minutes,
-      total_required_minutes:  serial_required_minutes,
-      capacity_gap_minutes,
+      capacity_gap_units,
       utilization_pct,
-      status:                  line_status,
-      total_capacity_units:    total_cap_units,
-      calculated_at:           new Date(),
+      status:               line_status,
+      total_capacity_units: total_cap_units,
+      calculated_at:        new Date(),
     },
     transaction: t,
   });
+
   if (!created) {
     await result.update({
-      max_takt_time:           max_takt_time_seconds,
+      max_takt_time:        max_takt_time_seconds,
       capacity_per_hour,
-      total_capacity_minutes:  effective_capacity_minutes,
-      total_required_minutes:  serial_required_minutes,
-      capacity_gap_minutes,
+      capacity_gap_units,
       utilization_pct,
-      status:                  line_status,
-      total_capacity_units:    total_cap_units,
-      calculated_at:           new Date(),
+      status:               line_status,
+      total_capacity_units: total_cap_units,
+      calculated_at:        new Date(),
     }, { transaction: t });
   }
 
@@ -265,19 +352,13 @@ async function _calcLineCapacity({ plan_id, line_id, param, t }) {
     line_status,
     total_cap_units,
     total_qty_this_line,
-    serial_required_minutes,
-    effective_capacity_minutes,
-    capacity_gap_minutes,
+    capacity_gap_units,
     utilization_pct,
     capacity_info: {
       max_takt_time_seconds,
       capacity_per_hour,
-      regular_minutes:         parseFloat(regular_minutes.toFixed(2)),
-      overtime_minutes:        parseFloat(overtime_minutes.toFixed(2)),
-      available_minutes:       parseFloat(available_minutes.toFixed(2)),
-      cap_per_shift,
-      cap_per_day,
-      effective_min_per_shift: parseFloat(effective_min_per_shift.toFixed(4)),
+      effective_total_cap_units: total_cap_units,
+      has_calendar_adjustments:  effective.has_adjustments ?? false,
     },
   };
 }
@@ -288,8 +369,8 @@ async function _aggregateOverallStatus({ plan_id, plan, allParams, lineResults, 
   );
 
   const existingResults = await SProductionPlanCapacityResult.findAll({
-    where:      { plan_id },
-    attributes: ["line_id", "status"],
+    where:       { plan_id },
+    attributes:  ["line_id", "status"],
     transaction: t,
   });
   const existingResultMap = new Map(existingResults.map((r) => [r.line_id, r.status]));
@@ -299,8 +380,8 @@ async function _aggregateOverallStatus({ plan_id, plan, allParams, lineResults, 
   );
 
   const allDetails = await SProductionPlanDetail.findAll({
-    where:      { plan_id },
-    attributes: ["id", "qty_request", "assigned_line_id", "qty_capacity", "status"],
+    where:       { plan_id },
+    attributes:  ["id", "qty_request", "assigned_line_id", "qty_capacity", "status"],
     transaction: t,
   });
 
@@ -326,22 +407,24 @@ async function _aggregateOverallStatus({ plan_id, plan, allParams, lineResults, 
   return { aggregatedStatus, total_qty_capacity };
 }
 
+// ─── CONFLICT CHECK ──────────────────────────────────────────────────────────
+
 async function checkPlanLineConflicts(currentPlanId, lineIds, t) {
-  if (!lineIds || lineIds.length === 0) return [];
+  if (!lineIds?.length) return [];
 
   const conflictingParams = await SProductionPlanCapacityParam.findAll({
     where: {
-      line_id:  { [Op.in]: lineIds },
-      plan_id:  { [Op.ne]: currentPlanId },
+      line_id: { [Op.in]: lineIds },
+      plan_id: { [Op.ne]: currentPlanId },
     },
     include: [{
-      model:    SProductionPlan,
-      as:       "plan",
-      where:    { status: { [Op.in]: ["Approved", "Pending_Approval"] } },
+      model:      SProductionPlan,
+      as:         "plan",
+      where:      { status: { [Op.in]: ["Approved", "Pending_Approval"] } },
       attributes: ["id", "plan_number", "status", "earliest_delivery_date", "latest_delivery_date"],
-      required: true,
+      required:   true,
     }],
-    attributes: ["plan_id", "line_id"],
+    attributes:  ["plan_id", "line_id"],
     transaction: t,
   });
 
@@ -349,9 +432,8 @@ async function checkPlanLineConflicts(currentPlanId, lineIds, t) {
 
   const conflictByLine = new Map();
   for (const cp of conflictingParams) {
-    const lid = cp.line_id;
-    if (!conflictByLine.has(lid)) conflictByLine.set(lid, []);
-    conflictByLine.get(lid).push({
+    if (!conflictByLine.has(cp.line_id)) conflictByLine.set(cp.line_id, []);
+    conflictByLine.get(cp.line_id).push({
       plan_id:                cp.plan_id,
       plan_number:            cp.plan?.plan_number,
       status:                 cp.plan?.status,
@@ -360,22 +442,72 @@ async function checkPlanLineConflicts(currentPlanId, lineIds, t) {
     });
   }
 
-  const warnings = [];
-  for (const [line_id, conflictingPlans] of conflictByLine.entries()) {
-    warnings.push({
-      line_id,
-      message:           `Line ${line_id} juga digunakan oleh ${conflictingPlans.length} plan aktif lain (Approved/Pending_Approval). Kapasitas mungkin sudah terpakai sebagian.`,
-      conflicting_plans: conflictingPlans,
-    });
-  }
-  return warnings;
+  return [...conflictByLine.entries()].map(([line_id, conflicting_plans]) => ({
+    line_id,
+    message: `Line ${line_id} is also used by ${conflicting_plans.length} other active plan(s) (Approved/Pending_Approval). Capacity may already be partially consumed.`,
+    conflicting_plans,
+  }));
 }
 
-// ─── MODULE ─────────────────────────────────────────────────────────────────
+// ─── DO DETAIL RESOLVER ──────────────────────────────────────────────────────
+
+function buildDetailRows({ dos, plan_id, startSeq = 1 }) {
+  const detailMap = new Map();
+
+  for (const doObj of dos) {
+    for (const dd of doObj.details) {
+      const part_id = dd.planDetail?.spoDetail?.part_id ?? null;
+      if (!part_id) continue;
+
+      const delivery_date = doObj.shipment_date;
+      const key           = `${doObj.customer_id}_${part_id}_${delivery_date}`;
+
+      if (detailMap.has(key)) {
+        detailMap.get(key).qty_request += dd.sent_qty ?? 0;
+      } else {
+        detailMap.set(key, {
+          plan_id,
+          do_id:        doObj.id,
+          do_detail_id: dd.id,
+          customer_id:  doObj.customer_id,
+          part_id,
+          delivery_date,
+          qty_request:  dd.sent_qty ?? 0,
+          status:       "Not_Calculated",
+        });
+      }
+    }
+  }
+
+  return Array.from(detailMap.values()).map((d, i) => ({ ...d, sequence: startSeq + i }));
+}
+
+async function fetchDosWithDetails(doIds, t) {
+  return SDeliveryOrders.findAll({
+    where:       { id: doIds, delivery_status: "Scheduled" },
+    attributes:  ["id", "shipment_date", "customer_id"],
+    include: [{
+      model:      SDeliveryOrderDetails,
+      as:         "details",
+      attributes: ["id", "sent_qty", "delivery_plan_detail_id"],
+      include: [{
+        model:      SDeliveryPlanDetails,
+        as:         "planDetail",
+        attributes: ["id", "spo_detail_id", "planned_qty"],
+        include:    [{ model: SSalesPurchaseOrderDetails, as: "spoDetail", attributes: ["id", "part_id"] }],
+      }],
+    }],
+    order: [["shipment_date", "ASC"]],
+    transaction: t,
+  });
+}
+
+// working_days, shifts_per_day, overtime_hours are derived from the calendar on each calculateCapacity run.
+
+// ─── MODULE ──────────────────────────────────────────────────────────────────
 
 class PlanModule extends BaseModule {
 
-  // LIST
   async list(req, res) {
     try {
       const { limit, page, offset } = helper.getPagination(req.query);
@@ -407,9 +539,9 @@ class PlanModule extends BaseModule {
         order: [["plan_month", "DESC"], ["plan_type", "ASC"], ["created_at", "DESC"]],
       });
 
-      // On-the-fly: hitung total_products & total_qty_request per plan
       const planIds = rows.map((r) => r.id);
-      let detailAggMap = new Map();
+      const detailAggMap = new Map();
+
       if (planIds.length > 0) {
         const allDetails = await SProductionPlanDetail.findAll({
           where:      { plan_id: planIds },
@@ -440,12 +572,11 @@ class PlanModule extends BaseModule {
         data:   helper.getPaginationData(data, count, page, limit),
       });
     } catch (error) {
-      console.log(`[PlanModule][list]:`, error);
+      console.error("[PlanModule][list]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // DETAIL
   async detail(req, res) {
     try {
       const { id } = req.params;
@@ -457,7 +588,7 @@ class PlanModule extends BaseModule {
             as:       "details",
             separate: true,
             include: [
-              { model: SCustomers, as: "customer",      attributes: ["id", "name"] },
+              { model: SCustomers,    as: "customer",      attributes: ["id", "name"] },
               {
                 model:      SParts,
                 as:         "part",
@@ -480,6 +611,13 @@ class PlanModule extends BaseModule {
             separate: true,
             include:  [{ model: SLines, as: "line", attributes: ["id", "name"] }],
           },
+          {
+            model:    SProductionPlanCalendarAdjustment,
+            as:       "calendar_adjustments",
+            separate: true,
+            include:  [{ model: SShifts, as: "shift", attributes: ["id", "name", "shift_number"], required: false }],
+            order:    [["date", "ASC"]],
+          },
         ],
       });
 
@@ -487,8 +625,8 @@ class PlanModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, error: "Production Plan not found" });
       }
 
-      const details         = plan.details ?? [];
-      const total_products  = new Set(details.map((d) => d.part_id)).size;
+      const details           = plan.details ?? [];
+      const total_products    = new Set(details.map((d) => d.part_id)).size;
       const total_qty_request = details.reduce((s, d) => s + d.qty_request, 0);
 
       return helper.sendResponse(res, {
@@ -497,12 +635,11 @@ class PlanModule extends BaseModule {
         data:   { ...plan.toJSON(), total_products, total_qty_request },
       });
     } catch (error) {
-      console.log(`[PlanModule][detail]:`, error);
+      console.error("[PlanModule][detail]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // GET AVAILABLE DELIVERY ORDERS
   async getAvailableDeliveryOrders(req, res) {
     try {
       const { plan_month } = req.query;
@@ -511,13 +648,12 @@ class PlanModule extends BaseModule {
         return helper.sendResponse(res, {
           status: false,
           code:   400,
-          error:  "Parameter plan_month wajib diisi dengan format YYYY-MM (contoh: 2025-05).",
+          error:  "plan_month is required in YYYY-MM format (e.g. 2025-05)",
         });
       }
 
       const { startStr, endStr } = getPlanMonthRange(plan_month);
 
-      // DO yang sudah dipakai plan aktif: cari via plan_details
       const allocatedDetails = await SProductionPlanDetail.findAll({
         include: [{
           model:      SProductionPlan,
@@ -527,16 +663,13 @@ class PlanModule extends BaseModule {
         }],
         attributes: ["do_id"],
       });
-      const allocatedIds = [...new Set(allocatedDetails.map((r) => r.do_id))];
+      const allocatedDoIds = [...new Set(allocatedDetails.map((r) => r.do_id))];
 
       const dos = await SDeliveryOrders.findAll({
         where: {
           delivery_status: "Scheduled",
-          shipment_date: {
-            [Op.gte]: startStr,
-            [Op.lte]: endStr,
-          },
-          ...(allocatedIds.length ? { id: { [Op.notIn]: allocatedIds } } : {}),
+          shipment_date:   { [Op.between]: [startStr, endStr] },
+          ...(allocatedDoIds.length ? { id: { [Op.notIn]: allocatedDoIds } } : {}),
         },
         attributes: ["id", "do_number", "shipment_date", "customer_id"],
         include: [
@@ -574,18 +707,17 @@ class PlanModule extends BaseModule {
         },
       });
     } catch (error) {
-      console.log(`[PlanModule][getAvailableDeliveryOrders]:`, error);
+      console.error("[PlanModule][getAvailableDeliveryOrders]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // CREATE
   async create(req, res) {
     const t = await sequelize.transaction();
     try {
       const schema = Joi.object({
         plan_month:       Joi.string().pattern(/^\d{4}-\d{2}$/).required()
-                            .messages({ "string.pattern.base": "plan_month harus format YYYY-MM (contoh: 2025-05)" }),
+                            .messages({ "string.pattern.base": "plan_month must be in YYYY-MM format (e.g. 2025-05)" }),
         plan_type:        Joi.string().valid("ORIGINAL", "AMENDMENT").default("ORIGINAL"),
         parent_plan_id:   Joi.number().integer().when("plan_type", {
           is:        "AMENDMENT",
@@ -609,71 +741,64 @@ class PlanModule extends BaseModule {
       if (plan_type === "ORIGINAL") {
         const { year, month } = getPlanMonthRange(plan_month);
         const now          = new Date();
-        const currentYear  = now.getUTCFullYear();
-        const currentMonth = now.getUTCMonth() + 1;
-        const monthsDiff   = (year - currentYear) * 12 + (month - currentMonth);
+        const monthsDiff   = (year - now.getUTCFullYear()) * 12 + (month - (now.getUTCMonth() + 1));
 
         if (monthsDiff < 0) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `Cannot create plan for (${plan_month}). Plan month cannot be in the past.`,
+            error:  `Cannot create plan for ${plan_month}. Plan month cannot be in the past.`,
           });
         }
         if (monthsDiff > 3) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `Cannot create plan for (${plan_month}). Plan month cannot be more than 3 months in the future.`,
+            error:  `Cannot create plan for ${plan_month}. Plan month cannot be more than 3 months in the future.`,
           });
         }
 
         const existingPlan = await SProductionPlan.findOne({
-          where: { plan_month, plan_type: "ORIGINAL", status: { [Op.notIn]: ["Rejected", "Cancelled"] } },
+          where:       { plan_month, plan_type: "ORIGINAL", status: { [Op.notIn]: ["Rejected", "Cancelled"] } },
           transaction: t,
         });
         if (existingPlan) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 409,
-            error:  `Sudah ada Production Plan aktif untuk bulan ${plan_month} (${existingPlan.plan_number}). ` +
-                    `Reject atau cancel plan tersebut sebelum membuat yang baru.`,
+            error:  `An active Production Plan already exists for ${plan_month} (${existingPlan.plan_number}). ` +
+                    `Reject or cancel that plan before creating a new one.`,
           });
         }
       }
 
       if (plan_type === "AMENDMENT") {
         const parentPlan = await SProductionPlan.findOne({
-          where: { id: parent_plan_id, plan_month, plan_type: "ORIGINAL", status: "Approved" },
+          where:       { id: parent_plan_id, plan_month, plan_type: "ORIGINAL", status: "Approved" },
           transaction: t,
         });
         if (!parentPlan) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `Parent plan tidak ditemukan atau belum Approved. Amendment hanya bisa dibuat jika ada ` +
-                    `plan ORIGINAL bulan ${plan_month} yang sudah Approved.`,
+            error:  `Parent plan not found or not yet Approved. Amendment can only be created when an ORIGINAL plan for ${plan_month} is Approved.`,
+          });
+        }
+
+        const existingAmendment = await SProductionPlan.findOne({
+          where:       { plan_month, plan_type: "AMENDMENT", status: { [Op.notIn]: ["Rejected", "Cancelled"] } },
+          transaction: t,
+        });
+        if (existingAmendment) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 409,
+            error:  `An active Amendment already exists for ${plan_month} (${existingAmendment.plan_number}).`,
           });
         }
       }
 
-      const dos = await SDeliveryOrders.findAll({
-        where: { id: { [Op.in]: do_ids }, delivery_status: "Scheduled" },
-        attributes: ["id", "shipment_date", "customer_id"],
-        include: [{
-          model:      SDeliveryOrderDetails,
-          as:         "details",
-          attributes: ["id", "sent_qty", "delivery_plan_detail_id"],
-          include: [{
-            model:      SDeliveryPlanDetails,
-            as:         "planDetail",
-            attributes: ["id", "spo_detail_id", "planned_qty"],
-            include:    [{ model: SSalesPurchaseOrderDetails, as: "spoDetail", attributes: ["id", "part_id"] }],
-          }],
-        }],
-        transaction: t,
-      });
-
+      const dos = await fetchDosWithDetails(do_ids, t);
       if (dos.length !== do_ids.length) {
         await t.rollback();
         return helper.sendResponse(res, {
@@ -689,9 +814,8 @@ class PlanModule extends BaseModule {
       if (invalidDos.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  `${invalidDos.length} DO memiliki shipment_date di luar bulan ${plan_month}. ` +
-                  `Semua DO harus memiliki shipment_date dalam rentang ${startStr} s/d ${endStr}.`,
+          status:         false, code: 400,
+          error:          `${invalidDos.length} DO(s) have a shipment_date outside ${plan_month} (${startStr} – ${endStr}).`,
           invalid_do_ids: invalidDos.map((d) => d.id),
         });
       }
@@ -699,11 +823,11 @@ class PlanModule extends BaseModule {
       const isAmendment = plan_type === "AMENDMENT";
       const prefix      = isAmendment ? `PP-${plan_month}-A` : `PP-${plan_month}-`;
       const lastPlan    = await SProductionPlan.findOne({
-        where:   { plan_number: { [Op.iLike]: `${prefix}%` } },
-        order:   [["plan_number", "DESC"]],
+        where:    { plan_number: { [Op.iLike]: `${prefix}%` } },
+        order:    [["plan_number", "DESC"]],
         paranoid: false,
         transaction: t,
-        lock:    t.LOCK.UPDATE,
+        lock:     t.LOCK.UPDATE,
       });
       const seq         = lastPlan
         ? String(parseInt(lastPlan.plan_number.split(isAmendment ? "-A" : "-").pop()) + 1).padStart(5, "0")
@@ -728,46 +852,42 @@ class PlanModule extends BaseModule {
         created_by:     req.user?.id ?? null,
       }, { transaction: t });
 
-      const resolvePartId = (dd) => dd.planDetail?.spoDetail?.part_id ?? null;
-      const resolveQty    = (dd) => dd.sent_qty ?? 0;
-
-      const detailMap = new Map();
-      dos.forEach((doObj) => {
-        doObj.details.forEach((dd) => {
-          const part_id = resolvePartId(dd);
-          if (!part_id) return;
-          const delivery_date = doObj.shipment_date;
-          const key           = `${doObj.customer_id}_${part_id}_${delivery_date}`;
-
-          if (detailMap.has(key)) {
-            detailMap.get(key).qty_request += resolveQty(dd);
-          } else {
-            detailMap.set(key, {
-              plan_id:      plan.id,
-              do_id:        doObj.id,
-              do_detail_id: dd.id,
-              customer_id:  doObj.customer_id,
-              part_id,
-              delivery_date,
-              qty_request:  resolveQty(dd),
-              status:       "Not_Calculated",
-            });
-          }
-        });
-      });
-
-      const detailRows     = Array.from(detailMap.values()).map((d, i) => ({ ...d, sequence: i + 1 }));
-      const createdDetails = await SProductionPlanDetail.bulkCreate(detailRows, {
-        returning: true, transaction: t,
-      });
+      const detailRows     = buildDetailRows({ dos, plan_id: plan.id });
+      const createdDetails = await SProductionPlanDetail.bulkCreate(detailRows, { returning: true, transaction: t });
 
       const partIds    = [...new Set(createdDetails.map((d) => d.part_id))];
       const routingMap = await getRoutingByPartIds(partIds, t);
       await autoAssignDetails(plan.id, createdDetails, routingMap, t, paramYear, paramMonth);
 
+      // Inherit calendar adjustments from original plan for amendments
+      if (isAmendment) {
+        const parentAdjustments = await SProductionPlanCalendarAdjustment.findAll({
+          where: { plan_id: parent_plan_id },
+        });
+        if (parentAdjustments.length > 0) {
+          await SProductionPlanCalendarAdjustment.bulkCreate(
+            parentAdjustments.map((a) => ({
+              plan_id:            plan.id,
+              date:               a.date,
+              adjustment_type:    a.adjustment_type,
+              shift_id:           a.shift_id,
+              overtime_minutes:   a.overtime_minutes,
+              reason:             a.reason,
+              inherited_from_plan: parent_plan_id,
+            })),
+            { transaction: t }
+          );
+        }
+      }
+
       const partsWithNoRouting = partIds.filter((pid) => !routingMap.has(pid));
 
-      // On-the-fly summary
+      // Check for line conflicts across active plans
+      const assignedLineIds = [...new Set(
+        createdDetails.map((d) => routingMap.get(d.part_id)?.line_id).filter(Boolean)
+      )];
+      const lineConflicts = await checkPlanLineConflicts(plan.id, assignedLineIds, t);
+
       const total_products    = new Set(createdDetails.map((d) => d.part_id)).size;
       const total_qty_request = createdDetails.reduce((s, d) => s + d.qty_request, 0);
 
@@ -798,21 +918,21 @@ class PlanModule extends BaseModule {
           warning: partsWithNoRouting.length > 0
             ? `${partsWithNoRouting.length} part(s) have no active default routing. Capacity cannot be calculated for those parts.`
             : null,
+          line_conflicts: lineConflicts.length > 0 ? lineConflicts : null,
         },
       });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][create]:`, error);
+      console.error("[PlanModule][create]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // UPDATE
   async update(req, res) {
     const t = await sequelize.transaction();
     try {
-      const { id }    = req.params;
-      const schema    = Joi.object({
+      const { id }   = req.params;
+      const schema   = Joi.object({
         plan_description: Joi.string().optional().allow("", null),
         notes:            Joi.string().optional().allow("", null),
       });
@@ -837,21 +957,24 @@ class PlanModule extends BaseModule {
       await plan.update(validation.value, { transaction: t });
 
       await this.logActivity(req, {
-        moduleCode:  "production-plan", activityCode: "UPDATE",
-        resourceId:  plan.id, oldData, newData: plan,
-        description: `Updated Production Plan ${plan.plan_number}`, transaction: t,
+        moduleCode:   "production-plan",
+        activityCode: "UPDATE",
+        resourceId:   plan.id,
+        oldData,
+        newData:      plan,
+        description:  `Updated Production Plan ${plan.plan_number}`,
+        transaction:  t,
       });
 
       await t.commit();
-      return helper.sendResponse(res, { status: true, code: 200, message: "Plan updated", data: plan });
+      return helper.sendResponse(res, { status: true, code: 200, message: "Production Plan updated", data: plan });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][update]:`, error);
+      console.error("[PlanModule][update]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // SYNC DOs
   async syncDOs(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -875,54 +998,42 @@ class PlanModule extends BaseModule {
       }
       if (!["Draft", "Rejected"].includes(plan.status)) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  "Only Draft or Rejected plans can be synced",
-        });
+        return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft or Rejected plans can be synced" });
       }
 
       const { startStr, endStr, year: paramYear, month: paramMonth } = getPlanMonthRange(plan.plan_month);
 
-      // DO yang sudah terdaftar di plan ini
       const currentDetails = await SProductionPlanDetail.findAll({
-        where:      { plan_id: id },
-        attributes: ["id", "do_id"],
+        where:       { plan_id: id },
+        attributes:  ["id", "do_id"],
         transaction: t,
       });
       const currentDoIds = [...new Set(currentDetails.map((d) => d.do_id))];
       const toAdd        = do_ids.filter((did) => !currentDoIds.includes(did));
       const toRemove     = currentDoIds.filter((did) => !do_ids.includes(did));
 
-      // Hapus detail untuk DO yang di-remove
       if (toRemove.length > 0) {
         const detailIdsToRemove = currentDetails
           .filter((d) => toRemove.includes(d.do_id))
           .map((d) => d.id);
 
         if (detailIdsToRemove.length > 0) {
-          await SProductionPlanDetail.destroy({
-            where: { id: detailIdsToRemove }, transaction: t,
-          });
+          await SProductionPlanDetail.destroy({ where: { id: detailIdsToRemove }, transaction: t });
         }
 
-        // Hapus capacity params & results untuk line yang tidak lagi dipakai
         const remainingDetails = await SProductionPlanDetail.findAll({
-          where:      { plan_id: id },
-          attributes: ["assigned_line_id"],
+          where:       { plan_id: id },
+          attributes:  ["assigned_line_id"],
           transaction: t,
         });
-        const activeLineIds = [...new Set(
-          remainingDetails.map((d) => d.assigned_line_id).filter(Boolean)
-        )];
+        const activeLineIds = [...new Set(remainingDetails.map((d) => d.assigned_line_id).filter(Boolean))];
 
         if (activeLineIds.length > 0) {
           await SProductionPlanCapacityParam.destroy({
-            where: { plan_id: id, line_id: { [Op.notIn]: activeLineIds } },
-            transaction: t,
+            where: { plan_id: id, line_id: { [Op.notIn]: activeLineIds } }, transaction: t,
           });
           await SProductionPlanCapacityResult.destroy({
-            where: { plan_id: id, line_id: { [Op.notIn]: activeLineIds } },
-            transaction: t,
+            where: { plan_id: id, line_id: { [Op.notIn]: activeLineIds } }, transaction: t,
           });
         } else {
           await SProductionPlanCapacityParam.destroy({ where: { plan_id: id }, transaction: t });
@@ -930,26 +1041,9 @@ class PlanModule extends BaseModule {
         }
       }
 
-      // Tambah detail untuk DO baru
       let newDetails = [];
       if (toAdd.length > 0) {
-        const dos = await SDeliveryOrders.findAll({
-          where: { id: toAdd, delivery_status: "Scheduled" },
-          attributes: ["id", "shipment_date", "customer_id"],
-          include: [{
-            model:      SDeliveryOrderDetails,
-            as:         "details",
-            attributes: ["id", "sent_qty"],
-            include: [{
-              model:      SDeliveryPlanDetails,
-              as:         "planDetail",
-              attributes: ["id", "spo_detail_id", "planned_qty"],
-              include:    [{ model: SSalesPurchaseOrderDetails, as: "spoDetail", attributes: ["id", "part_id"] }],
-            }],
-          }],
-          transaction: t,
-        });
-
+        const dos = await fetchDosWithDetails(toAdd, t);
         if (dos.length !== toAdd.length) {
           await t.rollback();
           return helper.sendResponse(res, {
@@ -966,46 +1060,17 @@ class PlanModule extends BaseModule {
           await t.rollback();
           return helper.sendResponse(res, {
             status:         false, code: 400,
-            error:          `${invalidDos.length} DO memiliki shipment_date di luar bulan ${plan.plan_month} ` +
-                            `(${startStr} s/d ${endStr}). Hanya DO di bulan yang sama yang bisa ditambahkan.`,
+            error:          `${invalidDos.length} DO(s) have a shipment_date outside ${plan.plan_month} (${startStr} – ${endStr}).`,
             invalid_do_ids: invalidDos.map((d) => d.id),
           });
         }
-
-        const resolvePartId = (dd) => dd.planDetail?.spoDetail?.part_id ?? null;
-        const resolveQty    = (dd) => dd.sent_qty ?? 0;
-
-        const detailMap = new Map();
-        dos.forEach((doObj) => {
-          doObj.details.forEach((dd) => {
-            const part_id = resolvePartId(dd);
-            if (!part_id) return;
-            const delivery_date = doObj.shipment_date;
-            const key           = `${doObj.customer_id}_${part_id}_${delivery_date}`;
-
-            if (detailMap.has(key)) {
-              detailMap.get(key).qty_request += resolveQty(dd);
-            } else {
-              detailMap.set(key, {
-                plan_id:      plan.id,
-                do_id:        doObj.id,
-                do_detail_id: dd.id,
-                customer_id:  doObj.customer_id,
-                part_id,
-                delivery_date,
-                qty_request:  resolveQty(dd),
-                status:       "Not_Calculated",
-              });
-            }
-          });
-        });
 
         const lastDetail = await SProductionPlanDetail.findOne({
           where: { plan_id: id }, order: [["sequence", "DESC"]], transaction: t,
         });
         const startSeq = (lastDetail?.sequence ?? 0) + 1;
 
-        const detailRows = Array.from(detailMap.values()).map((d, i) => ({ ...d, sequence: startSeq + i }));
+        const detailRows = buildDetailRows({ dos, plan_id: plan.id, startSeq });
         newDetails = await SProductionPlanDetail.bulkCreate(detailRows, { returning: true, transaction: t });
       }
 
@@ -1015,6 +1080,7 @@ class PlanModule extends BaseModule {
         await autoAssignDetails(plan.id, newDetails, routingMap, t, paramYear, paramMonth);
       }
 
+      // Reset calculation state
       await SProductionPlanDetail.update(
         { qty_capacity: null, capacity_gap: null, status: "Not_Calculated" },
         { where: { plan_id: id }, transaction: t }
@@ -1022,34 +1088,534 @@ class PlanModule extends BaseModule {
       await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
       await plan.update({ overall_status: "Not_Calculated", total_qty_capacity: 0 }, { transaction: t });
 
+      await this.logActivity(req, {
+        moduleCode:   "production-plan",
+        activityCode: "UPDATE",
+        resourceId:   plan.id,
+        newData:      plan,
+        description:  `Synced DOs for Production Plan ${plan.plan_number}`,
+        transaction:  t,
+      });
+
       await t.commit();
       return helper.sendResponse(res, {
-        status: true, code: 200,
-        message: "DOs synced and lines auto-assigned from routing",
+        status:  true,
+        code:    200,
+        message: "Delivery Orders synced and lines auto-assigned from routing",
       });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][syncDOs]:`, error);
+      console.error("[PlanModule][syncDOs]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // RESET CAPACITY PARAMS — mengembalikan ke nilai master default, param_type → 'base'
-  async saveCapacityParams(req, res) {
+  async getCalendarPreview(req, res) {
+    try {
+      const { id } = req.params;
+  
+      // 1. Load plan with details to get assigned line IDs
+      const plan = await SProductionPlan.findByPk(id, {
+        attributes: ["id", "plan_number", "plan_month", "status"],
+        include: [
+          {
+            model: SProductionPlanDetail,
+            as: "details",
+            attributes: ["assigned_line_id"],
+            where: { assigned_line_id: { [Op.ne]: null } },
+            required: false,
+          },
+        ],
+      });
+  
+      if (!plan) {
+        return helper.sendResponse(res, { status: false, code: 404, error: "Production Plan not found" });
+      }
+  
+      // 2. Collect unique line_ids from plan details
+      const lineIds = [
+        ...new Set(
+          (plan.details ?? [])
+            .map((d) => d.assigned_line_id)
+            .filter(Boolean)
+        ),
+      ];
+  
+      const { startStr, endStr } = getPlanMonthRange(plan.plan_month);
+  
+      // 3. Query shift calendars — filter by line_id if present, otherwise all lines
+      const shiftCalendarWhere = {
+        active: true,
+        [Op.or]: [
+          { start_date: { [Op.between]: [startStr, endStr] } },
+          { end_date:   { [Op.between]: [startStr, endStr] } },
+          { start_date: { [Op.lte]: startStr }, end_date: { [Op.gte]: endStr } },
+        ],
+      };
+  
+      if (lineIds.length > 0) {
+        shiftCalendarWhere.line_id = { [Op.in]: lineIds };
+      }
+  
+      const shiftCalendars = await SShiftCalendars.findAll({
+        where: shiftCalendarWhere,
+        include: [
+          { model: RefTypeCalendars, as: "type_calendar", attributes: ["code", "name", "is_holiday"] },
+          { model: SShifts,          as: "shift",          attributes: ["id", "name", "shift_number"] },
+        ],
+        order: [["start_date", "ASC"]],
+      });
+  
+      // 4. Load calendar adjustments for this plan
+      const adjustments = await SProductionPlanCalendarAdjustment.findAll({
+        where:   { plan_id: id },
+        include: [{ model: SShifts, as: "shift", attributes: ["id", "name", "shift_number"], required: false }],
+        order:   [["date", "ASC"]],
+      });
+  
+      // 5. Build per-date calendar view (WORKING_DAY / HOLIDAY / UNINITIALIZED)
+      const dateMap = new Map();
+      for (let d = new Date(startStr); d <= new Date(endStr); d.setUTCDate(d.getUTCDate() + 1)) {
+        const dateStr = d.toISOString().split("T")[0];
+        dateMap.set(dateStr, {
+          date:          dateStr,
+          base_shifts:   [],
+          is_holiday:    false,
+          master_status: "UNINITIALIZED",
+          adjustments:   [],
+        });
+      }
+
+      for (const entry of shiftCalendars) {
+        const entryStart = new Date(Math.max(new Date(entry.start_date), new Date(startStr)));
+        const entryEnd   = new Date(Math.min(new Date(entry.end_date),   new Date(endStr)));
+        for (let d = new Date(entryStart); d <= entryEnd; d.setUTCDate(d.getUTCDate() + 1)) {
+          const dateStr = d.toISOString().split("T")[0];
+          const cell    = dateMap.get(dateStr);
+          if (!cell) continue;
+          if (entry.type_calendar?.is_holiday) {
+            cell.is_holiday    = true;
+            cell.master_status = "HOLIDAY";
+          } else {
+            cell.master_status = "WORKING_DAY";
+            cell.base_shifts.push({
+              shift_id:   entry.shift_id,
+              shift:      entry.shift,
+              line_id:    entry.line_id,
+              date_event: entry.date_event,
+            });
+          }
+        }
+      }
+  
+      for (const adj of adjustments) {
+        const cell = dateMap.get(adj.date);
+        if (cell) cell.adjustments.push(adj);
+      }
+  
+      return helper.sendResponse(res, {
+        status: true,
+        code:   200,
+        data: {
+          plan_id:    id,
+          plan_month: plan.plan_month,
+          line_ids:   lineIds,
+          period:     { start: startStr, end: endStr },
+          calendar:   [...dateMap.values()],
+        },
+      });
+    } catch (error) {
+      console.error("[PlanModule][getCalendarPreview]:", error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
+
+  async addCalendarAdjustment(req, res) {
     const t = await sequelize.transaction();
     try {
-      const { id }   = req.params;
-      const schema   = Joi.object({ line_id: Joi.number().integer().required() });
-
+      const { id } = req.params;
+  
+      const shiftSchema = Joi.object({
+        shift_number:     Joi.number().integer().min(1).max(3).required(),
+        overtime_minutes: Joi.number().integer().min(1).max(120).optional().allow(null),
+      });
+  
+      const schema = Joi.object({
+        date:   Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+        shifts: Joi.array().items(shiftSchema).min(1).max(3).required(),
+        reason: Joi.string().trim().min(1).required(),
+      });
+  
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
         await t.rollback();
         return helper.sendResponse(res, validation);
       }
+  
+      const { date, shifts: shiftInputs, reason } = validation.value;
+  
+      // ── Validasi duplikat shift_number dalam payload ───────────────────────
+      const inputShiftNumbers = shiftInputs.map(s => s.shift_number);
+      if (new Set(inputShiftNumbers).size !== inputShiftNumbers.length) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  'Duplicate shift_number dalam satu request tidak diizinkan',
+        });
+      }
+  
+      // ── Load plan ──────────────────────────────────────────────────────────
+      const plan = await SProductionPlan.findByPk(id, {
+        include: [{ model: SProductionPlanDetail, as: 'details', attributes: ['assigned_line_id'], required: false }],
+        transaction: t,
+      });
+      if (!plan) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Production Plan not found' });
+      }
+      if (!['Draft', 'Rejected'].includes(plan.status)) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  'Calendar adjustments can only be added to Draft or Rejected plans',
+        });
+      }
+  
+      const { startStr, endStr } = getPlanMonthRange(plan.plan_month);
+      if (date < startStr || date > endStr) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  `Tanggal ${date} di luar bulan plan ${plan.plan_month}`,
+        });
+      }
+  
+      const lineIds = [...new Set((plan.details ?? []).map(d => d.assigned_line_id).filter(Boolean))];
+      const lineWhere = lineIds.length ? { [Op.in]: lineIds } : { [Op.ne]: null };
+  
+      // ── Cek status hari di master calendar ────────────────────────────────
+      const calendarRowsOnDay = await SShiftCalendars.findAll({
+        where: { line_id: lineWhere, active: true,
+          start_date: { [Op.lte]: date },
+          end_date:   { [Op.gte]: date },
+        },
+        include: [
+          { model: RefTypeCalendars, as: 'type_calendar', attributes: ['is_holiday'] },
+          { model: SShifts,          as: 'shift',         attributes: ['shift_number'] },
+        ],
+        transaction: t,
+      });
+  
+      const baseShiftNumbersOnDay = new Set(
+        calendarRowsOnDay
+          .filter(r => !r.type_calendar?.is_holiday)
+          .map(r => r.shift?.shift_number)
+          .filter(Boolean)
+      );
+  
+      // ── Cek adjustments yang sudah ada pada hari ini ───────────────────────
+      const existingAdjs = await SProductionPlanCalendarAdjustment.findAll({
+        where:   { plan_id: id, date },
+        include: [{ model: SShifts, as: 'shift', attributes: ['shift_number'] }],
+        transaction: t,
+      });
+  
+      const existingAddShiftNumbers = new Set(
+        existingAdjs
+          .filter(a => a.adjustment_type === 'ADD_SHIFT')
+          .map(a => a.shift?.shift_number)
+          .filter(Boolean)
+      );
+  
+      // overtime yang sudah ada per shift_number: Map<shift_number, total_minutes>
+      const existingOtByShift = new Map();
+      for (const adj of existingAdjs.filter(a => a.adjustment_type === 'ADD_OVERTIME')) {
+        const sn = adj.shift?.shift_number;
+        if (sn != null) {
+          existingOtByShift.set(sn, (existingOtByShift.get(sn) ?? 0) + (adj.overtime_minutes ?? 0));
+        }
+      }
+  
+      // ── Resolve semua shift_number → shift_id ────────────────────────────
+      const allShiftNumbers = [...new Set(inputShiftNumbers)];
+      const shiftRecords = await SShifts.findAll({
+        where: { shift_number: { [Op.in]: allShiftNumbers }, category: 'PRODUCTIVE', active: true },
+        order: [['start_time', 'ASC']],
+        transaction: t,
+      });
+  
+      // Ambil satu representative per shift_number (segment PRODUCTIVE pertama)
+      const shiftIdByNumber = new Map();
+      for (const s of shiftRecords) {
+        if (!shiftIdByNumber.has(s.shift_number)) shiftIdByNumber.set(s.shift_number, s.id);
+      }
+  
+      // ── Validasi dan build adjustment records ────────────────────────────
+      const totalActiveShifts = baseShiftNumbersOnDay.size + existingAddShiftNumbers.size;
+      const newShiftNumbers   = inputShiftNumbers.filter(sn => !baseShiftNumbersOnDay.has(sn));
+  
+      if (totalActiveShifts + newShiftNumbers.length > 3) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 409,
+          error:  `Menambahkan ${newShiftNumbers.length} shift baru akan melebihi maksimum 3 shift per hari ` +
+                  `(saat ini sudah ada ${totalActiveShifts} shift aktif pada ${date})`,
+        });
+      }
+  
+      const adjustmentsToCreate = [];
+      const validationErrors    = [];
+  
+      for (const input of shiftInputs) {
+        const { shift_number, overtime_minutes } = input;
+        const shiftId = shiftIdByNumber.get(shift_number);
+  
+        if (!shiftId) {
+          validationErrors.push(`Shift ${shift_number} tidak ditemukan atau tidak aktif`);
+          continue;
+        }
+  
+        const isAlreadyActive = baseShiftNumbersOnDay.has(shift_number) || existingAddShiftNumbers.has(shift_number);
+  
+        // ADD_SHIFT hanya jika shift belum aktif di hari ini
+        if (!isAlreadyActive) {
+          if (existingAddShiftNumbers.has(shift_number)) {
+            validationErrors.push(`Shift ${shift_number} sudah ditambahkan sebelumnya pada ${date}`);
+            continue;
+          }
+          adjustmentsToCreate.push({
+            plan_id:             id,
+            date,
+            adjustment_type:     'ADD_SHIFT',
+            shift_id:            shiftId,
+            overtime_minutes:    null,
+            reason:              reason.trim(),
+            inherited_from_plan: null,
+          });
+        }
+  
+        // ADD_OVERTIME jika overtime_minutes disertakan
+        if (overtime_minutes != null && overtime_minutes > 0) {
+          const existingOt = existingOtByShift.get(shift_number) ?? 0;
+          const totalOt    = existingOt + overtime_minutes;
+          if (totalOt > 120) {
+            validationErrors.push(
+              `Overtime Shift ${shift_number} pada ${date} melebihi 120 menit ` +
+              `(existing: ${existingOt} min + tambahan: ${overtime_minutes} min = ${totalOt} min)`
+            );
+            continue;
+          }
+          adjustmentsToCreate.push({
+            plan_id:             id,
+            date,
+            adjustment_type:     'ADD_OVERTIME',
+            shift_id:            shiftId,
+            overtime_minutes,
+            reason:              reason.trim(),
+            inherited_from_plan: null,
+          });
+        }
+      }
+  
+      if (validationErrors.length > 0) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 409,
+          error:  validationErrors.join('; '),
+        });
+      }
+  
+      if (adjustmentsToCreate.length === 0) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  'Tidak ada adjustment baru yang perlu dibuat (semua shift sudah aktif dan tidak ada overtime)',
+        });
+      }
+  
+      const created = await SProductionPlanCalendarAdjustment.bulkCreate(
+        adjustmentsToCreate, { transaction: t }
+      );
+  
+      // ── Reset calculation state ────────────────────────────────────────────
+      await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
+      await SProductionPlanDetail.update(
+        { qty_capacity: null, capacity_gap: null, status: 'Not_Calculated' },
+        { where: { plan_id: id }, transaction: t }
+      );
+      await plan.update({ overall_status: 'Not_Calculated', total_qty_capacity: 0 }, { transaction: t });
+  
+      // ── Sync capacity params ──────────────────────────────────────────────
+      const capacityParam = await SProductionPlanCapacityParam.findOne({
+        where: { plan_id: id, line_id: lineIds[0] },
+        transaction: t,
+      });
+      if (capacityParam) {
+        const effective = await buildEffectiveParams(capacityParam, plan.plan_month, id, t);
+        const totalOtMinutes = await SProductionPlanCalendarAdjustment.sum('overtime_minutes', {
+          where: { plan_id: id, adjustment_type: 'ADD_OVERTIME' },
+          transaction: t,
+        });
+        const overtime_hours = parseFloat(((totalOtMinutes ?? 0) / 60).toFixed(2));
+        await capacityParam.update({
+          working_days:   effective.working_days,
+          shifts_per_day: effective.shifts_per_day,
+          overtime_hours,
+        }, { transaction: t });
+      }
+  
+      await this.logActivity(req, {
+        moduleCode:   'production-plan',
+        activityCode: 'UPDATE',
+        resourceId:   plan.id,
+        newData:      { date, created_count: created.length },
+        description:  `Added ${created.length} calendar adjustment(s) on ${date} for plan ${plan.plan_number}`,
+        transaction:  t,
+      });
+  
+      await t.commit();
+      return helper.sendResponse(res, {
+        status:  true,
+        code:    201,
+        message: `${created.length} calendar adjustment(s) added. Recalculate capacity to apply changes.`,
+        data:    created,
+      });
+    } catch (error) {
+      await t.rollback();
+      console.error('[PlanModule][addCalendarAdjustment]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
 
-      const { line_id } = validation.value;
+  async updateCalendarAdjustment(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id, adj_id } = req.params;
+  
+      const schema = Joi.object({
+        overtime_minutes: Joi.number().integer().min(1).max(120).required(),
+      });
+  
+      const validation = helper.validate(req.body, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return helper.sendResponse(res, validation);
+      }
+  
+      const { overtime_minutes } = validation.value;
+  
+      const plan = await SProductionPlan.findByPk(id, {
+        include: [{ model: SProductionPlanDetail, as: 'details', attributes: ['assigned_line_id'], required: false }],
+        transaction: t,
+      });
+      if (!plan) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Production Plan not found' });
+      }
+      if (!['Draft', 'Rejected'].includes(plan.status)) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  'Calendar adjustments can only be modified on Draft or Rejected plans',
+        });
+      }
+  
+      const adjustment = await SProductionPlanCalendarAdjustment.findOne({
+        where:   { id: adj_id, plan_id: id },
+        include: [{ model: SShifts, as: 'shift', attributes: ['shift_number'] }],
+        transaction: t,
+      });
+      if (!adjustment) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Calendar adjustment not found' });
+      }
+      if (adjustment.adjustment_type !== 'ADD_OVERTIME') {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  'Hanya adjustment ADD_OVERTIME yang bisa diedit. ADD_SHIFT tidak bisa diubah (hapus dan tambah ulang).',
+        });
+      }
+  
+      // ── Validasi total overtime per (date, shift) setelah update ──────────
+      const otherOtForShift = await SProductionPlanCalendarAdjustment.sum('overtime_minutes', {
+        where: {
+          plan_id:         id,
+          date:            adjustment.date,
+          adjustment_type: 'ADD_OVERTIME',
+          shift_id:        adjustment.shift_id,
+          id:              { [Op.ne]: adj_id },
+        },
+        transaction: t,
+      });
+  
+      const totalOt = (otherOtForShift ?? 0) + overtime_minutes;
+      if (totalOt > 120) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 409,
+          error:  `Total overtime untuk Shift ${adjustment.shift?.shift_number} pada ${adjustment.date} ` +
+                  `akan menjadi ${totalOt} menit (maks 120 menit)`,
+        });
+      }
+  
+      await adjustment.update({ overtime_minutes }, { transaction: t });
+  
+      // ── Reset calculation state ────────────────────────────────────────────
+      await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
+      await SProductionPlanDetail.update(
+        { qty_capacity: null, capacity_gap: null, status: 'Not_Calculated' },
+        { where: { plan_id: id }, transaction: t }
+      );
+      await plan.update({ overall_status: 'Not_Calculated', total_qty_capacity: 0 }, { transaction: t });
+  
+      // ── Sync overtime_hours di capacity params ────────────────────────────
+      const lineIds = [...new Set((plan.details ?? []).map(d => d.assigned_line_id).filter(Boolean))];
+      const capacityParam = await SProductionPlanCapacityParam.findOne({
+        where: { plan_id: id, line_id: lineIds[0] },
+        transaction: t,
+      });
+      if (capacityParam) {
+        const totalOtMinutes = await SProductionPlanCalendarAdjustment.sum('overtime_minutes', {
+          where: { plan_id: id, adjustment_type: 'ADD_OVERTIME' },
+          transaction: t,
+        });
+        const overtime_hours = parseFloat(((totalOtMinutes ?? 0) / 60).toFixed(2));
+        await capacityParam.update({ overtime_hours }, { transaction: t });
+      }
+  
+      await this.logActivity(req, {
+        moduleCode:   'production-plan',
+        activityCode: 'UPDATE',
+        resourceId:   plan.id,
+        newData:      adjustment,
+        description:  `Updated overtime adjustment id=${adj_id} to ${overtime_minutes} min on ${adjustment.date}`,
+        transaction:  t,
+      });
+  
+      await t.commit();
+      return helper.sendResponse(res, {
+        status:  true,
+        code:    200,
+        message: 'Overtime adjustment updated. Recalculate capacity to apply changes.',
+        data:    adjustment,
+      });
+    } catch (error) {
+      await t.rollback();
+      console.error('[PlanModule][updateCalendarAdjustment]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
 
-      const plan = await SProductionPlan.findByPk(id, { transaction: t });
+  async deleteCalendarAdjustment(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id, adj_id } = req.params;
+  
+      const plan = await SProductionPlan.findByPk(id, {
+        include: [{ model: SProductionPlanDetail, as: 'details', attributes: ['assigned_line_id'], required: false }],
+        transaction: t,
+      });
       if (!plan) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: "Production Plan not found" });
@@ -1058,92 +1624,79 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  "Capacity params can only be set on Draft or Rejected plans",
+          error:  "Calendar adjustments can only be removed from Draft or Rejected plans",
         });
       }
-
-      const { year: paramYear, month: paramMonth } = getPlanMonthRange(plan.plan_month);
-
-      const masterParams = await SLineCapacityParam.findOne({
-        where: {
-          line_id,
-          [Op.or]: [
-            { param_year: { [Op.lt]: paramYear } },
-            { param_year: paramYear, param_month: { [Op.lte]: paramMonth } },
-          ],
-        },
-        order:       [["param_year", "DESC"], ["param_month", "DESC"]],
-        transaction: t,
+  
+      const adjustment = await SProductionPlanCalendarAdjustment.findOne({
+        where: { id: adj_id, plan_id: id }, transaction: t,
       });
-      if (!masterParams) {
+      if (!adjustment) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 404,
-          error:  `Line capacity params tidak ditemukan untuk periode ${plan.plan_month} atau sebelumnya. ` +
-                  `Pastikan line capacity sudah dikalkulasi untuk periode tersebut.`,
+        return helper.sendResponse(res, { status: false, code: 404, error: "Calendar adjustment not found" });
+      }
+  
+      await adjustment.destroy({ transaction: t });
+  
+      // ── Reset calculation state ────────────────────────────────────────────
+      await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
+      await SProductionPlanDetail.update(
+        { qty_capacity: null, capacity_gap: null, status: "Not_Calculated" },
+        { where: { plan_id: id }, transaction: t }
+      );
+      await plan.update({ overall_status: "Not_Calculated", total_qty_capacity: 0 }, { transaction: t });
+  
+      // ── Sync working_days / shifts_per_day / overtime_hours ke capacity_params ──
+      const lineIds = [...new Set((plan.details ?? []).map(d => d.assigned_line_id).filter(Boolean))];
+      if (lineIds.length > 0) {
+        const capacityParams = await SProductionPlanCapacityParam.findAll({
+          where: { plan_id: id, line_id: lineIds },
+          transaction: t,
         });
+  
+        await Promise.all(
+          capacityParams.map(async (param) => {
+            const effective = await buildEffectiveParams(param, plan.plan_month, id, t);
+
+            const totalOtMinutes = await SProductionPlanCalendarAdjustment.sum('overtime_minutes', {
+              where: { plan_id: id, adjustment_type: 'ADD_OVERTIME' },
+              transaction: t,
+            });
+            const overtime_hours = parseFloat(((totalOtMinutes ?? 0) / 60).toFixed(2));
+
+            return param.update(
+              {
+                working_days:   effective.working_days,
+                shifts_per_day: effective.shifts_per_day,
+                overtime_hours,
+              },
+              { transaction: t }
+            );
+          })
+        );
       }
-
-      const baseValues = {
-        working_days:            masterParams.default_working_days,
-        shifts_per_day:          masterParams.default_shifts_per_day,
-        working_hours_per_shift: masterParams.default_working_hours_per_shift,
-        manpower:                masterParams.default_manpower,
-        efficiency_factor:       masterParams.default_efficiency_factor,
-        overtime_hours:          masterParams.default_overtime_hours,
-        max_takt_time:           masterParams.default_max_takt_time,
-      };
-
-      const [record, created] = await SProductionPlanCapacityParam.findOrCreate({
-        where:    { plan_id: id, line_id },
-        defaults: { plan_id: id, line_id, param_type: "base", ...baseValues },
-        transaction: t,
-      });
-
-      if (!created) {
-        await record.update({ param_type: "base", ...baseValues }, { transaction: t });
-      }
-
-      await SProductionPlanCapacityResult.destroy({ where: { plan_id: id, line_id }, transaction: t });
-
-      await this.logActivity(req, {
-        moduleCode:  "production-plan", activityCode: "UPDATE",
-        resourceId:  plan.id, newData: record,
-        description: `Reset capacity params to base for line ${line_id} on plan ${plan.plan_number}`,
-        transaction: t,
-      });
-
+  
       await t.commit();
-      return helper.sendResponse(res, {
-        status:  true,
-        code:    created ? 201 : 200,
-        message: created
-          ? "BASE parameters created from line master"
-          : "Parameters reset to base (line master defaults)",
-        data: record,
-      });
+      return helper.sendResponse(res, { status: true, code: 200, message: "Calendar adjustment removed" });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][saveCapacityParams]:`, error);
+      console.error("[PlanModule][deleteCalendarAdjustment]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // UPDATE CAPACITY PARAMS — mengubah nilai param, param_type otomatis → 'adjusted'
   async updateCapacityParams(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
 
+      // Only manpower and efficiency_factor are manually editable at plan level.
+      // working_days, shifts_per_day, overtime_hours -> auto from calendar (recalculated on calculateCapacity)
+      // working_hours_per_shift, max_takt_time       -> from line master data, read-only
       const schema = Joi.object({
-        line_id:                 Joi.number().integer().required(),
-        working_days:            Joi.number().integer().min(1).optional(),
-        shifts_per_day:          Joi.number().integer().min(1).optional(),
-        working_hours_per_shift: Joi.number().min(0).optional(),
-        manpower:                Joi.number().integer().min(1).optional(),
-        efficiency_factor:       Joi.number().min(0).max(1).optional(),
-        overtime_hours:          Joi.number().min(0).optional(),
-        max_takt_time:           Joi.number().integer().min(1).optional(),
+        line_id:           Joi.number().integer().required(),
+        manpower:           Joi.number().integer().min(1).optional(),
+        efficiency_factor:  Joi.number().min(0).max(1).optional(),
       });
 
       const validation = helper.validate(req.body, schema);
@@ -1174,14 +1727,11 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 404,
-          error:  "Capacity params not found for this line. Initialize params first.",
+          error:  "Capacity params not found for this line. They should have been auto-created during plan creation.",
         });
       }
 
-      const updatableFields = [
-        "working_days", "shifts_per_day", "working_hours_per_shift",
-        "manpower", "efficiency_factor", "overtime_hours", "max_takt_time",
-      ];
+      const updatableFields = ["manpower", "efficiency_factor"];
       const updates = {};
       for (const field of updatableFields) {
         if (paramFields[field] !== undefined) updates[field] = paramFields[field];
@@ -1189,31 +1739,25 @@ class PlanModule extends BaseModule {
 
       if (Object.keys(updates).length === 0) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  "No valid param fields provided to update",
-        });
+        return helper.sendResponse(res, { status: false, code: 400, error: "No valid param fields provided to update" });
       }
 
-      // Setiap perubahan param → param_type otomatis menjadi 'adjusted'
       await record.update({ ...updates, param_type: "adjusted" }, { transaction: t });
 
-      // Reset hasil kalkulasi karena param berubah
       await SProductionPlanCapacityResult.destroy({ where: { plan_id: id, line_id }, transaction: t });
       await SProductionPlanDetail.update(
         { qty_capacity: null, capacity_gap: null, status: "Not_Calculated" },
         { where: { plan_id: id, assigned_line_id: line_id }, transaction: t }
       );
-      await plan.update(
-        { overall_status: "Not_Calculated", total_qty_capacity: 0 },
-        { transaction: t }
-      );
+      await plan.update({ overall_status: "Not_Calculated", total_qty_capacity: 0 }, { transaction: t });
 
       await this.logActivity(req, {
-        moduleCode:  "production-plan", activityCode: "UPDATE",
-        resourceId:  plan.id, newData: record,
-        description: `Updated capacity params (adjusted) for line ${line_id} on plan ${plan.plan_number}`,
-        transaction: t,
+        moduleCode:   "production-plan",
+        activityCode: "UPDATE",
+        resourceId:   plan.id,
+        newData:      record,
+        description:  `Updated capacity params (adjusted) for line ${line_id} on plan ${plan.plan_number}`,
+        transaction:  t,
       });
 
       await t.commit();
@@ -1225,12 +1769,11 @@ class PlanModule extends BaseModule {
       });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][updateCapacityParams]:`, error);
+      console.error("[PlanModule][updateCapacityParams]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // CALCULATE CAPACITY (per-line)
   async calculateCapacity(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1265,7 +1808,14 @@ class PlanModule extends BaseModule {
         });
       }
 
-      const lineResult = await _calcLineCapacity({ plan_id: id, line_id, param, t });
+      const lineResult = await _calcLineCapacity({
+        plan_id:    id,
+        line_id,
+        plan_month: plan.plan_month,
+        param,
+        planId:     id,
+        t,
+      });
 
       if (lineResult.skipped) {
         await t.rollback();
@@ -1275,9 +1825,7 @@ class PlanModule extends BaseModule {
         });
       }
 
-      const allParams = await SProductionPlanCapacityParam.findAll({
-        where: { plan_id: id }, transaction: t,
-      });
+      const allParams = await SProductionPlanCapacityParam.findAll({ where: { plan_id: id }, transaction: t });
       const { aggregatedStatus } = await _aggregateOverallStatus({
         plan_id: id, plan, allParams, lineResults: [lineResult], t,
       });
@@ -1304,26 +1852,25 @@ class PlanModule extends BaseModule {
             shifts_per_day:          param.shifts_per_day,
             working_hours_per_shift: parseFloat(param.working_hours_per_shift),
             efficiency_factor:       parseFloat(param.efficiency_factor),
-            overtime_hours:          parseFloat(param.overtime_hours ?? 0),
             max_takt_time:           param.max_takt_time,
+            note: "working_days, shifts_per_day, and overtime_hours are derived from the effective calendar. Overtime details per date/shift are in calendar_adjustments (ADD_OVERTIME).",
           },
         },
       });
     } catch (error) {
       await t.rollback();
-      console.log("[PlanModule][calculateCapacity]:", error);
+      console.error("[PlanModule][calculateCapacity]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // CALCULATE ALL CAPACITY
   async calculateAllCapacity(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
 
       const plan = await SProductionPlan.findByPk(id, {
-        include: [{ model: SProductionPlanDetail, as: "details" }],
+        include:     [{ model: SProductionPlanDetail, as: "details" }],
         transaction: t,
       });
       if (!plan) {
@@ -1335,17 +1882,12 @@ class PlanModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 400, error: "Plan cannot be calculated in current status" });
       }
 
-      const allParams = await SProductionPlanCapacityParam.findAll({
-        where: { plan_id: id }, transaction: t,
-      });
+      const allParams = await SProductionPlanCapacityParam.findAll({ where: { plan_id: id }, transaction: t });
       if (allParams.length === 0) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: "No capacity parameters found for this plan." });
       }
 
-      const lineIds = allParams.map((p) => p.line_id);
-
-      // Reset semua detail & results
       const allDetailIds = plan.details.map((d) => d.id);
       if (allDetailIds.length > 0) {
         await SProductionPlanDetail.update(
@@ -1357,7 +1899,14 @@ class PlanModule extends BaseModule {
 
       const lineResults = [];
       for (const p of allParams) {
-        const result = await _calcLineCapacity({ plan_id: id, line_id: p.line_id, param: p, t });
+        const result = await _calcLineCapacity({
+          plan_id:    id,
+          line_id:    p.line_id,
+          plan_month: plan.plan_month,
+          param:      p,
+          planId:     id,
+          t,
+        });
         lineResults.push(result);
       }
 
@@ -1369,14 +1918,13 @@ class PlanModule extends BaseModule {
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: `All ${lineResults.filter((r) => !r.skipped).length} line(s) calculated. Overall plan status: ${aggregatedStatus}`,
+        message: `${lineResults.filter((r) => !r.skipped).length} line(s) calculated. Overall plan status: ${aggregatedStatus}`,
         data: {
-          overall_status:    aggregatedStatus,
+          overall_status:   aggregatedStatus,
           total_qty_capacity,
-          lines_calculated:  lineResults.filter((r) => !r.skipped).length,
-          lines_skipped:     lineResults.filter((r) =>  r.skipped).length,
-          calculation_order: lineIds,
-          line_results:      lineResults.map((r) => ({
+          lines_calculated: lineResults.filter((r) => !r.skipped).length,
+          lines_skipped:    lineResults.filter((r) =>  r.skipped).length,
+          line_results:     lineResults.map((r) => ({
             line_id:              r.line_id,
             skipped:              r.skipped,
             reason:               r.reason,
@@ -1390,19 +1938,18 @@ class PlanModule extends BaseModule {
       });
     } catch (error) {
       await t.rollback();
-      console.log("[PlanModule][calculateAllCapacity]:", error);
+      console.error("[PlanModule][calculateAllCapacity]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // SUBMIT FOR APPROVAL
   async submitForApproval(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
 
       const plan = await SProductionPlan.findByPk(id, {
-        include: [{ model: SProductionPlanDetail, as: "details" }],
+        include:     [{ model: SProductionPlanDetail, as: "details" }],
         transaction: t,
       });
       if (!plan) {
@@ -1411,55 +1958,35 @@ class PlanModule extends BaseModule {
       }
       if (!["Draft", "Rejected"].includes(plan.status)) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  "Only Draft or Rejected plans can be submitted",
-        });
+        return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft or Rejected plans can be submitted" });
       }
 
       if (plan.overall_status === "Not_Calculated") {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  "Capacity has not been calculated yet. Please run capacity calculation first.",
+          error:  "Capacity has not been calculated yet. Please run capacity calculation before submitting.",
         });
       }
 
-      if (plan.overall_status === "IMPOSSIBLE") {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  "Production Plan cannot be submitted. Overall capacity status is IMPOSSIBLE. " +
-                  "Please adjust capacity params on the bottleneck line(s) until all lines reach " +
-                  "POSSIBLE status before submitting.",
-        });
-      }
-
-      // Guard: semua detail harus punya assigned_line
       const unrouted = plan.details.filter((d) => !d.assigned_line_id);
       if (unrouted.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `${unrouted.length} product(s) have no routing/line configured. ` +
-                  `Please set up part routing first.`,
+          error:  `${unrouted.length} product(s) have no routing/line configured. Please set up part routing first.`,
         });
       }
 
-      // Guard: semua line param sudah punya hasil kalkulasi
-      const params  = await SProductionPlanCapacityParam.findAll({
-        where: { plan_id: id }, transaction: t,
-      });
-      const results = await SProductionPlanCapacityResult.findAll({
-        where: { plan_id: id }, transaction: t,
-      });
+      const params  = await SProductionPlanCapacityParam.findAll({ where: { plan_id: id }, transaction: t });
+      const results = await SProductionPlanCapacityResult.findAll({ where: { plan_id: id }, transaction: t });
+
       const uncalculatedLines = params.filter((p) => !results.some((r) => r.line_id === p.line_id));
       if (uncalculatedLines.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `${uncalculatedLines.length} line(s) have not been calculated yet. ` +
-                  `Please run capacity calculation for all lines first.`,
+          error:  `${uncalculatedLines.length} line(s) have not been calculated yet. Please run capacity calculation for all lines first.`,
         });
       }
 
@@ -1490,19 +2017,16 @@ class PlanModule extends BaseModule {
       });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][submitForApproval]:`, error);
+      console.error("[PlanModule][submitForApproval]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // APPROVE
   async approve(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id }   = req.params;
-      const schema   = Joi.object({
-        approval_notes: Joi.string().optional().allow("", null),
-      });
+      const schema   = Joi.object({ approval_notes: Joi.string().optional().allow("", null) });
 
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
@@ -1547,19 +2071,16 @@ class PlanModule extends BaseModule {
       });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][approve]:`, error);
+      console.error("[PlanModule][approve]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // REJECT
   async reject(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id }   = req.params;
-      const schema   = Joi.object({
-        rejection_reason: Joi.string().required(),
-      });
+      const schema   = Joi.object({ rejection_reason: Joi.string().required() });
 
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
@@ -1604,12 +2125,11 @@ class PlanModule extends BaseModule {
       });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][reject]:`, error);
+      console.error("[PlanModule][reject]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // DELETE
   async delete(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -1628,6 +2148,7 @@ class PlanModule extends BaseModule {
       await SProductionPlanDetail.destroy({ where: { plan_id: id }, transaction: t });
       await SProductionPlanCapacityResult.destroy({ where: { plan_id: id }, transaction: t });
       await SProductionPlanCapacityParam.destroy({ where: { plan_id: id }, transaction: t });
+      await SProductionPlanCalendarAdjustment.destroy({ where: { plan_id: id }, transaction: t });
 
       const oldData = plan.toJSON();
       await plan.destroy({ transaction: t });
@@ -1645,20 +2166,18 @@ class PlanModule extends BaseModule {
       return helper.sendResponse(res, { status: true, code: 200, message: "Production Plan deleted" });
     } catch (error) {
       await t.rollback();
-      console.log(`[PlanModule][delete]:`, error);
+      console.error("[PlanModule][delete]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 
-  // GET DROPDOWN
   async getDropdown(req, res) {
     try {
       const plans = await SProductionPlan.findAll({
         where:      { status: "Approved", deleted_at: null },
         attributes: [
-          "id", "plan_number", "plan_month",
-          "plan_type", "parent_plan_id", "plan_description",
-          "earliest_delivery_date", "latest_delivery_date",
+          "id", "plan_number", "plan_month", "plan_type", "parent_plan_id",
+          "plan_description", "earliest_delivery_date", "latest_delivery_date",
         ],
         include: [{
           model:      SProductionPlan,
@@ -1670,7 +2189,7 @@ class PlanModule extends BaseModule {
       });
       return helper.sendResponse(res, { status: true, code: 200, data: plans });
     } catch (error) {
-      console.log(`[PlanModule][getDropdown]:`, error);
+      console.error("[PlanModule][getDropdown]:", error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }

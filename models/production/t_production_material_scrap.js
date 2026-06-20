@@ -8,6 +8,11 @@ export default (sequelize) => {
         as: 'production_result'
       })
 
+      TProductionMaterialScrap.belongsTo(models.TProductionMaterialReplacement, {
+        foreignKey: 'replacement_id',
+        as: 'replacement'
+      })
+
       TProductionMaterialScrap.belongsTo(models.SStations, {
         foreignKey: 'station_id',
         as: 'station'
@@ -35,6 +40,11 @@ export default (sequelize) => {
       production_result_id: {
         type: DataTypes.INTEGER,
         allowNull: false
+      },
+
+      replacement_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
       },
 
       scrap_date: {

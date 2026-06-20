@@ -85,4 +85,9 @@ router.get('/buffer-transactions', auth.sessionChecker, async (req, res) => {
   const result = await productionMaterialControlModule.listBufferTransaction(req)
   return res.status(result.code || 200).json(result)
 })
+
+router.get('/production-results/:production_result_id/replacements-for-scrap', auth.sessionChecker, async (req, res) => {
+  const result = await productionMaterialControlModule.getReplacementForScrap(req)
+  return res.status(result.code || 200).json(result)
+})
 export default router

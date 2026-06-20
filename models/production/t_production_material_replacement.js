@@ -12,6 +12,14 @@ export default (sequelize) => {
       )
 
       TProductionMaterialReplacement.belongsTo(
+        models.TProductionMaterialResultNgDetail,
+        {
+          foreignKey: 'ng_detail_id',
+          as: 'ng_detail'
+        }
+      ) 
+
+      TProductionMaterialReplacement.belongsTo(
         models.SStations,
         {
           foreignKey: 'station_id',
@@ -50,6 +58,11 @@ export default (sequelize) => {
       production_result_id: {
         type: DataTypes.INTEGER,
         allowNull: false
+      },
+
+      ng_detail_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
       },
 
       station_id: {

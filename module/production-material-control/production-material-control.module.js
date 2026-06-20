@@ -2,18 +2,17 @@ import db from '../../models/index.js'
 import { QueryTypes } from 'sequelize'
 
 class ProductionMaterialControlModule {
-  async listProductionResult(req) {
+async listProductionResult(req) {
   try {
     const {
-    page = 1,
-    limit = 10,
-    search,
-    date_from,
-    date_to,
-    station_id,
-
-    has_ng
-  } = req.query
+      page = 1,
+      limit = 10,
+      search,
+      date_from,
+      date_to,
+      station_id,
+      has_ng
+    } = req.query
 
     const offset = (Number(page) - 1) * Number(limit)
 
@@ -25,10 +24,9 @@ class ProductionMaterialControlModule {
 
     if (search) {
       where.push(`(
+        wo.wo_number ILIKE :search OR
         product.part_number ILIKE :search OR
         product.part_name ILIKE :search OR
-        material.part_number ILIKE :search OR
-        material.part_name ILIKE :search OR
         st.name ILIKE :search
       )`)
       replacements.search = `%${search}%`
@@ -50,27 +48,28 @@ class ProductionMaterialControlModule {
     }
 
     if (has_ng === 'true' || has_ng === true) {
-  where.push(`pmr.total_ng > 0`)
-}
+      where.push(`pmr.total_ng > 0`)
+    }
 
     const whereClause = `WHERE ${where.join(' AND ')}`
 
     const rows = await db.sequelize.query(`
       SELECT
         pmr.id,
+        pmr.production_wo_id,
+        wo.wo_number,
+
         pmr.production_date,
+
         pmr.shift_id,
         sh.name AS shift_name,
+
         pmr.station_id,
         st.name AS station_name,
 
         pmr.part_id,
         product.part_number AS product_part_number,
         product.part_name AS product_part_name,
-
-        pmr.material_part_id,
-        material.part_number AS material_part_number,
-        material.part_name AS material_part_name,
 
         pmr.planning_qty,
         pmr.actual_qty,
@@ -80,10 +79,14 @@ class ProductionMaterialControlModule {
         pmr.created_at
 
       FROM t_production_material_result pmr
-      JOIN s_shifts sh ON sh.id = pmr.shift_id
-      JOIN s_stations st ON st.id = pmr.station_id
-      JOIN s_parts product ON product.id = pmr.part_id
-      LEFT JOIN s_parts material ON material.id = pmr.material_part_id
+      JOIN s_work_orders wo
+        ON wo.id = pmr.production_wo_id
+      JOIN s_shifts sh
+        ON sh.id = pmr.shift_id
+      JOIN s_stations st
+        ON st.id = pmr.station_id
+      JOIN s_parts product
+        ON product.id = pmr.part_id
 
       ${whereClause}
 
@@ -96,37 +99,40 @@ class ProductionMaterialControlModule {
 
     const productionResultIds = rows.map(row => row.id)
 
-let ngDetails = []
+    let ngDetails = []
 
-if (productionResultIds.length) {
-  ngDetails = await db.sequelize.query(`
-    SELECT
-      ng.id,
-      ng.production_result_id,
-      ng.material_part_id,
+    if (productionResultIds.length) {
+      ngDetails = await db.sequelize.query(`
+        SELECT
+          ng.id,
+          ng.production_result_id,
+          ng.material_part_id,
 
-      part.part_number AS material_part_number,
-      part.part_name AS material_part_name,
+          part.part_number AS material_part_number,
+          part.part_name AS material_part_name,
 
-      ng.qty_ng,
-      ng.remarks,
-      ng.created_at
+          ng.source_label_id,
+          ng.source_label_number,
 
-    FROM t_production_material_result_ng_details ng
-    JOIN s_parts part
-      ON part.id = ng.material_part_id
+          ng.qty_ng,
+          ng.remarks,
+          ng.created_at
 
-    WHERE ng.production_result_id IN (:production_result_ids)
-      AND ng.deleted_at IS NULL
+        FROM t_production_material_result_ng_details ng
+        JOIN s_parts part
+          ON part.id = ng.material_part_id
 
-    ORDER BY ng.id ASC
-  `, {
-    replacements: {
-      production_result_ids: productionResultIds
-    },
-    type: QueryTypes.SELECT
-  })
-}
+        WHERE ng.production_result_id IN (:production_result_ids)
+          AND ng.deleted_at IS NULL
+
+        ORDER BY ng.id ASC
+      `, {
+        replacements: {
+          production_result_ids: productionResultIds
+        },
+        type: QueryTypes.SELECT
+      })
+    }
 
     const ngDetailsMap = ngDetails.reduce((map, item) => {
       if (!map[item.production_result_id]) {
@@ -145,10 +151,15 @@ if (productionResultIds.length) {
 
     const countRows = await db.sequelize.query(`
       SELECT COUNT(*)::int AS total
+
       FROM t_production_material_result pmr
-      JOIN s_stations st ON st.id = pmr.station_id
-      JOIN s_parts product ON product.id = pmr.part_id
-      LEFT JOIN s_parts material ON material.id = pmr.material_part_id
+      JOIN s_work_orders wo
+        ON wo.id = pmr.production_wo_id
+      JOIN s_stations st
+        ON st.id = pmr.station_id
+      JOIN s_parts product
+        ON product.id = pmr.part_id
+
       ${whereClause}
     `, {
       replacements,
@@ -175,30 +186,17 @@ if (productionResultIds.length) {
   }
 }
 
-  async createProductionResult(req) {
+async createProductionResult(req) {
   const transaction = await db.sequelize.transaction()
 
   try {
     const data = req.body
-    const actualQty = Number(data.actual_qty || 0)
-    const totalOk = Number(data.total_ok || 0)
-    const totalNg = Number(data.total_ng || 0)
-    const planningQty = Number(data.planning_qty || 0)
 
-    if (!data.production_date) {
+    if (!data.production_wo_id) {
       await transaction.rollback()
       return {
         status: false,
-        message: 'Production date is required',
-        code: 400
-      }
-    }
-
-    if (!data.shift_id) {
-      await transaction.rollback()
-      return {
-        status: false,
-        message: 'Shift is required',
+        message: 'Production Work Order is required',
         code: 400
       }
     }
@@ -212,14 +210,9 @@ if (productionResultIds.length) {
       }
     }
 
-    if (!data.part_id) {
-      await transaction.rollback()
-      return {
-        status: false,
-        message: 'Product part is required',
-        code: 400
-      }
-    }
+    const actualQty = Number(data.actual_qty || 0)
+    const totalOk = Number(data.total_ok || 0)
+    const totalNg = Number(data.total_ng || 0)
 
     if (actualQty <= 0) {
       await transaction.rollback()
@@ -239,11 +232,67 @@ if (productionResultIds.length) {
       }
     }
 
+    const [productionWo] = await db.sequelize.query(`
+      SELECT
+        id,
+        work_date,
+        shift_id,
+        part_id,
+        planned_quantity
+      FROM s_work_orders
+      WHERE id = :production_wo_id
+        AND deleted_at IS NULL
+      LIMIT 1
+    `, {
+      replacements: {
+        production_wo_id: data.production_wo_id
+      },
+      type: QueryTypes.SELECT,
+      transaction
+    })
+
+    if (!productionWo) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Production Work Order not found',
+        code: 404
+      }
+    }
+
+    const planningQty = Number(productionWo.planned_quantity || 0)
+
     if (planningQty > 0 && actualQty > planningQty) {
       await transaction.rollback()
       return {
         status: false,
         message: 'Actual quantity cannot exceed planning quantity',
+        code: 400
+      }
+    }
+
+    const [woStation] = await db.sequelize.query(`
+      SELECT
+        id,
+        station_id
+      FROM s_work_order_stations
+      WHERE wo_id = :production_wo_id
+        AND station_id = :station_id
+      LIMIT 1
+    `, {
+      replacements: {
+        production_wo_id: data.production_wo_id,
+        station_id: data.station_id
+      },
+      type: QueryTypes.SELECT,
+      transaction
+    })
+
+    if (!woStation) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Selected station is not part of Production Work Order',
         code: 400
       }
     }
@@ -258,7 +307,6 @@ if (productionResultIds.length) {
 
     if (totalNg !== totalNgMaterial) {
       await transaction.rollback()
-
       return {
         status: false,
         message: `Total NG (${totalNg}) must be equal to NG material detail (${totalNgMaterial})`,
@@ -266,16 +314,47 @@ if (productionResultIds.length) {
       }
     }
 
+    const validMaterials = await db.sequelize.query(`
+      SELECT material_part_id
+      FROM s_work_order_materials
+      WHERE wo_id = :production_wo_id
+        AND deleted_at IS NULL
+    `, {
+      replacements: {
+        production_wo_id: data.production_wo_id
+      },
+      type: QueryTypes.SELECT,
+      transaction
+    })
+
+    const validMaterialIds = validMaterials.map(item =>
+      Number(item.material_part_id)
+    )
+
+    for (const item of ngMaterials) {
+      const materialPartId = Number(item.material_part_id)
+      const qtyNg = Number(item.qty_ng || 0)
+
+      if (qtyNg > 0 && !validMaterialIds.includes(materialPartId)) {
+        await transaction.rollback()
+        return {
+          status: false,
+          message: `Material ${materialPartId} is not part of selected Production Work Order`,
+          code: 400
+        }
+      }
+    }
+
     const result = await db.TProductionMaterialResult.create({
-      production_wo_id: data.production_wo_id || null,
-      production_date: data.production_date,
-      shift_id: data.shift_id,
+      production_wo_id: productionWo.id,
+      production_date: productionWo.work_date,
+      shift_id: productionWo.shift_id,
       station_id: data.station_id,
-      part_id: data.part_id,
-      material_part_id: data.material_part_id || null,
-      planning_qty: Number(data.planning_qty || 0),
-      actual_qty: Number(data.actual_qty || 0),
-      total_ok: Number(data.total_ok || 0),
+      part_id: productionWo.part_id,
+      material_part_id: null,
+      planning_qty: planningQty,
+      actual_qty: actualQty,
+      total_ok: totalOk,
       total_ng: totalNg,
       remarks: data.remarks || null,
       created_by: req.user?.id || null
@@ -300,7 +379,7 @@ if (productionResultIds.length) {
             created_at,
             updated_at
           )
-        VALUES
+          VALUES
           (
             :production_result_id,
             :material_part_id,
@@ -314,14 +393,14 @@ if (productionResultIds.length) {
           )
         `, {
           replacements: {
-          production_result_id: result.id,
-          material_part_id: item.material_part_id,
-          source_label_id: item.label_id || null,
-          source_label_number: item.label_number || null,
-          qty_ng: qtyNg,
-          remarks: item.remarks || null,
-          created_by: req.user?.id || null
-        },
+            production_result_id: result.id,
+            material_part_id: item.material_part_id,
+            source_label_id: item.label_id || null,
+            source_label_number: item.label_number || null,
+            qty_ng: qtyNg,
+            remarks: item.remarks || null,
+            created_by: req.user?.id || null
+          },
           type: QueryTypes.INSERT,
           transaction
         })
@@ -345,7 +424,7 @@ if (productionResultIds.length) {
     }
   }
 }
-  async listScrap(req) {
+async listScrap(req) {
   try {
     const {
       page = 1,
@@ -369,20 +448,21 @@ if (productionResultIds.length) {
         product.part_name ILIKE :search OR
         material.part_number ILIKE :search OR
         material.part_name ILIKE :search OR
-        scrap.remarks ILIKE :search
+        scrap.remarks ILIKE :search OR
+        usr.email ILIKE :search
       )`)
       replacements.search = `%${search}%`
     }
 
-   if (date_from) {
-    where.push(`DATE(scrap.scrap_date) >= DATE(:date_from)`)
-    replacements.date_from = date_from
-  }
+    if (date_from) {
+      where.push(`DATE(scrap.scrap_date) >= DATE(:date_from)`)
+      replacements.date_from = date_from
+    }
 
-  if (date_to) {
-    where.push(`DATE(scrap.scrap_date) <= DATE(:date_to)`)
-    replacements.date_to = date_to
-  }
+    if (date_to) {
+      where.push(`DATE(scrap.scrap_date) <= DATE(:date_to)`)
+      replacements.date_to = date_to
+    }
 
     const whereClause = `WHERE ${where.join(' AND ')}`
 
@@ -391,6 +471,7 @@ if (productionResultIds.length) {
         scrap.id,
         scrap.scrap_date,
         scrap.production_result_id,
+        scrap.replacement_id,
 
         scrap.part_id,
         product.part_number AS product_part_number,
@@ -400,15 +481,39 @@ if (productionResultIds.length) {
         material.part_number AS material_part_number,
         material.part_name AS material_part_name,
 
+        replacement.ng_detail_id,
+
+        ng.source_label_id AS ng_source_label_id,
+        ng.source_label_number AS ng_source_label_number,
+
         scrap.qty_scrap,
         scrap.weight_per_pcs,
         scrap.total_weight,
         scrap.remarks,
+
+        scrap.created_by,
+        usr.email AS created_by_email,
+
         scrap.created_at
 
       FROM t_production_material_scrap scrap
-      JOIN s_parts product ON product.id = scrap.part_id
-      JOIN s_parts material ON material.id = scrap.material_part_id
+
+      JOIN s_parts product
+        ON product.id = scrap.part_id
+
+      JOIN s_parts material
+        ON material.id = scrap.material_part_id
+
+      LEFT JOIN t_production_material_replacement replacement
+        ON replacement.id = scrap.replacement_id
+        AND replacement.deleted_at IS NULL
+
+      LEFT JOIN t_production_material_result_ng_details ng
+        ON ng.id = replacement.ng_detail_id
+        AND ng.deleted_at IS NULL
+
+      LEFT JOIN s_users usr
+        ON usr.id = scrap.created_by
 
       ${whereClause}
 
@@ -419,11 +524,72 @@ if (productionResultIds.length) {
       type: QueryTypes.SELECT
     })
 
+    const replacementIds = rows
+      .map(row => row.replacement_id)
+      .filter(Boolean)
+
+    let labelRows = []
+
+    if (replacementIds.length) {
+      labelRows = await db.sequelize.query(`
+        SELECT
+          detail.id,
+          detail.used_reference_id AS replacement_id,
+          detail.source_label_id,
+          detail.source_label_number,
+          detail.pcs_no,
+          detail.pcs_label_number,
+          detail.status,
+          detail.used_at
+        FROM t_station_buffer_stock_detail detail
+        WHERE detail.used_reference_type = 'PRODUCTION_REPLACEMENT'
+          AND detail.used_reference_id IN (:replacement_ids)
+          AND detail.deleted_at IS NULL
+        ORDER BY detail.used_reference_id ASC, detail.id ASC
+      `, {
+        replacements: {
+          replacement_ids: replacementIds
+        },
+        type: QueryTypes.SELECT
+      })
+    }
+
+    const labelMap = labelRows.reduce((map, item) => {
+      if (!map[item.replacement_id]) {
+        map[item.replacement_id] = []
+      }
+
+      map[item.replacement_id].push(item)
+
+      return map
+    }, {})
+
+    const rowsWithLabels = rows.map(row => ({
+      ...row,
+      replacement_labels: labelMap[row.replacement_id] || []
+    }))
+
     const countRows = await db.sequelize.query(`
       SELECT COUNT(*)::int AS total
       FROM t_production_material_scrap scrap
-      JOIN s_parts product ON product.id = scrap.part_id
-      JOIN s_parts material ON material.id = scrap.material_part_id
+
+      JOIN s_parts product
+        ON product.id = scrap.part_id
+
+      JOIN s_parts material
+        ON material.id = scrap.material_part_id
+
+      LEFT JOIN t_production_material_replacement replacement
+        ON replacement.id = scrap.replacement_id
+        AND replacement.deleted_at IS NULL
+
+      LEFT JOIN t_production_material_result_ng_details ng
+        ON ng.id = replacement.ng_detail_id
+        AND ng.deleted_at IS NULL
+
+      LEFT JOIN s_users usr
+        ON usr.id = scrap.created_by
+
       ${whereClause}
     `, {
       replacements,
@@ -432,7 +598,7 @@ if (productionResultIds.length) {
 
     return {
       status: true,
-      data: rows,
+      data: rowsWithLabels,
       meta: {
         page: Number(page),
         limit: Number(limit),
@@ -451,38 +617,68 @@ async createScrap(req) {
   try {
     const data = req.body
 
-    const [material] = await db.sequelize.query(`
+    if (!data.replacement_id) {
+      return {
+        status: false,
+        message: 'Replacement is required',
+        code: 400
+      }
+    }
+
+    const [replacement] = await db.sequelize.query(`
       SELECT
-        id,
-        part_number,
-        part_name,
-        weight_per_pcs
-      FROM s_parts
-      WHERE id = :material_part_id
-        AND deleted_at IS NULL
+        r.id AS replacement_id,
+        r.production_result_id,
+        r.station_id,
+        r.material_part_id,
+        r.qty_replacement,
+        r.ng_detail_id,
+
+        pmr.part_id,
+
+        material.part_number,
+        material.part_name,
+        material.weight_per_pcs
+      FROM t_production_material_replacement r
+      JOIN t_production_material_result pmr
+        ON pmr.id = r.production_result_id
+        AND pmr.deleted_at IS NULL
+      JOIN s_parts material
+        ON material.id = r.material_part_id
+        AND material.deleted_at IS NULL
+      WHERE r.id = :replacement_id
+        AND r.deleted_at IS NULL
       LIMIT 1
     `, {
       replacements: {
-        material_part_id: data.material_part_id
+        replacement_id: data.replacement_id
       },
       type: QueryTypes.SELECT
     })
 
-    if (!material) {
+    if (!replacement) {
       return {
         status: false,
-        message: 'Material part not found',
+        message: 'Replacement material not found',
         code: 404
       }
     }
 
     const qtyScrap = Number(data.qty_scrap || 0)
-    const weightPerPcs = Number(material.weight_per_pcs || 0)
+    const weightPerPcs = Number(replacement.weight_per_pcs || 0)
 
     if (qtyScrap <= 0) {
       return {
         status: false,
         message: 'Scrap quantity must be greater than 0',
+        code: 400
+      }
+    }
+
+    if (qtyScrap > Number(replacement.qty_replacement || 0)) {
+      return {
+        status: false,
+        message: `Scrap quantity cannot exceed replacement quantity (${replacement.qty_replacement} PCS)`,
         code: 400
       }
     }
@@ -498,10 +694,12 @@ async createScrap(req) {
     const totalWeight = qtyScrap * weightPerPcs
 
     const scrap = await db.TProductionMaterialScrap.create({
-      production_result_id: data.production_result_id,
+      production_result_id: replacement.production_result_id,
+      replacement_id: replacement.replacement_id,
       scrap_date: data.scrap_date,
-      part_id: data.part_id,
-      material_part_id: data.material_part_id,
+      station_id: replacement.station_id,
+      part_id: replacement.part_id,
+      material_part_id: replacement.material_part_id,
       qty_scrap: qtyScrap,
       weight_per_pcs: weightPerPcs,
       total_weight: totalWeight,
@@ -697,6 +895,15 @@ async createReplacement(req) {
     const data = req.body
     const qtyReplacement = Number(data.qty_replacement || 0)
 
+    if (!data.ng_detail_id) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'NG detail is required',
+        code: 400
+      }
+    }
+
     if (qtyReplacement <= 0) {
       await transaction.rollback()
       return {
@@ -706,10 +913,71 @@ async createReplacement(req) {
       }
     }
 
+    const [ngDetail] = await db.sequelize.query(`
+      SELECT
+        ng.id,
+        ng.production_result_id,
+        pmr.station_id,
+        ng.material_part_id,
+        ng.source_label_id,
+        ng.source_label_number,
+        ng.source_wo_item_label_id,
+        ng.qty_ng
+      FROM t_production_material_result_ng_details ng
+      JOIN t_production_material_result pmr
+        ON pmr.id = ng.production_result_id
+      WHERE ng.id = :ng_detail_id
+        AND ng.deleted_at IS NULL
+        AND pmr.deleted_at IS NULL
+      LIMIT 1
+    `, {
+      replacements: {
+        ng_detail_id: data.ng_detail_id
+      },
+      type: QueryTypes.SELECT,
+      transaction
+    })
+
+    if (!ngDetail) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'NG detail not found',
+        code: 404
+      }
+    }
+
+    if (Number(ngDetail.production_result_id) !== Number(data.production_result_id)) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'NG detail does not match selected production result',
+        code: 400
+      }
+    }
+
+    if (Number(ngDetail.material_part_id) !== Number(data.material_part_id)) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'NG material does not match selected material',
+        code: 400
+      }
+    }
+
+    if (qtyReplacement > Number(ngDetail.qty_ng || 0)) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: `Replacement quantity cannot exceed NG quantity (${ngDetail.qty_ng} PCS)`,
+        code: 400
+      }
+    }
+
     const bufferStock = await db.TStationBufferStock.findOne({
       where: {
-        station_id: data.station_id,
-        part_id: data.material_part_id
+        station_id: ngDetail.station_id,
+        part_id: ngDetail.material_part_id
       },
       transaction
     })
@@ -757,18 +1025,18 @@ async createReplacement(req) {
 
     const firstDetail = bufferDetails[0]
 
-    const sourceLabel = labelRows[0] || null
-
     const replacement = await db.TProductionMaterialReplacement.create({
-      production_result_id: data.production_result_id,
-      station_id: data.station_id,
-      material_part_id: data.material_part_id,
+      production_result_id: ngDetail.production_result_id,
+      ng_detail_id: ngDetail.id,
+      station_id: ngDetail.station_id,
+      material_part_id: ngDetail.material_part_id,
       qty_replacement: qtyReplacement,
       replacement_reason: data.replacement_reason || null,
 
-      source_label_id: firstDetail?.source_label_id || null,
-      source_label_number: firstDetail?.source_label_number || null,
-      source_wo_item_label_id: firstDetail?.source_wo_item_label_id || null,
+      // ini label material NG asal, bukan label replacement
+      source_label_id: ngDetail.source_label_id || null,
+      source_label_number: ngDetail.source_label_number || null,
+      source_wo_item_label_id: ngDetail.source_wo_item_label_id || null,
 
       created_by: req.user?.id || null
     }, {
@@ -1001,10 +1269,10 @@ async listBufferStatus(req) {
           detail.created_by,
           usr.email AS supplied_by_email,
           detail.created_at
-        FROM t_station_buffer_stock_detail
+        FROM t_station_buffer_stock_detail detail
         LEFT JOIN s_users usr
           ON usr.id = detail.created_by
-        WHERE buffer_stock_id IN (:buffer_stock_ids)
+        WHERE detail.buffer_stock_id IN (:buffer_stock_ids)
           AND detail.status = 'AVAILABLE'
           AND detail.deleted_at IS NULL
         ORDER BY detail.created_at ASC, detail.id ASC
@@ -1382,6 +1650,9 @@ async getReplacementByProductionResult(req) {
         p.part_name,
         COALESCE(p.weight_per_pcs, 0) AS weight_per_pcs,
 
+        ng.source_label_id AS ng_source_label_id,
+        ng.source_label_number AS ng_source_label_number,
+
         ng.qty_ng AS qty_replacement,
         ng.remarks AS replacement_reason,
         ng.created_at
@@ -1398,7 +1669,7 @@ async getReplacementByProductionResult(req) {
         AND p.deleted_at IS NULL
         AND ng.qty_ng > 0
 
-      ORDER BY p.part_number ASC
+      ORDER BY p.part_number ASC, ng.source_label_number ASC
     `, {
       replacements: { production_result_id },
       type: QueryTypes.SELECT
@@ -1416,36 +1687,150 @@ async getReplacementByProductionResult(req) {
     }
   }
 }
+async getReplacementForScrap(req) {
+  try {
+    const { production_result_id } = req.params
+
+    const rows = await db.sequelize.query(`
+      SELECT
+        r.id AS replacement_id,
+        r.production_result_id,
+        r.ng_detail_id,
+        r.station_id,
+
+        r.material_part_id,
+        p.part_number,
+        p.part_name,
+        COALESCE(p.weight_per_pcs, 0) AS weight_per_pcs,
+
+        r.qty_replacement,
+
+        r.source_label_id AS ng_source_label_id,
+        r.source_label_number AS ng_source_label_number,
+
+        r.created_at
+
+      FROM t_production_material_replacement r
+      JOIN s_parts p
+        ON p.id = r.material_part_id
+
+      WHERE r.production_result_id = :production_result_id
+        AND r.deleted_at IS NULL
+        AND p.deleted_at IS NULL
+
+      ORDER BY r.id DESC
+    `, {
+      replacements: { production_result_id },
+      type: QueryTypes.SELECT
+    })
+
+    const replacementIds = rows.map(row => row.replacement_id)
+
+    let labelRows = []
+
+    if (replacementIds.length) {
+      labelRows = await db.sequelize.query(`
+        SELECT
+          detail.id,
+          detail.used_reference_id AS replacement_id,
+          detail.pcs_label_number
+        FROM t_station_buffer_stock_detail detail
+        WHERE detail.used_reference_type = 'PRODUCTION_REPLACEMENT'
+          AND detail.used_reference_id IN (:replacement_ids)
+          AND detail.deleted_at IS NULL
+        ORDER BY detail.used_reference_id ASC, detail.id ASC
+      `, {
+        replacements: { replacement_ids: replacementIds },
+        type: QueryTypes.SELECT
+      })
+    }
+
+    const labelMap = labelRows.reduce((map, item) => {
+      if (!map[item.replacement_id]) map[item.replacement_id] = []
+      map[item.replacement_id].push(item)
+      return map
+    }, {})
+
+    return {
+      status: true,
+      data: rows.map(row => ({
+        ...row,
+        replacement_labels: labelMap[row.replacement_id] || []
+      }))
+    }
+  } catch (error) {
+    return {
+      status: false,
+      message: error.message,
+      code: 500
+    }
+  }
+}
 async getProductionWos(req) {
   try {
     const rows = await db.sequelize.query(`
       SELECT
         wo.id AS wo_id,
         wo.wo_number,
-        wo.planned_quantity,
+        wo.work_date AS production_date,
+        wo.planned_quantity AS planning_qty,
+        wo.actual_quantity,
+
+        wo.shift_id,
+        sh.name AS shift_name,
+        sh.description AS shift_description,
+        sh.start_time,
+        sh.end_time,
 
         wo.part_id,
         product.part_number,
         product.part_name,
 
-        wos.station_id,
-        st.name AS station_name
+        COALESCE(
+          json_agg(
+            DISTINCT jsonb_build_object(
+              'station_id', wost.station_id,
+              'station_name', st.name,
+              'sequence', wost.sequence,
+              'planned_quantity', wost.planned_quantity,
+              'actual_quantity', wost.actual_quantity,
+              'status', wost.status
+            )
+          ) FILTER (WHERE wost.station_id IS NOT NULL),
+          '[]'
+        ) AS stations
 
       FROM s_work_orders wo
       JOIN s_parts product
         ON product.id = wo.part_id
 
-      LEFT JOIN t_work_order_storing wos
-        ON wos.production_wo_id = wo.id
-        AND wos.take_out_purpose = 'production'
-        AND wos.deleted_at IS NULL
+      JOIN s_shifts sh
+        ON sh.id = wo.shift_id
+
+      LEFT JOIN s_work_order_stations wost
+        ON wost.wo_id = wo.id
 
       LEFT JOIN s_stations st
-        ON st.id = wos.station_id
+        ON st.id = wost.station_id
 
       WHERE wo.deleted_at IS NULL
 
-      ORDER BY wo.wo_number DESC
+      GROUP BY
+        wo.id,
+        wo.wo_number,
+        wo.work_date,
+        wo.planned_quantity,
+        wo.actual_quantity,
+        wo.shift_id,
+        sh.name,
+        sh.description,
+        sh.start_time,
+        sh.end_time,
+        wo.part_id,
+        product.part_number,
+        product.part_name
+
+      ORDER BY wo.work_date DESC, wo.wo_number DESC
     `, {
       type: QueryTypes.SELECT
     })
@@ -1468,42 +1853,52 @@ async getProductionWoMaterialLabels(req) {
 
     const rows = await db.sequelize.query(`
       SELECT
+        wom.material_part_id,
+        part.part_number,
+        part.part_name,
+        wom.planned_quantity,
+        wom.actual_quantity,
+        wom.uom,
+
         wil.id AS wo_item_label_id,
         lbl.id AS label_id,
         lbl.label_number,
-
-        item.part_id AS material_part_id,
-        part.part_number,
-        part.part_name,
 
         wos.id AS wo_storing_id,
         wos.wo_number AS wo_storing_number,
         wos.station_id,
         st.name AS station_name
 
-      FROM t_work_order_storing wos
-      JOIN t_work_order_storing_item item
-        ON item.wo_id = wos.id
-        AND item.deleted_at IS NULL
-
-      JOIN t_work_order_storing_item_label wil
-        ON wil.wo_item_id = item.id
-        AND wil.deleted_at IS NULL
-
-      JOIN t_part_labels lbl
-        ON lbl.id = wil.label_id
-        AND lbl.deleted_at IS NULL
+      FROM s_work_order_materials wom
 
       JOIN s_parts part
-        ON part.id = item.part_id
+        ON part.id = wom.material_part_id
         AND part.deleted_at IS NULL
+
+      LEFT JOIN t_work_order_storing wos
+        ON wos.production_wo_id = wom.wo_id
+        AND wos.take_out_purpose = 'production'
+        AND wos.deleted_at IS NULL
 
       LEFT JOIN s_stations st
         ON st.id = wos.station_id
 
-      WHERE wos.production_wo_id = :production_wo_id
-        AND wos.take_out_purpose = 'production'
-        AND wos.deleted_at IS NULL
+      LEFT JOIN t_work_order_storing_item item
+        ON item.wo_id = wos.id
+        AND item.part_id = wom.material_part_id
+        AND item.deleted_at IS NULL
+
+      LEFT JOIN t_work_order_storing_item_label wil
+        ON wil.wo_item_id = item.id
+        AND wil.is_scanned_out = true
+        AND wil.deleted_at IS NULL
+
+      LEFT JOIN t_part_labels lbl
+        ON lbl.id = wil.label_id
+        AND lbl.deleted_at IS NULL
+
+      WHERE wom.wo_id = :production_wo_id
+        AND wom.deleted_at IS NULL
 
       ORDER BY part.part_number ASC, lbl.label_number ASC
     `, {
@@ -1511,9 +1906,37 @@ async getProductionWoMaterialLabels(req) {
       type: QueryTypes.SELECT
     })
 
+    const materialMap = rows.reduce((map, row) => {
+      if (!map[row.material_part_id]) {
+        map[row.material_part_id] = {
+          material_part_id: row.material_part_id,
+          part_number: row.part_number,
+          part_name: row.part_name,
+          planned_quantity: row.planned_quantity,
+          actual_quantity: row.actual_quantity,
+          uom: row.uom,
+          station_id: row.station_id,
+          station_name: row.station_name,
+          labels: []
+        }
+      }
+
+      if (row.label_id) {
+        map[row.material_part_id].labels.push({
+          label_id: row.label_id,
+          label_number: row.label_number,
+          wo_item_label_id: row.wo_item_label_id,
+          wo_storing_id: row.wo_storing_id,
+          wo_storing_number: row.wo_storing_number
+        })
+      }
+
+      return map
+    }, {})
+
     return {
       status: true,
-      data: rows
+      data: Object.values(materialMap)
     }
   } catch (error) {
     return {

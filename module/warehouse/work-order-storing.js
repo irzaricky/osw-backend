@@ -832,13 +832,42 @@ class WorkOrderStoringModule extends BaseModule {
           }
 
           try {
-            await helper.checkExists(SWorkOrder, value.production_wo_id, 'Production Work Order', t);
+            const productionWO = await SWorkOrder.findByPk(
+              value.production_wo_id,
+              {
+                attributes: ['id', 'wo_number', 'status'],
+                transaction: t
+              }
+            );
+
+            if (!productionWO) {
+              await t.rollback();
+              return {
+                status: false,
+                message: 'Production Work Order not found',
+                code: 404
+              };
+            }
+
+            if (!['Released', 'In Progress'].includes(productionWO.status)) {
+              await t.rollback();
+              return {
+                status: false,
+                message: 'Production Work Order is not active',
+                code: 400
+              };
+            }
+
             itemResults = await this.validateProductionTakeOut({
               production_wo_id: value.production_wo_id,
               items: value.items,
               transaction: t
             });
+
             value.station_id = await this.getFirstAssemblyStation(value.production_wo_id, t);
+
+            value.ref_doc_number = productionWO.wo_number;
+            value.ref_doc_name = 'Production Work Order';
           } catch (err) {
             await t.rollback();
             return {
@@ -1216,15 +1245,23 @@ class WorkOrderStoringModule extends BaseModule {
 
           const labelPrefix = `WO-${part.part_number}-${dateStr}-`;
 
-          const countLabel = await TPartLabels.count({
+          const lastLabel = await TPartLabels.findOne({
             where: {
               label_number: { [Op.like]: `${labelPrefix}%` }
             },
+            order: [['label_number', 'DESC']],
             transaction: t
           });
 
-          for (let i = 1; i <= item.total_kanban; i++) {
-            const labelNumber = `${labelPrefix}${String(countLabel + i).padStart(6, '0')}`;
+          let nextNumber = 1;
+
+          if (lastLabel) {
+            const lastSeq = parseInt(lastLabel.label_number.split('-').pop(), 10);
+            nextNumber = lastSeq + 1;
+          }
+
+          for (let i = 0; i < item.total_kanban; i++) {
+            const labelNumber = `${labelPrefix}${String(nextNumber + i).padStart(6, '0')}`;
 
             const newLabel = await TPartLabels.create({
               label_number: labelNumber,
@@ -1283,6 +1320,9 @@ class WorkOrderStoringModule extends BaseModule {
         wo_type_id: Joi.number().integer().required(),
         warehouse_area_id: Joi.number().integer().required(),
         wo_status_id: Joi.number().integer().valid(1, 2).required(),
+        take_out_purpose: Joi.string().valid('production', 'buffer').allow(null),
+        production_wo_id: Joi.number().integer().allow(null),
+        station_id: Joi.number().integer().allow(null),
 
         items: Joi.array().items(
           Joi.object({
@@ -1299,6 +1339,8 @@ class WorkOrderStoringModule extends BaseModule {
       }
 
       const value = validation.value;
+
+      let itemResults = [];
 
       const workOrder = await TWorkOrderStoring.findByPk(id, { transaction: t });
 
@@ -1326,6 +1368,101 @@ class WorkOrderStoringModule extends BaseModule {
       } catch (err) {
         await t.rollback();
         return err;
+      }
+
+      if (value.wo_category === 'Take Out' && value.wo_type_id === 1) {
+        if (!value.take_out_purpose) {
+          await t.rollback();
+          return {
+            status: false,
+            message: 'Take Out Purpose is required for Raw Material Take Out',
+            code: 400
+          };
+        }
+
+        if (value.take_out_purpose === 'buffer') {
+          if (!value.station_id) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Station is required when Take Out Purpose is Buffer',
+              code: 400
+            };
+          }
+
+          try {
+            await this.validateFirstAssemblyBufferStation(value.station_id, t);
+            itemResults = await this.validateBufferItems(
+              value.station_id,
+              value.items,
+              t
+            );
+          } catch (err) {
+            await t.rollback();
+            return {
+              status: false,
+              message: err.message,
+              code: 400
+            };
+          }
+        }
+
+        if (value.take_out_purpose === 'production') {
+          if (!value.production_wo_id) {
+            await t.rollback();
+            return {
+              status: false,
+              message: 'Production Work Order is required when Take Out Purpose is Production',
+              code: 400
+            };
+          }
+
+          try {
+            const productionWO = await SWorkOrder.findByPk(
+              value.production_wo_id,
+              {
+                attributes: ['id', 'wo_number', 'status'],
+                transaction: t
+              }
+            );
+
+            if (!productionWO) {
+              await t.rollback();
+              return {
+                status: false,
+                message: 'Production Work Order not found',
+                code: 404
+              };
+            }
+
+            if (!['Released', 'In Progress'].includes(productionWO.status)) {
+              await t.rollback();
+              return {
+                status: false,
+                message: 'Production Work Order is not active',
+                code: 400
+              };
+            }
+
+            itemResults = await this.validateProductionTakeOut({
+              production_wo_id: value.production_wo_id,
+              items: value.items,
+              transaction: t
+            });
+
+            value.station_id = await this.getFirstAssemblyStation(value.production_wo_id, t);
+
+            value.ref_doc_number = productionWO.wo_number;
+            value.ref_doc_name = 'Production Work Order';
+          } catch (err) {
+            await t.rollback();
+            return {
+              status: false,
+              message: err.message,
+              code: err.code || 400
+            };
+          }
+        }
       }
 
       if (value.ref_doc_id) {
@@ -1496,6 +1633,9 @@ class WorkOrderStoringModule extends BaseModule {
 
       await workOrder.update({
         wo_category: value.wo_category,
+        take_out_purpose: value.take_out_purpose,
+        production_wo_id: value.production_wo_id,
+        station_id: value.station_id,
         ref_doc_id: value.ref_doc_id,
         ref_doc_number: value.ref_doc_number,
         ref_doc_name: value.ref_doc_name,
@@ -1512,6 +1652,7 @@ class WorkOrderStoringModule extends BaseModule {
       });
 
       const existingMap = new Map();
+
       existingItems.forEach(item => {
         existingMap.set(item.part_id, item);
       });
@@ -1520,21 +1661,31 @@ class WorkOrderStoringModule extends BaseModule {
 
       const updatedItems = [];
 
+      const resultMap = new Map(
+        itemResults.map(result => [
+          result.part_id, result
+        ])
+      );
+
       for (const newItem of value.items) {
         const existing = existingMap.get(newItem.part_id);
+        const result = resultMap.get(newItem.part_id);
 
         if (existing) {
           await existing.update({
-            total_kanban: newItem.total_kanban
+            total_kanban: newItem.total_kanban,
+            buffer_used_qty_pcs: result?.buffer_used_qty_pcs || 0,
+            buffer_added_qty_pcs: result?.buffer_added_qty_pcs || 0
           }, { transaction: t });
 
           updatedItems.push(existing);
-
         } else {
           const created = await TWorkOrderStoringItem.create({
             wo_id: id,
             part_id: newItem.part_id,
-            total_kanban: newItem.total_kanban
+            total_kanban: newItem.total_kanban,
+            buffer_used_qty_pcs: result?.buffer_used_qty_pcs || 0,
+            buffer_added_qty_pcs: result?.buffer_added_qty_pcs || 0
           }, { transaction: t });
 
           updatedItems.push(created);
@@ -1562,7 +1713,7 @@ class WorkOrderStoringModule extends BaseModule {
       if (value.wo_status_id === 2 && value.wo_category === 'Placement' && value.ref_doc_id) {
         const labels = [];
 
-        for (const item of createdItems) {
+        for (const item of updatedItems) {
           const receivingLabels = await TMaterialReceivingItemLabel.findAll({
             attributes: ['id', 'label_id'],
             include: [
@@ -1623,11 +1774,11 @@ class WorkOrderStoringModule extends BaseModule {
             };
           }
 
-          const prefix = `WO-${part.part_number}-${dateStr}-`;
+          const labelPrefix = `WO-${part.part_number}-${dateStr}-`;
 
           const lastLabel = await TPartLabels.findOne({
             where: {
-              label_number: { [Op.like]: `${prefix}%` }
+              label_number: { [Op.like]: `${labelPrefix}%` }
             },
             order: [['label_number', 'DESC']],
             transaction: t
@@ -1641,7 +1792,7 @@ class WorkOrderStoringModule extends BaseModule {
           }
 
           for (let i = 0; i < item.total_kanban; i++) {
-            const labelNumber = `${prefix}${String(nextNumber + i).padStart(6, '0')}`;
+            const labelNumber = `${labelPrefix}${String(nextNumber + i).padStart(6, '0')}`;
 
             const newLabel = await TPartLabels.create({
               label_number: labelNumber,
@@ -2303,6 +2454,11 @@ class WorkOrderStoringModule extends BaseModule {
   async getDropdownWoProduction() {
     try {
       const workOrders = await SWorkOrder.findAll({
+        where: {
+          status: {
+            [Op.in]: ['Released', 'In Progress']
+          }
+        },
         include: [
           {
             model: SParts,

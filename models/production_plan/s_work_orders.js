@@ -9,8 +9,6 @@ export default (sequelize) => {
       SWorkOrder.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
       SWorkOrder.belongsTo(models.SShifts, { foreignKey: 'shift_id', as: 'shift' });
       SWorkOrder.hasMany(models.SWorkOrderStation, { foreignKey: 'wo_id', as: 'stations' });
-      SWorkOrder.hasMany(models.SWorkOrderProgress, { foreignKey: 'wo_id', as: 'progresses' });
-      SWorkOrder.hasMany(models.SWorkOrderIssue, { foreignKey: 'wo_id', as: 'issues' });
       SWorkOrder.belongsTo(models.SUsers, { foreignKey: 'supervisor_id', as: 'supervisor' });
     }
   }

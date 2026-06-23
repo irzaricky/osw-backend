@@ -3,16 +3,16 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class SWorkOrderIssue extends Model {
     static associate(models) {
-      SWorkOrderIssue.belongsTo(models.SWorkOrder, { foreignKey: 'wo_id', as: 'work_order' });
-      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'reported_by', as: 'reporter' });
-      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'resolved_by', as: 'resolver' });
-      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'paused_by', as: 'pauser' });
-      SWorkOrderIssue.belongsTo(models.SEmployee, { foreignKey: 'resumed_by', as: 'resumer' });
+      SWorkOrderIssue.belongsTo(models.SWorkOrderStation, { foreignKey: 'wo_station_id', as: 'work_order_station' });
+      SWorkOrderIssue.belongsTo(models.SUsers, { foreignKey: 'reported_by', as: 'reporter' });
+      SWorkOrderIssue.belongsTo(models.SUsers, { foreignKey: 'resolved_by', as: 'resolver' });
+      SWorkOrderIssue.belongsTo(models.SUsers, { foreignKey: 'paused_by', as: 'pauser' });
+      SWorkOrderIssue.belongsTo(models.SUsers, { foreignKey: 'resumed_by', as: 'resumer' });
     }
   }
 
   SWorkOrderIssue.init({
-    wo_id: {
+    wo_station_id: {
       type: DataTypes.INTEGER,
       allowNull: false
     },

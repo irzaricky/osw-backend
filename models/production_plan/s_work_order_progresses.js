@@ -3,12 +3,13 @@ import { Model, DataTypes } from 'sequelize';
 export default (sequelize) => {
   class SWorkOrderProgress extends Model {
     static associate(models) {
-      SWorkOrderProgress.belongsTo(models.SWorkOrder, { foreignKey: 'wo_id', as: 'work_order' });
+      SWorkOrderProgress.belongsTo(models.SWorkOrderStation, { foreignKey: 'wo_station_id', as: 'work_order_station' });
+      SWorkOrderProgress.belongsTo(models.SUsers, { foreignKey: 'reported_by', as: 'reporter' });
     }
   }
 
   SWorkOrderProgress.init({
-    wo_id: {
+    wo_station_id: {
       type: DataTypes.INTEGER,
       allowNull: false
     },

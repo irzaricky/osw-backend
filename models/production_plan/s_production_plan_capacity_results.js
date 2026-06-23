@@ -27,7 +27,7 @@ export default (sequelize) => {
       type: DataTypes.DECIMAL(15, 2)
     },
     utilization_pct: {
-      type: DataTypes.DECIMAL(5, 2)
+      type: DataTypes.DECIMAL(10, 2)
     },
     status: {
       type: DataTypes.STRING(50),

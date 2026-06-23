@@ -64,6 +64,10 @@ router.post("/:id/capacity-params", auth.sessionChecker, async (req, res) => {
   await productionPlanModule.saveCapacityParams(req, res);
 });
 
+router.put("/:id/capacity-params", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.updateCapacityParams(req, res);
+});
+
 /** POST /plan/:id/calculate
  *  Run capacity calculation engine for a given line */
 router.post("/:id/calculate", auth.sessionChecker, async (req, res) => {
@@ -88,6 +92,30 @@ router.post("/:id/adjustments", auth.sessionChecker, async (req, res) => {
  *  Remove a specific adjustment */
 router.delete("/:id/adjustments/:adj_id", auth.sessionChecker, async (req, res) => {
   await productionPlanModule.deleteAdjustment(req, res);
+});
+
+/** GET /plan/:id/calendar-preview
+ * Preview calendar view of plan with adjustments applied */
+router.get("/:id/calendar-preview", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.getCalendarPreview(req, res);
+});
+
+/** POST /plan/:id/calendar-adjustments
+ * Apply adjustments to calendar view (used in calendar preview) */
+router.post("/:id/calendar-adjustments", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.addCalendarAdjustment(req, res);
+});
+
+/** PUT /plan/:id/calendar-adjustments/:adj_id
+ * Update a specific calendar adjustment (e.g. change date or quantity) */
+router.put("/:id/calendar-adjustments/:adj_id", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.updateCalendarAdjustment(req, res);
+});
+
+/** DELETE /plan/:id/calendar-adjustments/:adj_id
+ * Remove a specific calendar adjustment */
+router.delete("/:id/calendar-adjustments/:adj_id", auth.sessionChecker, async (req, res) => {
+  await productionPlanModule.deleteCalendarAdjustment(req, res);
 });
 
 // ── Approval Workflow ─────────────────────────────────────────────────────────

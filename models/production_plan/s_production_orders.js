@@ -49,26 +49,6 @@ export default (sequelize) => {
     po_description: {
       type: DataTypes.TEXT
     },
-    total_products: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      defaultValue: 0
-    },
-    total_planned_qty: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      defaultValue: 0
-    },
-    total_scheduled_qty: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      defaultValue: 0
-    },
-    total_actual_qty: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      defaultValue: 0
-    },
     status: {
       type: DataTypes.STRING(50),
       allowNull: false,

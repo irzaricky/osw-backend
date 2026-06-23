@@ -5,24 +5,26 @@ import helper from '../../class/helper.class.js';
 import BaseModule from '../../class/base.module.js';
 
 const {
+  RefTypeCalendars,
   SProductionOrder,
   SProductionOrderProduct,
   SProductionOrderSchedule,
   SProductionOrderRescheduleLog,
   SProductionPlan,
   SProductionPlanDetail,
-  SProductionPlanDetailLine,
   SProductionPlanCapacityResult,
   SProductionPlanCapacityParam,
-  SProductionPlanAdjustment,
   SWorkOrder,
   SWorkOrderStation,
-  SWorkOrderStationJob,
   SWorkOrderMaterial,
+  SWorkOrderProgress,
+  SWorkOrderIssue,
   SBoms,
   SBomDetails,
   SCustomers,
   SParts,
+  SPartRoutingDetails,
+  SRoutingStationMaterial,
   SLines,
   SFactories,
   SShifts,
@@ -31,13 +33,13 @@ const {
   sequelize,
 } = db;
 
-// Includes
+// ─── INCLUDES ───────────────────────────────────────────────────────────────
 
 const PO_HEADER_INCLUDE = [
-  { model: SProductionPlan, as: 'plan', attributes: ['id', 'plan_number', 'plan_description'] },
-  { model: SUsers, as: 'creator',  attributes: ['id', 'email'] },
-  { model: SUsers, as: 'releaser', attributes: ['id', 'email'] },
-  { model: SUsers, as: 'rejector', attributes: ['id', 'email'] },
+  { model: SProductionPlan, as: 'plan',    attributes: ['id', 'plan_number', 'plan_month', 'plan_description'] },
+  { model: SUsers,          as: 'creator',  attributes: ['id', 'email'] },
+  { model: SUsers,          as: 'releaser', attributes: ['id', 'email'] },
+  { model: SUsers,          as: 'rejector', attributes: ['id', 'email'] },
 ];
 
 const PO_PRODUCT_INCLUDE = [
@@ -46,8 +48,7 @@ const PO_PRODUCT_INCLUDE = [
   { model: SLines,     as: 'line',     attributes: ['id', 'line_code', 'name'] },
 ];
 
-// Number Generators
-
+// ─── NUMBER GENERATORS ──────────────────────────────────────────────────────
 async function generatePoNumber(t) {
   const now    = new Date();
   const year   = now.getFullYear();
@@ -92,16 +93,41 @@ async function generateWoNumber(workDate, t) {
   return `${prefix}${String(seq).padStart(5, '0')}`;
 }
 
-// Calendar & Shift Helpers
+// ─── CALENDAR & SHIFT HELPERS ───────────────────────────────────────────────
+async function resolveEffectiveWorkingDaysAndShifts(lineId, planId, startDate, endDate, transaction) {
+  const { SProductionPlanCalendarAdjustment } = db;
 
-async function getWorkingDays(lineId, startDate, endDate, transaction) {
-  const calendars = await SShiftCalendars.findAll({
+  // ── 1. Baca master calendar (non-holiday saja) ────────────────────────────
+  const masterCalendars = await SShiftCalendars.findAll({
     where: {
       line_id:    lineId,
       active:     true,
+      deleted_at: null,
       start_date: { [Op.lte]: endDate },
       end_date:   { [Op.gte]: startDate },
-      deleted_at: null,
+    },
+    include: [
+      {
+        model:    SShifts,
+        as:       'shift',
+        where:    { type: 'REGULAR', category: 'PRODUCTIVE', active: true, deleted_at: null },
+        required: true,
+      },
+      {
+        model:      db.RefTypeCalendars,
+        as:         'type_calendar',
+        attributes: ['is_holiday'],
+      },
+    ],
+    transaction,
+  });
+
+  // ── 2. Baca ADD_SHIFT adjustments dari plan ───────────────────────────────
+  const shiftAdjs = await SProductionPlanCalendarAdjustment.findAll({
+    where: {
+      plan_id:         planId,
+      adjustment_type: 'ADD_SHIFT',
+      date:            { [Op.between]: [startDate, endDate] },
     },
     include: [{
       model:    SShifts,
@@ -112,295 +138,109 @@ async function getWorkingDays(lineId, startDate, endDate, transaction) {
     transaction,
   });
 
-  const dates = new Set();
-  const start = new Date(startDate);
-  const end   = new Date(endDate);
+  // ── 3. Baca ADD_OVERTIME adjustments dari plan ────────────────────────────
+  const overtimeAdjs = await SProductionPlanCalendarAdjustment.findAll({
+    where: {
+      plan_id:         planId,
+      adjustment_type: 'ADD_OVERTIME',
+      date:            { [Op.between]: [startDate, endDate] },
+    },
+    include: [{
+      model:    SShifts,
+      as:       'shift',
+      attributes: ['id', 'shift_number'],
+      required: true,
+    }],
+    transaction,
+  });
 
-  for (const cal of calendars) {
-    const calStartStr = typeof cal.start_date === 'string'
+  // ── 4. Build dayShiftMap: dateStr → Map<shift_number, shiftRecord> ────────
+  // Hanya hari non-holiday dari master yang dimasukkan sebagai base
+  const dayShiftMap = new Map(); // dateStr → Map<shift_number, shiftRecord>
+
+  for (const cal of masterCalendars) {
+    const isHoliday = cal.type_calendar?.is_holiday ?? false;
+    if (isHoliday) continue;
+
+    const calStart = typeof cal.start_date === 'string'
       ? cal.start_date.split('T')[0]
       : new Date(cal.start_date).toISOString().split('T')[0];
-    const calEndStr   = typeof cal.end_date === 'string'
+    const calEnd = typeof cal.end_date === 'string'
       ? cal.end_date.split('T')[0]
       : new Date(cal.end_date).toISOString().split('T')[0];
 
-    const fromStr = calStartStr < startDate ? startDate : calStartStr;
-    const toStr   = calEndStr   > endDate   ? endDate   : calEndStr;
+    const fromStr = calStart < startDate ? startDate : calStart;
+    const toStr   = calEnd   > endDate   ? endDate   : calEnd;
 
-    if (fromStr > toStr) continue; // tidak ada overlap
+    if (fromStr > toStr) continue;
 
-    // Iterasi hari per hari menggunakan Date UTC midnight untuk menghindari DST
     const fromDt = new Date(fromStr + 'T00:00:00Z');
     const toDt   = new Date(toStr   + 'T00:00:00Z');
 
     for (let d = new Date(fromDt); d <= toDt; d.setUTCDate(d.getUTCDate() + 1)) {
-      // Selalu gunakan UTC date components → tidak terpengaruh +07 offset
-      const y  = d.getUTCFullYear();
-      const m  = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const dy = String(d.getUTCDate()).padStart(2, '0');
-      dates.add(`${y}-${m}-${dy}`);
-    }
-  }
+      const dateStr  = d.toISOString().split('T')[0];
+      const shiftNum = cal.shift.shift_number;
 
-  return Array.from(dates).sort();
-}
-
-async function getWorkingDaysWithAdjustment(
-  lineId,
-  startDate,
-  endDate,
-  adjustedWorkingDays,
-  hardCutoffDate,
-  transaction,
-) {
-  // Tentukan batas efektif untuk query kalender master
-  const effectiveEnd = (hardCutoffDate && hardCutoffDate < endDate)
-    ? hardCutoffDate
-    : endDate;
- 
-  // Ambil hari kerja master (Senin–Jumat regular yang ter-record)
-  const calendarDays = await getWorkingDays(lineId, startDate, effectiveEnd, transaction);
- 
-  // Early exit: sudah cukup atau tidak ada adjustment
-  if (!adjustedWorkingDays || calendarDays.length >= adjustedWorkingDays) {
-    return calendarDays;
-  }
- 
-  const extraNeeded  = adjustedWorkingDays - calendarDays.length;
-  const calendarSet  = new Set(calendarDays);
-  const virtualDays  = [];
- 
-  const cutoffDt = new Date(hardCutoffDate ?? effectiveEnd);
-  const startDt  = new Date(startDate);
- 
-  // Kursor mulai dari hari pertama periode produksi (bukan setelah hari terakhir!)
-  const cursor = new Date(startDt);
- 
-  while (virtualDays.length < extraNeeded && cursor <= cutoffDt) {
-    const dateStr = cursor.toISOString().split('T')[0];
- 
-    // Kandidat virtual: tanggal yang belum ada di kalender master
-    if (!calendarSet.has(dateStr)) {
-      virtualDays.push(dateStr);
-    }
- 
-    cursor.setDate(cursor.getDate() + 1);
-  }
- 
-  if (virtualDays.length < extraNeeded) {
-    console.warn(
-      `[getWorkingDaysWithAdjustment] Line ${lineId}: ` +
-      `Layer 1 (gap-fill) hanya menghasilkan ${virtualDays.length} dari ${extraNeeded} virtual days. ` +
-      `Masuk ke Layer 2 (forward-fill setelah ${hardCutoffDate}). ` +
-      `Pertimbangkan memperpanjang production_end_date atau meninjau ulang adjustment.`
-    );
- 
-    // Lanjutkan kursor dari hari setelah cutoff
-    // (cursor sudah ada di posisi cutoffDt + 1 hari karena loop Layer 1 berhenti saat > cutoffDt)
-    const fallbackLimit = new Date(cutoffDt);
-    fallbackLimit.setDate(fallbackLimit.getDate() + 60); // maks 60 hari ke depan sebagai safety cap
- 
-    while (virtualDays.length < extraNeeded && cursor <= fallbackLimit) {
-      const dateStr = cursor.toISOString().split('T')[0];
-      if (!calendarSet.has(dateStr)) {
-        virtualDays.push(dateStr);
-      }
-      cursor.setDate(cursor.getDate() + 1);
-    }
-  }
- 
-  // LAYER 3 — Warning jika masih tidak terpenuhi
-  if (virtualDays.length < extraNeeded) {
-    console.warn(
-      `[getWorkingDaysWithAdjustment] Line ${lineId}: adjusted_working_days=${adjustedWorkingDays} ` +
-      `tetapi hanya ${calendarDays.length + virtualDays.length} hari tersedia ` +
-      `(termasuk setelah fallback 60 hari). ` +
-      `Sisa ${extraNeeded - virtualDays.length} hari tidak bisa diinjeksikan. ` +
-      `Tinjau ulang rencana produksi.`
-    );
-  }
- 
-  return [...calendarDays, ...virtualDays].sort();
-}
-
-function calcShiftMinutes(startTime, endTime) {
-  const [sh, sm] = startTime.split(':').map(Number);
-  const [eh, em] = endTime.split(':').map(Number);
-
-  let startMin = sh * 60 + sm;
-  let endMin   = eh * 60 + em;
-
-  if (endMin <= startMin) endMin += 24 * 60; // overnight
-
-  return endMin - startMin;
-}
-
-async function resolveShiftsForWorkingDays(lineId, workingDays, transaction) {
-  if (!workingDays.length) {
-    return { shifts: [], syntheticDates: new Set(), coverageWarnings: [], dateToCalendars: new Map() };
-  }
- 
-  const allCalendars = await SShiftCalendars.findAll({
-    where: { line_id: lineId, active: true, deleted_at: null },
-    include: [{
-      model:    SShifts,
-      as:       'shift',
-      where:    {
-        type:     'REGULAR',
-        category: 'PRODUCTIVE',
-        active:   true,
-        deleted_at: null,
-      },
-      required: true,
-    }],
-    order:       [['start_date', 'ASC']],
-    transaction,
-  });
- 
-  if (!allCalendars.length) {
-    throw new Error(
-      `No shift calendar with REGULAR PRODUCTIVE shift configured for line ID ${lineId}. ` +
-      `Please set up an active REGULAR PRODUCTIVE shift calendar before generating the schedule.`
-    );
-  }
- 
-  // Petakan setiap working date ke kalender
-  const dateToCalendars = new Map();
- 
-  for (const cal of allCalendars) {
-    const calStart = new Date(cal.start_date);
-    const calEnd   = new Date(cal.end_date);
- 
-    for (const date of workingDays) {
-      const d = new Date(date);
-      if (d >= calStart && d <= calEnd) {
-        if (!dateToCalendars.has(date)) dateToCalendars.set(date, []);
-        dateToCalendars.get(date).push(cal);
+      if (!dayShiftMap.has(dateStr)) dayShiftMap.set(dateStr, new Map());
+      if (!dayShiftMap.get(dateStr).has(shiftNum)) {
+        dayShiftMap.get(dateStr).set(shiftNum, cal.shift);
       }
     }
   }
- 
-  // Identifikasi virtual days (gap)
-  const missingDates     = workingDays.filter((d) => !dateToCalendars.has(d));
-  const syntheticDates   = new Set(missingDates);
-  const coverageWarnings = [];
- 
-  if (missingDates.length > 0) {
-    const firstMissingDt = new Date(missingDates[0]);
- 
-    // Template kalender dengan end_date terdekat sebelum virtual day pertama
-    const candidateTemplates = [...allCalendars]
-      .filter((c) => new Date(c.end_date) <= firstMissingDt)
-      .sort((a, b) => new Date(b.end_date) - new Date(a.end_date));
- 
-    const templatePool = candidateTemplates.length > 0
-      ? candidateTemplates
-      : [...allCalendars].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
- 
-    // Deduplicate by shift_number
-    const seenShiftNumbers = new Set();
-    const templateShifts   = [];
-    for (const cal of templatePool) {
-      if (cal.shift && !seenShiftNumbers.has(cal.shift.shift_number)) {
-        seenShiftNumbers.add(cal.shift.shift_number);
-        templateShifts.push({ cal, shift: cal.shift });
-      }
-    }
- 
-    // Injeksi pseudo-calendar in-memory (TIDAK INSERT ke DB)
-    for (const missingDate of missingDates) {
-      const pseudoCalendars = templateShifts.map(({ cal, shift }) => ({
-        id:           null,
-        line_id:      lineId,
-        shift_id:     shift.id,
-        start_date:   missingDate,
-        end_date:     missingDate,
-        active:       true,
-        deleted_at:   null,
-        shift:        { ...(shift.dataValues ?? shift) },
-        _isSynthetic: true,
-      }));
- 
-      dateToCalendars.set(missingDate, pseudoCalendars);
- 
-      coverageWarnings.push(
-        `Line ${lineId}: tanggal ${missingDate} adalah virtual day (weekend/libur). ` +
-        `Template shift PRODUCTIVE disalin dari kalender terdekat ` +
-        `(${templateShifts.length} shift(s)). In-memory only — tidak ditulis ke DB.`
-      );
+
+  // ── 5. Tambahkan shift dari ADD_SHIFT adjustments ─────────────────────────
+  // Bisa mengaktifkan hari libur (hari baru) ATAU menambah shift ekstra
+  for (const adj of shiftAdjs) {
+    const dateStr  = typeof adj.date === 'string' ? adj.date.split('T')[0] : new Date(adj.date).toISOString().split('T')[0];
+    const shiftNum = adj.shift.shift_number;
+
+    if (!dayShiftMap.has(dateStr)) dayShiftMap.set(dateStr, new Map());
+    if (!dayShiftMap.get(dateStr).has(shiftNum)) {
+      dayShiftMap.get(dateStr).set(shiftNum, adj.shift);
     }
   }
- 
-  // Bangun grouped shifts 
-  const allShiftsAcrossDates = [...dateToCalendars.values()].flat();
-  const seenShiftIds         = new Set();
-  const uniqueShifts         = [];
- 
-  for (const cal of allShiftsAcrossDates) {
-    if (cal.shift && !seenShiftIds.has(cal.shift.id)) {
-      seenShiftIds.add(cal.shift.id);
-      uniqueShifts.push(cal.shift);
+
+  // ── 6. Build overtimeByDateShift: `dateStr_shiftNumber` → total OT minutes ─
+  const overtimeByDateShift = new Map();
+  for (const adj of overtimeAdjs) {
+    const shiftNum = adj.shift?.shift_number;
+    if (!shiftNum) continue;
+    const dateStr = typeof adj.date === 'string' ? adj.date.split('T')[0] : new Date(adj.date).toISOString().split('T')[0];
+    const key     = `${dateStr}_${shiftNum}`;
+    overtimeByDateShift.set(key, (overtimeByDateShift.get(key) ?? 0) + (adj.overtime_minutes ?? 0));
+  }
+
+  // ── 7. Build output ───────────────────────────────────────────────────────
+  const workingDays = [...dayShiftMap.keys()].sort();
+
+  if (workingDays.length === 0) return null;
+
+  // Kumpulkan semua unique shifts (untuk referensi — bukan dipakai di slot builder)
+  const shiftByNumber = new Map();
+  for (const shiftMap of dayShiftMap.values()) {
+    for (const [num, shiftRec] of shiftMap.entries()) {
+      if (!shiftByNumber.has(num)) shiftByNumber.set(num, shiftRec);
     }
   }
- 
-  const shiftGroupMap = new Map();
-  for (const shift of uniqueShifts) {
-    const num = shift.shift_number;
-    if (!shiftGroupMap.has(num)) {
-      shiftGroupMap.set(num, {
-        representative:    null,
-        productiveMinutes: 0,
-        segmentIds:        [],
-      });
-    }
- 
-    const group = shiftGroupMap.get(num);
-    group.segmentIds.push(shift.id);
- 
-    // Setelah FIX A, semua shift di sini sudah PRODUCTIVE — tidak perlu guard category
-    group.productiveMinutes += calcShiftMinutes(shift.start_time, shift.end_time);
-    if (!group.representative || shift.id < group.representative.id) {
-      group.representative = shift;
-    }
-  }
- 
-  if (shiftGroupMap.size === 0) {
-    throw new Error(`No REGULAR PRODUCTIVE shifts found for line ID ${lineId}.`);
-  }
- 
-  const shifts = [...shiftGroupMap.entries()]
+  const allShifts = [...shiftByNumber.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([shiftNumber, group]) => ({
-      ...(group.representative.dataValues ?? group.representative),
-      shift_number:       shiftNumber,
-      productive_minutes: group.productiveMinutes,
-      segment_ids:        group.segmentIds,
-      name:               group.representative.name,
-    }));
- 
-  return { shifts, syntheticDates, coverageWarnings, dateToCalendars };
-}
+    .map(([, shift]) => shift);
 
-// Routing Helpers
-async function getDetailLinesByDetailIds(detailIds, transaction) {
-  if (!detailIds.length) return new Map();
-
-  const rows = await SProductionPlanDetailLine.findAll({
-    where:       { plan_detail_id: detailIds, deleted_at: null },
-    attributes:  ['plan_detail_id', 'line_id', 'sequence'],
-    order:       [['sequence', 'ASC']],
-    transaction,
-  });
-
-  const map = new Map();
-  for (const row of rows) {
-    if (!map.has(row.plan_detail_id)) map.set(row.plan_detail_id, []);
-    map.get(row.plan_detail_id).push({ line_id: row.line_id, sequence: row.sequence });
+  // dayShiftsMap: dateStr → array of shiftRecord sorted by shift_number
+  const dayShiftsMap = new Map();
+  for (const [dateStr, shiftMap] of dayShiftMap.entries()) {
+    dayShiftsMap.set(
+      dateStr,
+      [...shiftMap.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, shift]) => shift)
+    );
   }
-  return map;
+
+  return { workingDays, allShifts, dayShiftsMap, overtimeByDateShift };
 }
 
-// Capacity Resolution
+// ─── CAPACITY RESOLUTION
 async function resolveCapacityPerLine(planId, lineIds, transaction) {
   const capacityResults = await SProductionPlanCapacityResult.findAll({
     where: { plan_id: planId, line_id: lineIds },
@@ -409,88 +249,54 @@ async function resolveCapacityPerLine(planId, lineIds, transaction) {
   const resultByLine = new Map(capacityResults.map((r) => [r.line_id, r]));
 
   const planParams = await SProductionPlanCapacityParam.findAll({
-    where: { plan_id: planId, line_id: lineIds, param_type: 'BASE' },
+    where: { plan_id: planId, line_id: lineIds },
     transaction,
   });
   const planParamByLine = new Map(planParams.map((p) => [p.line_id, p]));
 
-  const adjustments = await SProductionPlanAdjustment.findAll({
-    where:       { plan_id: planId, line_id: lineIds, deleted_at: null },
-    order:       [['sequence', 'ASC']],
-    transaction,
-  });
-  const adjByLine = new Map();
-  for (const adj of adjustments) {
-    if (!adjByLine.has(adj.line_id)) adjByLine.set(adj.line_id, []);
-    adjByLine.get(adj.line_id).push(adj);
-  }
-
   const map = new Map();
 
   for (const lineId of lineIds) {
-    const base   = planParamByLine.get(lineId);
+    const param  = planParamByLine.get(lineId);
     const result = resultByLine.get(lineId);
 
-    if (!base) {
+    if (!param) {
       map.set(lineId, {
-        effectiveMinPerShift: 0, maxTaktMin: 0,
-        capPerShift: 0, capPerDay: 0, totalCapUnits: 0,
-        shiftsPerDay: 1, workingDays: 0,
-        overtimeHoursPerDay: 0, overtimeHoursPerShift: 0,
-        maxTaktSec: 0, efficiencyFactor: 1,
+        workingHoursPerShift: 0, effectiveMinPerShift: 0,
+        maxTaktMin: 0, capPerShift: 0, capPerDay: 0,
+        totalCapUnits: 0, shiftsPerDay: 1,
+        workingDays: 0, maxTaktSec: 0, efficiencyFactor: 1,
       });
       continue;
     }
 
-    let workingDays          = base.working_days;
-    let shiftsPerDay         = base.shifts_per_day;
-    let workingHoursPerShift = parseFloat(base.working_hours_per_shift);
-    let efficiencyFactor     = parseFloat(base.efficiency_factor);
-    let accumulatedOT        = 0;
+    const workingDays          = param.working_days;
+    const shiftsPerDay         = param.shifts_per_day;
+    const workingHoursPerShift = parseFloat(param.working_hours_per_shift);
+    const efficiencyFactor     = parseFloat(param.efficiency_factor);
 
-    for (const adj of (adjByLine.get(lineId) ?? [])) {
-      switch (adj.adjustment_type) {
-        case 'WORKING_DAYS':   workingDays          = Number(adj.adjusted_value); break;
-        case 'SHIFTS_PER_DAY': shiftsPerDay         = Number(adj.adjusted_value); break;
-        case 'WORKING_HOURS':  workingHoursPerShift = Number(adj.adjusted_value); break;
-        case 'MANPOWER':                                                              break;
-        case 'EFFICIENCY':     efficiencyFactor     = Number(adj.adjusted_value); break;
-        case 'OVERTIME':       accumulatedOT       += Number(adj.adjusted_value); break;
-        default: break;
-      }
-    }
-
-    const maxTaktSec = parseFloat(result?.max_takt_time ?? base.max_takt_time ?? 0);
+    const maxTaktSec = parseFloat(result?.max_takt_time ?? param.max_takt_time ?? 0);
     if (!maxTaktSec || maxTaktSec <= 0) {
       map.set(lineId, {
-        effectiveMinPerShift: 0, maxTaktMin: 0,
-        capPerShift: 0, capPerDay: 0, totalCapUnits: 0,
-        shiftsPerDay, workingDays,
-        overtimeHoursPerDay: accumulatedOT,
-        overtimeHoursPerShift: accumulatedOT > 0
-          ? accumulatedOT / (shiftsPerDay > 0 ? shiftsPerDay : 1)
-          : 0,
+        workingHoursPerShift, effectiveMinPerShift: 0,
+        maxTaktMin: 0, capPerShift: 0, capPerDay: 0,
+        totalCapUnits: 0, shiftsPerDay, workingDays,
         maxTaktSec, efficiencyFactor,
       });
       continue;
     }
 
-    const maxTaktMin        = maxTaktSec / 60;
-    const baseMinPerShift   = workingHoursPerShift * 60;
+    const maxTaktMin           = maxTaktSec / 60;
+    const effectiveMinPerShift = workingHoursPerShift * 60 * efficiencyFactor;
 
-    // Overtime semantics
-    const safeShiftsPerDay  = shiftsPerDay > 0 ? shiftsPerDay : 1;
-    const otHoursPerShift   = accumulatedOT / safeShiftsPerDay;
-    const otMinPerShift     = otHoursPerShift * 60;
-
-    // effective_min_per_shift harus identik dengan calcCapacityUnits di plan-module.js
-    const effectiveMinPerShift = (baseMinPerShift + otMinPerShift) * efficiencyFactor;
-
-    const capPerShift   = Math.floor(effectiveMinPerShift / maxTaktMin);
-    const capPerDay     = capPerShift * shiftsPerDay;
+    // capPerShift dihitung dari jam reguler saja — dipakai untuk validasi awal.
+    // Kalkulasi aktual per slot (termasuk overtime) dilakukan di buildShiftSlotMap.
+    const capPerShift  = Math.floor(effectiveMinPerShift / maxTaktMin);
+    const capPerDay    = capPerShift * shiftsPerDay;
     const totalCapUnits = capPerDay * workingDays;
 
     map.set(lineId, {
+      workingHoursPerShift,   // ← tambahan — dipakai buildShiftSlotMap
       effectiveMinPerShift,
       maxTaktMin,
       capPerShift,
@@ -498,30 +304,12 @@ async function resolveCapacityPerLine(planId, lineIds, transaction) {
       totalCapUnits,
       shiftsPerDay,
       workingDays,
-      overtimeHoursPerDay:   accumulatedOT,
-      overtimeHoursPerShift: otHoursPerShift,
       maxTaktSec,
       efficiencyFactor,
     });
   }
 
   return map;
-}
-
-/**
- * Menghitung cap_per_shift dari data shift kalender aktual.
- */
-function calcCapacityFromShifts(groupedShifts, maxTaktTimeSec, efficiencyFactor = 1.0, overtimeMinPerShift = 0) {
-  if (!maxTaktTimeSec || maxTaktTimeSec <= 0) return groupedShifts;
-
-  const maxTaktMin = maxTaktTimeSec / 60;
-
-  return groupedShifts.map((shift) => {
-    const productiveMin = shift.productive_minutes ?? 0;
-    const effectiveMin  = (productiveMin + overtimeMinPerShift) * efficiencyFactor;
-    const capPerShift   = effectiveMin > 0 ? Math.floor(effectiveMin / maxTaktMin) : 0;
-    return { ...shift, cap_per_shift: capPerShift };
-  });
 }
 
 async function resolveShiftCalendar(lineId, shiftId, productionDate, transaction) {
@@ -576,116 +364,118 @@ async function resolveShiftCalendar(lineId, shiftId, productionDate, transaction
   return { cal: null, isExact: false };
 }
 
-// Capacity Slot Builder
-/**
- * Membangun slot-capacity map: key = "YYYY-MM-DD_shiftNumber", value = unit/slot.
- */
-function buildShiftSlotMap(workingDays, shifts, capPerShiftOrObj, maxTaktMinParam, syntheticDates = new Set()) {
+// ─── OVERTIME FLAG DERIVATION (read-time, no DB boolean column) ────────────
+function deriveOvertimeForSlotGroup(rows) {
+  const sorted = [...rows].sort((a, b) => (a.row_sequence ?? 0) - (b.row_sequence ?? 0)); // Allocation order within the slot
+  const regularCap = sorted[0]?.regular_cap_snapshot ?? sorted[0]?.line_capacity_per_day ?? 0; // Constant for every row in this slot
+  let regularUsed = 0;
+  return sorted.map((row) => {
+    const qty = row.planned_qty_per_day ?? 0;
+    const regularPortion = Math.max(0, Math.min(qty, regularCap - regularUsed)); // Units of this row still covered by regular capacity
+    const overtimeQty = qty - regularPortion; // Remainder spills into overtime
+    regularUsed += regularPortion;
+    return { ...row, has_overtime: overtimeQty > 0, overtime_qty: overtimeQty };
+  });
+}
+
+function deriveOvertimeFlags(scheduleRows) {
+  const groups = new Map(); // Group rows by the slot they were allocated from
+  for (const row of scheduleRows) {
+    const key = `${row.production_date}_${row.shift_id}_${row.line_id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const result = [];
+  for (const groupRows of groups.values()) result.push(...deriveOvertimeForSlotGroup(groupRows));
+  return result;
+}
+
+// ─── CAPACITY SLOT BUILDER ──────────────────────────────────────────────────
+function buildShiftSlotMap(dayShiftsMap, capInfo, overtimeByDateShift) {
+  // slot value: { regularCap, overtimeCap, totalCap, hasOvertime }
   const slotMap = new Map();
 
-  // Guard: tanpa hari kerja atau shift, tidak ada slot
-  if (!workingDays.length || !shifts.length) return slotMap;
+  if (!dayShiftsMap || !capInfo) return slotMap;
 
-  let effectiveMinPerShift = 0;
-  let maxTaktMin           = 0;
-  let directCapPerShift    = 0; // fallback mode (B)
+  const { workingHoursPerShift, maxTaktMin, efficiencyFactor } = capInfo;
+  const regularMinPerShift = workingHoursPerShift * 60;
 
-  if (capPerShiftOrObj && typeof capPerShiftOrObj === 'object') {
-    // Mode (A): object capacityInfo dari resolveCapacityPerLine
-    effectiveMinPerShift = capPerShiftOrObj.effectiveMinPerShift ?? 0;
-    maxTaktMin           = capPerShiftOrObj.maxTaktMin           ?? 0;
-    directCapPerShift    = capPerShiftOrObj.capPerShift          ?? 0;
-  } else if (typeof capPerShiftOrObj === 'number') {
-    // Mode (B): nilai langsung per shift
-    directCapPerShift = capPerShiftOrObj;
-  }
+  if (maxTaktMin <= 0 || regularMinPerShift <= 0) return slotMap;
 
-  const guaranteedCapPerShift = directCapPerShift > 0
-    ? directCapPerShift
-    : (maxTaktMin > 0 && effectiveMinPerShift > 0
-        ? Math.floor(effectiveMinPerShift / maxTaktMin)
-        : 0);
+  // capPerShift reguler — dihitung sekali, sama untuk semua slot
+  const capPerShift = Math.floor((regularMinPerShift * efficiencyFactor) / maxTaktMin);
 
-  // Jika maxTaktMin valid dan effectiveMinPerShift valid → Mode (A) dengan carry-over
-  if (maxTaktMin > 0 && effectiveMinPerShift > 0) {
-    // Carry-over akumulasi menit sisa dari slot sebelumnya (dalam HARI yang sama).
-    // Reset setiap ganti hari agar tidak ada bocoran kapasitas lintas-hari.
-    for (const date of workingDays) {
-      if (syntheticDates.has(date)) {
-        for (const shift of shifts) {
-          const slotKey = `${date}_${shift.shift_number}`;
-          slotMap.set(slotKey, guaranteedCapPerShift);
-        }
-        continue;
-      }
-
-      let carriedOverMin = 0; // reset per hari — tidak boleh carry-over lintas hari!
-      for (const shift of shifts) {
-        const slotKey           = `${date}_${shift.shift_number}`;
-        const totalAvailableMin = effectiveMinPerShift + carriedOverMin;
-        const unitsThisShift    = Math.floor(totalAvailableMin / maxTaktMin);
-
-        slotMap.set(slotKey, unitsThisShift);
-        // Sisa menit carry ke shift berikutnya dalam hari yang sama
-        carriedOverMin = totalAvailableMin - (unitsThisShift * maxTaktMin);
-      }
-    }
-    return slotMap;
-  }
-
-  // Mode (B) atau fallback: gunakan directCapPerShift langsung (tidak ada carry-over)
-  const fallbackCap = directCapPerShift > 0 ? directCapPerShift : 0;
-  for (const date of workingDays) {
+  for (const [date, shifts] of dayShiftsMap.entries()) {
     for (const shift of shifts) {
-      slotMap.set(`${date}_${shift.shift_number}`, fallbackCap);
+      const slotKey   = `${date}_${shift.shift_number}`;
+      const otMinutes = overtimeByDateShift?.get(slotKey) ?? 0;
+
+      let totalCap;
+      let overtimeCap;
+
+      if (otMinutes > 0) {
+        // Gabungkan jam reguler + overtime sebelum kalikan efisiensi
+        const totalMinPerShift = regularMinPerShift + otMinutes;
+        const totalEffMin      = totalMinPerShift * efficiencyFactor;
+        totalCap               = Math.floor(totalEffMin / maxTaktMin);
+        overtimeCap            = totalCap - capPerShift;
+      } else {
+        totalCap    = capPerShift;
+        overtimeCap = 0;
+      }
+
+      slotMap.set(slotKey, {
+        regularCap:  capPerShift,
+        overtimeCap,
+        totalCap,
+        hasOvertime: overtimeCap > 0,
+      });
     }
   }
+
   return slotMap;
 }
 
-// Leveled Target Map Builder
+// ─── LEVELED TARGET MAP BUILDER ─────────────────────────────────────────────
 function buildLeveledTargetMap(products, workingDaysByLine, shiftsByLine, initialSlotMapByLine) {
   const targetMap = new Map();
   for (const p of products) targetMap.set(p.id, new Map());
- 
+
   const productsByLine = new Map();
   for (const p of products) {
     if (!productsByLine.has(p.line_id)) productsByLine.set(p.line_id, []);
     productsByLine.get(p.line_id).push(p);
   }
- 
+
   for (const [lineId, lineProducts] of productsByLine.entries()) {
     const days    = workingDaysByLine.get(lineId) ?? [];
     const shifts  = shiftsByLine.get(lineId)      ?? [];
-    // [FIX B] Gunakan slotMap aktual (post-carryover) sebagai sumber kapasitas
     const slotMap = initialSlotMapByLine.get(lineId);
- 
+
     if (!slotMap || !days.length || !shifts.length) continue;
- 
-    // Verifikasi ada kapasitas yang bisa didistribusikan
+
     const totalCap = [...slotMap.values()].reduce((s, v) => s + v, 0);
     if (totalCap === 0) continue;
- 
+
     const remainingQtyMap = new Map(lineProducts.map((p) => [p.id, p.planned_qty]));
- 
+
     const queue = [...lineProducts].sort(
       (a, b) => (a.sequence ?? 1) - (b.sequence ?? 1)
              || new Date(a.delivery_date) - new Date(b.delivery_date)
     );
     let queueIdx = 0;
- 
+
     for (const date of days) {
       for (const shift of shifts) {
         const slotKey = `${date}_${shift.shift_number}`;
-        // [FIX B] capLeft diambil dari slotMap aktual, bukan nilai statis
-        let capLeft    = slotMap.get(slotKey) ?? 0;
+        let capLeft   = slotMap.get(slotKey) ?? 0;
         if (capLeft <= 0) continue;
- 
+
         let safetyBreak = 0;
- 
+
         while (capLeft > 0 && safetyBreak < lineProducts.length * 2) {
           safetyBreak++;
- 
+
           let foundActive = false;
           for (let attempt = 0; attempt < queue.length; attempt++) {
             const idx = (queueIdx + attempt) % queue.length;
@@ -698,11 +488,11 @@ function buildLeveledTargetMap(products, workingDaysByLine, shiftsByLine, initia
             }
           }
           if (!foundActive) break;
- 
+
           const activeProduct = queue[queueIdx];
           const rem           = remainingQtyMap.get(activeProduct.id) ?? 0;
           const allocSlot     = Math.min(rem, capLeft);
- 
+
           if (allocSlot > 0) {
             const productTargetMap = targetMap.get(activeProduct.id);
             const existing         = productTargetMap.get(slotKey) ?? 0;
@@ -710,498 +500,157 @@ function buildLeveledTargetMap(products, workingDaysByLine, shiftsByLine, initia
             remainingQtyMap.set(activeProduct.id, rem - allocSlot);
             capLeft -= allocSlot;
           }
- 
+
           queueIdx = (queueIdx + 1) % queue.length;
         }
       }
     }
- 
-    // Validasi — setelah fix seharusnya tidak ada mismatch
+
     for (const p of lineProducts) {
       const totalTarget = [...(targetMap.get(p.id)?.values() ?? [])].reduce((s, v) => s + v, 0);
       if (totalTarget !== p.planned_qty) {
         console.warn(
           `[buildLeveledTargetMap] Line ${lineId}: Target mismatch product id=${p.id} ` +
           `(plan_detail_id=${p.plan_detail_id}): ` +
-          `expected=${p.planned_qty}, got=${totalTarget}, diff=${p.planned_qty - totalTarget}. ` +
-          `Kemungkinan kapasitas line (${totalCap}) tidak mencukupi demand produk ini.`
+          `expected=${p.planned_qty}, got=${totalTarget}, diff=${p.planned_qty - totalTarget}.`
         );
       }
     }
   }
- 
+
   return targetMap;
 }
 
-// Overlapping / Transfer-Batch Scheduler
-function buildOverlappingSchedule({
+// ─── SCHEDULER ─────────────────────────────────
+function buildSchedule({
   products,
   workingDaysByLine,
-  shiftsByLine,
+  dayShiftsMapByLine,
   initialSlotMapByLine,
   lineByIdMap,
-  capPerShiftByLine,
-  capacityInfoByLine,
   po_id,
+  poEndDate,
+  occupiedSlotMap = new Map(), // Map<`date_shiftNumber`, usedQty> from sibling Released POs
 }) {
   const scheduleRows = [];
   const errors       = [];
   let   globalSeq    = 0;
 
-  // clone slotMap agar original tidak berubah
+  // Deep copy slot map and apply occupied slots from sibling POs upfront
   const slotRemainingCap = new Map();
   for (const [lineId, slotMap] of initialSlotMapByLine.entries()) {
-    slotRemainingCap.set(lineId, new Map(slotMap));
-  }
-
-  const leveledTargetMap = buildLeveledTargetMap(
-    products, workingDaysByLine, shiftsByLine, initialSlotMapByLine
-  );
-
-  const allSequences = [...new Set(products.map((p) => p.sequence ?? 1))].sort((a, b) => a - b);
-  const totalStages  = allSequences.length;
-
-  console.info(
-    `[buildOverlappingSchedule] Continuous Flow mode. ` +
-    `Total stages=${totalStages}. ` +
-    `Stage order: [${allSequences.join(',')}]. ` +
-    `Strategy: Single-pass forward dengan SS pipelining.`
-  );
-
-  // Cumulative yield tracking (per detail × stage × line)
-  const cumulativeYield     = new Map();
-  const stageCompletionSlot = new Map();
-
-  // Peta urutan stage per plan_detail_id
-  const detailStagesMap = new Map();
-  for (const p of products) {
-    const id  = p.plan_detail_id;
-    const seq = p.sequence ?? 1;
-    if (!detailStagesMap.has(id)) detailStagesMap.set(id, new Set());
-    detailStagesMap.get(id).add(seq);
-  }
-  for (const [id, seqSet] of detailStagesMap.entries()) {
-    detailStagesMap.set(id, [...seqSet].sort((a, b) => a - b));
-  }
-
-  // bandingkan dua slot secara kronologis
-  function compareSlots(dateA, shiftNumA, dateB, shiftNumB) {
-    if (dateA < dateB) return -1;
-    if (dateA > dateB) return  1;
-    return shiftNumA - shiftNumB;
-  }
-
-  // Bangun slot order per lini (forward dan reverse)
-  const slotOrderByLine        = new Map(); // ascending (forward)
-  const slotOrderReverseByLine = new Map(); // descending (backward)
-
-  for (const [lineId, slotMap] of initialSlotMapByLine.entries()) {
-    const days   = workingDaysByLine.get(lineId) ?? [];
-    const shifts = shiftsByLine.get(lineId) ?? [];
-    const order  = [];
-    for (const date of days) {
-      for (const shift of shifts) {
-        const slotKey = `${date}_${shift.shift_number}`;
-        if (slotMap.has(slotKey)) {
-          order.push({ date, shiftNumber: shift.shift_number, slotKey });
-        }
-      }
-    }
-    slotOrderByLine.set(lineId, order);
-    slotOrderReverseByLine.set(lineId, [...order].reverse());
-  }
-
-  // Helper: tulis satu schedule row
-  function writeScheduleRow({ product, date, shiftNumber, plannedQty, remainingCap, stage, lineObj }) {
-    const lineId   = product.line_id;
-    const shifts   = shiftsByLine.get(lineId) ?? [];
-    const shiftRec = shifts.find((s) => s.shift_number === shiftNumber) ?? shifts[0];
-
-    scheduleRows.push({
-      po_id,
-      po_product_id:         product.id,
-      row_sequence:          globalSeq++,
-      production_date:       date,
-      line_id:               lineId,
-      shift_id:              shiftRec?.id ?? null,
-      part_id:               product.part_id,
-      sequence:              stage,
-      planned_qty_per_day:   plannedQty,
-      actual_qty_per_day:    0,
-      line_capacity_per_day: remainingCap,
-      utilization_pct:       remainingCap > 0
-        ? Math.round((plannedQty / remainingCap) * 10000) / 100
-        : 0,
-      status:              'Scheduled',
-      line_name_snapshot:  lineObj?.name ?? null,
-      shift_name_snapshot: shiftRec?.name ?? null,
-    });
-  }
-
-  // Helper: update stageCompletionSlot
-  function updateCompletion(planDetailId, stage, date, shiftNumber) {
-    if (!stageCompletionSlot.has(planDetailId)) {
-      stageCompletionSlot.set(planDetailId, new Map());
-    }
-    const detailCompMap = stageCompletionSlot.get(planDetailId);
-    const existing      = detailCompMap.get(stage);
-    if (
-      !existing ||
-      compareSlots(date, shiftNumber, existing.date, existing.shiftNumber) > 0
-    ) {
-      detailCompMap.set(stage, { date, shiftNumber });
-    }
-  }
-
-  // Virtual Overtime: injeksi kapasitas tambahan per slot
-  function getOvertimeCapForSlot(lineId, slotKey) {
-    const info = capacityInfoByLine?.get(lineId);
-    if (!info || info.capPerShift <= 0) return 0;
-    // Overtime virtual = 1x capPerShift per slot (setara 1 shift penuh)
-    return info.capPerShift;
-  }
-
-  // [v3] resolvePipelineStart — Start-to-Start Continuous Flow
-  function resolvePipelineStart(product, stage, prevStage) {
-    const prevStageProducts = products.filter(
-      (p) => (p.sequence ?? 1) === prevStage && p.plan_detail_id === product.plan_detail_id
-    );
-
-    if (!prevStageProducts.length) return { date: null, shiftNumber: -Infinity };
-
-    // Cari slot PERTAMA upstream yang menghasilkan unit (SS offset)
-    let firstYieldDate  = null;
-    let firstYieldShift = Infinity;
-
-    for (const upstream of prevStageProducts) {
-      const yieldKey = `${product.plan_detail_id}_${prevStage}_${upstream.line_id}`;
-      const yieldMap = cumulativeYield.get(yieldKey);
-
-      if (!yieldMap || yieldMap.size === 0) continue;
-
-      const upstreamSlotOrder = slotOrderByLine.get(upstream.line_id);
-      if (!upstreamSlotOrder) continue;
-
-      let prevCumQty = 0;
-      for (const { date, shiftNumber, slotKey } of upstreamSlotOrder) {
-        const cumQty = yieldMap.get(slotKey) ?? prevCumQty;
-        if (cumQty > 0 && prevCumQty === 0) {
-          // Slot pertama yang menghasilkan unit ini titik SS downstream bisa mulai
-          if (
-            firstYieldDate === null ||
-            compareSlots(date, shiftNumber, firstYieldDate, firstYieldShift) < 0
-          ) {
-            firstYieldDate  = date;
-            firstYieldShift = shiftNumber;
-          }
-          break;
-        }
-        prevCumQty = cumQty;
-      }
-    }
-
-    if (firstYieldDate !== null) {
-      return { date: firstYieldDate, shiftNumber: firstYieldShift };
-    }
-
-    // Fallback A: upstream terjadwal tapi yieldMap belum terisi
-    const upstreamCompletion = stageCompletionSlot.get(product.plan_detail_id)?.get(prevStage);
-    if (upstreamCompletion) {
-      return { date: upstreamCompletion.date, shiftNumber: upstreamCompletion.shiftNumber };
-    }
-
-    // Fallback B: upstream benar-benar zero yield — catat warning kapasitas
-    const upstreamLineIds   = [...new Set(prevStageProducts.map((p) => p.line_id))];
-    const upstreamLineNames = upstreamLineIds
-      .map((lid) => lineByIdMap.get(lid)?.name ?? `Line ID ${lid}`)
-      .join(', ');
-    const upstreamTotalQty  = prevStageProducts.reduce((s, p) => s + p.planned_qty, 0);
-
-    console.warn(
-      `[ContinuousFlow] Stage ${stage} (detail=${product.plan_detail_id}): ` +
-      `upstream stage ${prevStage} pada lini "${upstreamLineNames}" yield=0. ` +
-      `Downstream dijadwalkan tanpa constraint SS (safe fallback). ` +
-      `Periksa kapasitas atau working_days lini "${upstreamLineNames}".`
-    );
-    errors.push(
-      `[PERINGATAN-KAPASITAS] Stage ${stage} (plan_detail_id=${product.plan_detail_id}, ` +
-      `lini downstream: ${lineByIdMap.get(product.line_id)?.name ?? product.line_id}): ` +
-      `Stage hulu ${prevStage} pada lini "${upstreamLineNames}" tidak menghasilkan unit ` +
-      `(target qty: ${upstreamTotalQty}). ` +
-      `Downstream dijadwalkan tanpa batasan urutan (safe fallback). ` +
-      `Solusi: tambahkan adjustment WORKING_DAYS atau OVERTIME untuk lini "${upstreamLineNames}".`
-    );
-
-    return { date: null, shiftNumber: -Infinity };
-  }
-
-  // Fungsi alokasi slot: forward (ascending date)
-  function allocateForward({
-    product, stage, slotOrder, slotMap, lineObj,
-    earliestDate, earliestShiftNum,
-    productTargets, remainingQtyRef,
-  }) {
-    const myYieldKey = `${product.plan_detail_id}_${stage}_${product.line_id}`;
-    if (!cumulativeYield.has(myYieldKey)) cumulativeYield.set(myYieldKey, new Map());
-    const myYieldMap = cumulativeYield.get(myYieldKey);
-    let   cumQty     = 0;
-    let   lastDate   = null;
-    let   lastShift  = null;
-
-    for (const { date, shiftNumber, slotKey } of slotOrder) {
-      if (remainingQtyRef.value <= 0) break;
-
-      // SS Pipeline check: downstream tidak bisa produksi sebelum upstream
-      // menghasilkan unit pertama (titik SS).
-      if (earliestDate !== null) {
-        const cmp = compareSlots(date, shiftNumber, earliestDate, earliestShiftNum);
-        if (cmp < 0) {
-          myYieldMap.set(slotKey, cumQty);
-          continue;
-        }
-      }
-
-      const remainingCap = slotMap.get(slotKey) ?? 0;
-
-      if (remainingCap <= 0) {
-        myYieldMap.set(slotKey, cumQty);
-        continue;
-      }
-
-      const targetQty  = productTargets.get(slotKey) ?? 0;
-      const plannedQty = Math.min(
-        targetQty > 0 ? targetQty : remainingCap,
-        remainingCap,
-        remainingQtyRef.value
-      );
-      if (plannedQty <= 0) {
-        myYieldMap.set(slotKey, cumQty);
-        continue;
-      }
-
-      writeScheduleRow({ product, date, shiftNumber, plannedQty, remainingCap, stage, lineObj });
-      slotMap.set(slotKey, remainingCap - plannedQty);
-      remainingQtyRef.value -= plannedQty;
-      cumQty                += plannedQty;
-      lastDate               = date;
-      lastShift              = shiftNumber;
-      myYieldMap.set(slotKey, cumQty);
-    }
-
-    if (lastDate !== null) updateCompletion(product.plan_detail_id, stage, lastDate, lastShift);
-  }
-
-  // ── Fungsi alokasi slot: backward (descending date)
-  function allocateBackward({
-    product, stage, slotOrderReverse, slotMap, lineObj,
-    latestDate, latestShiftNum,
-    productTargets, remainingQtyRef,
-  }) {
-    const myYieldKey = `${product.plan_detail_id}_${stage}_${product.line_id}`;
-    if (!cumulativeYield.has(myYieldKey)) cumulativeYield.set(myYieldKey, new Map());
-    const myYieldMap = cumulativeYield.get(myYieldKey);
-    let   firstDate  = null;
-    let   firstShift = null;
-    const rowsBuffer = []; // buffer sementara sebelum dibalik ke ascending
-
-    for (const { date, shiftNumber, slotKey } of slotOrderReverse) {
-      if (remainingQtyRef.value <= 0) break;
-
-      if (latestDate !== null) {
-        const cmp = compareSlots(date, shiftNumber, latestDate, latestShiftNum);
-        if (cmp > 0) continue;
-      }
-
-      const remainingCap = slotMap.get(slotKey) ?? 0;
-      if (remainingCap <= 0) continue;
-
-      const targetQty  = productTargets.get(slotKey) ?? 0;
-      const plannedQty = Math.min(
-        targetQty > 0 ? targetQty : remainingCap,
-        remainingCap,
-        remainingQtyRef.value
-      );
-      if (plannedQty <= 0) continue;
-
-      rowsBuffer.push({ date, shiftNumber, slotKey, plannedQty, remainingCap });
-      slotMap.set(slotKey, remainingCap - plannedQty);
-      remainingQtyRef.value -= plannedQty;
-    }
-
-    // Flush buffer dalam urutan ascending agar row_sequence dan production_date konsisten.
-    rowsBuffer.reverse();
-    let runningForwardQty = 0;
-    for (const { date, shiftNumber, plannedQty, remainingCap } of rowsBuffer) {
-      writeScheduleRow({ product, date, shiftNumber, plannedQty, remainingCap, stage, lineObj });
-      runningForwardQty += plannedQty;
-      myYieldMap.set(`${date}_${shiftNumber}`, runningForwardQty);
-      if (firstDate === null) { firstDate = date; firstShift = shiftNumber; }
-      updateCompletion(product.plan_detail_id, stage, date, shiftNumber);
-    }
-  }
-
-  // SINGLE-PASS FORWARD — Continuous Flow / Pipelining (v3)
-  for (const stage of allSequences) {
-    const stageProducts = products
-      .filter((p) => (p.sequence ?? 1) === stage)
-      .sort((a, b) => new Date(a.delivery_date) - new Date(b.delivery_date));
-
-    for (const product of stageProducts) {
-      const lineId         = product.line_id;
-      const slotOrder      = slotOrderByLine.get(lineId);
-      const slotMap        = slotRemainingCap.get(lineId);
-      const lineObj        = lineByIdMap.get(lineId);
-      const productTargets = leveledTargetMap.get(product.id) ?? new Map();
-
-      if (!slotOrder || !slotMap) {
-        errors.push(`Line ID ${lineId} missing slot config for stage ${stage}.`);
-        continue;
-      }
-
-      const detailStages  = detailStagesMap.get(product.plan_detail_id) ?? [];
-      const myIdxInDetail = detailStages.indexOf(stage);
-
-      // SS Pipeline: resolve start dari first-yield upstream
-      let earliestDate     = null;
-      let earliestShiftNum = -Infinity;
-
-      if (myIdxInDetail > 0) {
-        const prevStage  = detailStages[myIdxInDetail - 1];
-        const result     = resolvePipelineStart(product, stage, prevStage);
-        earliestDate     = result.date;
-        earliestShiftNum = result.shiftNumber;
-      }
-
-      const remainingQtyRef = { value: product.planned_qty };
-
-      allocateForward({
-        product, stage, slotOrder, slotMap, lineObj,
-        earliestDate, earliestShiftNum,
-        productTargets, remainingQtyRef,
+    const copy = new Map();
+    for (const [key, slot] of slotMap.entries()) {
+      const occupied   = occupiedSlotMap.get(key) ?? 0;
+      const remaining  = Math.max(0, slot.totalCap - occupied);
+      const regRemain  = Math.max(0, slot.regularCap - Math.min(occupied, slot.regularCap));
+      copy.set(key, {
+        regularCap:  regRemain,
+        overtimeCap: slot.overtimeCap,
+        totalCap:    remaining,
+        hasOvertime: slot.hasOvertime,
       });
-
-      // Fallback: jika masih sisa setelah SS-constrained forward,
-      if (remainingQtyRef.value > 0 && earliestDate !== null) {
-        console.warn(
-          `[ContinuousFlow Fallback] Line ${lineId} stage ${stage}: ` +
-          `sisa ${remainingQtyRef.value} unit setelah SS-constrained forward. ` +
-          `Mencoba scan seluruh slot tanpa filter tanggal.`
-        );
-        allocateForward({
-          product, stage, slotOrder, slotMap, lineObj,
-          earliestDate: null, earliestShiftNum: -Infinity,
-          productTargets, remainingQtyRef,
-        });
-      }
-
-      if (remainingQtyRef.value > 0) {
-        product._partiallyScheduled = true;
-        product._unscheduledQty     = remainingQtyRef.value;
-        errors.push(
-          `[KAPASITAS PARSIAL] Line ${lineId} stage ${stage} part_id=${product.part_id}: ` +
-          `${remainingQtyRef.value} unit tidak terjadwal setelah forward + fallback scan. ` +
-          `Tambahkan hari kerja atau overtime pada lini ini.`
-        );
-      } else {
-        product._fullyScheduled = true;
-      }
     }
+    slotRemainingCap.set(lineId, copy);
   }
 
-  // Redistribute loop untuk produk yang masih belum terjadwal penuh
-  const overtimeInjectedSlots = new Map(); // lineId → Set<slotKey>
-  const unfinished = products.filter((p) => !p._fullyScheduled);
+  // Sort by delivery_date ASC (EDF), tiebreak by sequence
+  const sortedProducts = [...products].sort(
+    (a, b) => new Date(a.delivery_date) - new Date(b.delivery_date)
+           || (a.sequence ?? 1) - (b.sequence ?? 1)
+  );
 
-  for (const product of unfinished) {
-    const lineId    = product.line_id;
-    const slotMap   = slotRemainingCap.get(lineId);
-    const slotOrder = slotOrderByLine.get(lineId);
-    const lineObj   = lineByIdMap.get(lineId);
-    const myStage   = product.sequence ?? 1;
+  for (const product of sortedProducts) {
+    const lineId       = product.line_id;
+    const slotMap      = slotRemainingCap.get(lineId);
+    const initialSlotMap = initialSlotMapByLine.get(lineId);
+    const days         = workingDaysByLine.get(lineId) ?? [];
+    const lineObj      = lineByIdMap.get(lineId);
+    const dayShiftsMap = dayShiftsMapByLine.get(lineId);
 
-    const alreadyScheduled = scheduleRows
-      .filter((r) => r.po_product_id === product.id)
-      .reduce((s, r) => s + r.planned_qty_per_day, 0);
-    const remainingQtyRef = { value: product.planned_qty - alreadyScheduled };
-
-    if (remainingQtyRef.value <= 0) {
-      product._fullyScheduled = true;
+    if (!slotMap || !dayShiftsMap) {
+      errors.push(`Line ID ${lineId} missing slot config for product id=${product.id}.`);
       continue;
     }
 
-    if (!overtimeInjectedSlots.has(lineId)) {
-      overtimeInjectedSlots.set(lineId, new Set());
-    }
-    const injectedForLine = overtimeInjectedSlots.get(lineId);
+    // Only use slots with production_date strictly before delivery_date
+    const deadlineDate = product.delivery_date
+      ? (typeof product.delivery_date === 'string'
+          ? product.delivery_date.split('T')[0]
+          : new Date(product.delivery_date).toISOString().split('T')[0])
+      : null;
 
-    console.warn(
-      `[Redistribute+VirtualOT] Line ${lineId} stage ${myStage}: ` +
-      `redistribusi ${remainingQtyRef.value} unit tanpa constraint tanggal. ` +
-      `Virtual OT akan dipicu hanya pada slot yang belum pernah di-inject.`
-    );
+    let remainingQty = product.planned_qty;
 
-    for (const { date, shiftNumber, slotKey } of slotOrder) {
-      if (remainingQtyRef.value <= 0) break;
+    for (const date of days) {
+      if (remainingQty <= 0) break;
+      // if (deadlineDate && date >= deadlineDate) continue;
+      if (poEndDate && date > poEndDate) continue;
 
-      let remainingCap = slotMap.get(slotKey) ?? 0;
+      const dayShifts = dayShiftsMap.get(date) ?? [];
 
-      // [FIX #4] Virtual OT: inject HANYA jika slot belum pernah di-OT-inject
-      if (remainingCap <= 0 && !injectedForLine.has(slotKey)) {
-        const otCap = getOvertimeCapForSlot(lineId, slotKey);
-        if (otCap > 0) {
-          remainingCap = otCap;
-          slotMap.set(slotKey, otCap);
-          injectedForLine.add(slotKey); // tandai sudah di-inject — tidak boleh inject ulang
-          console.info(
-            `[VirtualOT] Line ${lineId} stage ${myStage} tanggal ${date} shift ${shiftNumber}: ` +
-            `inject OT virtual ${otCap} unit (redistribute). Sisa: ${remainingQtyRef.value} unit.`
-          );
-        }
+      for (const shift of dayShifts) {
+        if (remainingQty <= 0) break;
+
+        const slotKey   = `${date}_${shift.shift_number}`;
+        const slot      = slotMap.get(slotKey);
+        if (!slot || slot.totalCap <= 0) continue;
+
+        const constSlot  = initialSlotMap.get(slotKey);
+        const plannedQty = Math.min(remainingQty, slot.totalCap);
+
+        scheduleRows.push({
+          po_id,
+          po_product_id:         product.id,
+          row_sequence:          globalSeq++,
+          production_date:       date,
+          line_id:               lineId,
+          shift_id:              shift.id ?? null,
+          part_id:               product.part_id,
+          sequence:              product.sequence ?? 1,
+          planned_qty_per_day:   plannedQty,
+          actual_qty_per_day:    0,
+          line_capacity_per_day: constSlot.totalCap,
+          regular_cap_snapshot:  constSlot.regularCap,
+          utilization_pct:       Math.round((plannedQty / constSlot.totalCap) * 10000) / 100,
+          status:                'Scheduled',
+          line_name_snapshot:    lineObj?.name ?? null,
+          shift_name_snapshot:   shift.name ?? null,
+          _has_overtime:         constSlot.hasOvertime,
+          _overtime_cap:         constSlot.overtimeCap,
+        });
+
+        slot.totalCap  -= plannedQty;
+        slot.regularCap = Math.max(0, slot.regularCap - plannedQty);
+        remainingQty   -= plannedQty;
       }
-
-      if (remainingCap <= 0) continue;
-
-      const qty = Math.min(remainingQtyRef.value, remainingCap);
-
-      writeScheduleRow({ product, date, shiftNumber, plannedQty: qty, remainingCap, stage: myStage, lineObj });
-      slotMap.set(slotKey, remainingCap - qty);
-      remainingQtyRef.value -= qty;
-      updateCompletion(product.plan_detail_id, myStage, date, shiftNumber);
     }
 
-    if (remainingQtyRef.value <= 0) {
-      product._fullyScheduled     = true;
-      product._partiallyScheduled = false;
-      // Hapus entry partial error sebelumnya jika ada
-      const partialErrPrefix = `[KAPASITAS PARSIAL] Line ${lineId} stage ${myStage} part_id=${product.part_id}`;
-      const idx = errors.findIndex((e) => e.startsWith(partialErrPrefix));
-      if (idx !== -1) errors.splice(idx, 1);
-    } else {
+    if (remainingQty > 0) {
       errors.push(
-        `[KAPASITAS PARSIAL] Line ${lineId} stage ${myStage} part_id=${product.part_id}: ` +
-        `${remainingQtyRef.value} unit tidak terjadwal setelah seluruh slot + OT virtual. ` +
-        `Perpanjang production_end_date atau tambah hari kerja/overtime pada lini ini.`
+        `[PARTIAL_CAPACITY] Line ${lineId} part_id=${product.part_id}: ` +
+        `${remainingQty} unit(s) could not be scheduled. ` +
+        `Insufficient capacity before delivery date ${deadlineDate ?? 'N/A'}. ` +
+        `Add more working days or shifts to the plan.`
       );
     }
   }
 
-  // Build stageCompletionDate (tanggal saja, tanpa shiftNumber)
   const stageCompletionDate = new Map();
-  for (const [detailId, stageMap] of stageCompletionSlot.entries()) {
-    stageCompletionDate.set(detailId, new Map());
-    for (const [seq, slot] of stageMap.entries()) {
-      stageCompletionDate.get(detailId).set(seq, slot.date);
+  for (const row of scheduleRows) {
+    const existing = stageCompletionDate.get(row.po_product_id);
+    if (!existing || row.production_date > existing) {
+      stageCompletionDate.set(row.po_product_id, row.production_date);
     }
   }
 
-  return { scheduleRows, errors, stageCompletionDate, stageCompletionSlot };
+  return { scheduleRows, errors, stageCompletionDate };
 }
 
-// Pre-Scheduling Capacity Check
+// ─── VALIDATORS ─────────────────────────────────────────────────────────────
 function validateCapacityBeforeScheduling(products, capacityInfoByLine, lineByIdMap) {
   const violations = [];
 
-  // Hitung demand per line_id (agregat semua produk di lini ini)
   const demandByLine = new Map();
   for (const p of products) {
     const prev = demandByLine.get(p.line_id) ?? 0;
@@ -1214,39 +663,24 @@ function validateCapacityBeforeScheduling(products, capacityInfoByLine, lineById
 
     if (!info || info.totalCapUnits <= 0) {
       violations.push({
-        line_id:       lineId,
-        line_name:     lineName,
-        total_demand:  totalDemand,
-        total_capacity: 0,
-        shortage:      totalDemand,
-        severity:      'FATAL',
-        message:
-          `Lini "${lineName}" (ID ${lineId}) tidak memiliki kapasitas terhitung. ` +
-          `Pastikan max_takt_time dan working_hours sudah dikonfigurasi di Plan Module.`,
+        line_id: lineId, line_name: lineName, total_demand: totalDemand, total_capacity: 0,
+        shortage: totalDemand, severity: 'FATAL',
+        message: `Lini "${lineName}" (ID ${lineId}) tidak memiliki kapasitas terhitung.`,
       });
       continue;
     }
 
     if (totalDemand > info.totalCapUnits) {
-      const shortage = totalDemand - info.totalCapUnits;
-      // Berapa hari kerja tambahan yang dibutuhkan?
+      const shortage             = totalDemand - info.totalCapUnits;
       const additionalDaysNeeded = Math.ceil(shortage / info.capPerDay);
-
       violations.push({
-        line_id:                lineId,
-        line_name:              lineName,
-        total_demand:           totalDemand,
-        total_capacity:         info.totalCapUnits,
-        shortage,
-        cap_per_day:            info.capPerDay,
-        additional_days_needed: additionalDaysNeeded,
-        severity:               'OVERCOMMIT',
+        line_id: lineId, line_name: lineName, total_demand: totalDemand,
+        total_capacity: info.totalCapUnits, shortage, cap_per_day: info.capPerDay,
+        additional_days_needed: additionalDaysNeeded, severity: 'OVERCOMMIT',
         message:
           `Kapasitas Lini "${lineName}" (ID ${lineId}) TIDAK MENCUKUPI: ` +
           `demand=${totalDemand} unit > kapasitas=${info.totalCapUnits} unit ` +
-          `(kekurangan ${shortage} unit ≈ ${additionalDaysNeeded} hari kerja tambahan). ` +
-          `Solusi: tambahkan adjustment WORKING_DAYS +${additionalDaysNeeded} ` +
-          `atau OVERTIME pada Plan Module untuk lini ini, kemudian hitung ulang kapasitas.`,
+          `(kekurangan ${shortage} unit ≈ ${additionalDaysNeeded} hari kerja tambahan).`,
       });
     }
   }
@@ -1254,7 +688,6 @@ function validateCapacityBeforeScheduling(products, capacityInfoByLine, lineById
   return violations;
 }
 
-// Schedule Integrity Validator
 async function validateScheduleIntegrity(po, products, transaction) {
   for (const product of products) {
     const scheduledSum = await SProductionOrderSchedule.sum('planned_qty_per_day', {
@@ -1322,6 +755,153 @@ async function validateScheduleIntegrity(po, products, transaction) {
   return { ok: true };
 }
 
+async function explodeBomToRawMaterials(
+  partId,
+  qtyMultiplier,
+  accumulator,
+  visitedBomIds,
+  transaction,
+  logWarnings = []
+) {
+  // Fetch BOM untuk part ini
+  const bom = await SBoms.findOne({
+    where: {
+      parent_part_id:    partId,
+      doc_status:        'Approved',
+      activation_status: 'Active',
+      deleted_at:        null,
+    },
+    include: [{
+      model:    SBomDetails,
+      as:       'details',
+      required: false,
+      where:    { deleted_at: null },
+      include:  [{ model: db.SUom, as: 'uom', attributes: ['code'] }],
+    }],
+    transaction,
+  });
+ 
+  // Case 1: No BOM atau BOM kosong → treat sebagai raw material (leaf node)
+  if (!bom || !bom.details?.length) {
+    // Guard: check supplier_id pada leaf part
+    const leafPart = await db.SParts.findOne({
+      where: { id: partId },
+      attributes: ['id', 'supplier_id', 'part_number'],
+      transaction,
+    });
+ 
+    if (leafPart?.supplier_id) {
+      const warning = 
+        `[BOM Explosion] Leaf material part_id=${partId} (${leafPart.part_number}) ` +
+        `has supplier_id=${leafPart.supplier_id}. Data ambiguous: treating as WIP leaf despite supplier. ` +
+        `Consider null-ing supplier_id for all manufactured parts.`;
+      logWarnings.push(warning);
+      console.warn(warning);
+    }
+ 
+    // Aggregate ke accumulator
+    const existing = accumulator.get(partId);
+    if (existing) {
+      existing.qty += qtyMultiplier;
+      // Validate UOM consistency
+      if (existing.uom && existing.uom !== (leafPart?.uom ?? 'PCS')) {
+        throw new Error(
+          `UOM mismatch for leaf part_id=${partId}: ` +
+          `previously ${existing.uom}, now ${leafPart?.uom ?? 'PCS'}. ` +
+          `Check BOM structure for consistency.`
+        );
+      }
+    } else {
+      accumulator.set(partId, { 
+        qty: qtyMultiplier, 
+        uom: leafPart?.uom ?? 'PCS' 
+      });
+    }
+    return;
+  }
+ 
+  // Case 2: BOM ditemukan → check circular reference
+  if (visitedBomIds.has(bom.id)) {
+    throw new Error(
+      `Circular BOM reference detected at bom_id=${bom.id} (part_id=${partId}). ` +
+      `Please fix the BOM structure before releasing this Production Order.`
+    );
+  }
+ 
+  visitedBomIds.add(bom.id);
+ 
+  // Case 3: Non-leaf BOM → explode each detail
+  for (const detail of bom.details) {
+    const qtyRequired  = parseFloat(detail.qty_required);
+    const scrapFactor  = 1 + (parseFloat(detail.scrap_percentage ?? 0) / 100);
+    const qtyThisLevel = qtyRequired * scrapFactor * qtyMultiplier;
+    const uomCode      = detail.uom?.code ?? 'PCS';
+ 
+    // Sub-case A: Detail punya child_bom_id → ini sub-assembly WIP
+    if (detail.child_bom_id) {
+      const childBom = await SBoms.findOne({
+        where: {
+          id:                detail.child_bom_id,
+          doc_status:        'Approved',
+          activation_status: 'Active',
+          deleted_at:        null,
+        },
+        attributes: ['id', 'parent_part_id'],
+        transaction,
+      });
+ 
+      // Validate child BOM exists dan active
+      if (!childBom) {
+        throw new Error(
+          `Sub-assembly part_id=${detail.part_id} references child_bom_id=${detail.child_bom_id} ` +
+          `which is not Approved and Active. ` +
+          `Please approve the sub-assembly BOM before releasing this Production Order.`
+        );
+      }
+ 
+      // Sanity check: child BOM parent_part_id harus match detail.part_id
+      if (childBom.parent_part_id !== detail.part_id) {
+        throw new Error(
+          `BOM structural error: detail.part_id=${detail.part_id} but ` +
+          `child_bom_id=${detail.child_bom_id} has parent_part_id=${childBom.parent_part_id}. ` +
+          `These must match. Fix BOM linkage.`
+        );
+      }
+ 
+      // Recursive: explode part_id dengan sub-BOM-nya
+      await explodeBomToRawMaterials(
+        detail.part_id,
+        qtyThisLevel,
+        accumulator,
+        visitedBomIds,
+        transaction,
+        logWarnings
+      );
+    } 
+    // Sub-case B: Detail tidak punya child_bom_id → leaf material
+    else {
+      const existing = accumulator.get(detail.part_id);
+      if (existing) {
+        existing.qty += qtyThisLevel;
+        // Validate UOM consistency
+        if (existing.uom && existing.uom !== uomCode) {
+          throw new Error(
+            `UOM mismatch for part_id=${detail.part_id}: ` +
+            `previously ${existing.uom}, now ${uomCode}. ` +
+            `Check BOM details for consistency.`
+          );
+        }
+      } else {
+        accumulator.set(detail.part_id, { qty: qtyThisLevel, uom: uomCode });
+      }
+    }
+  }
+ 
+  // Remove dari visited saat selesai (untuk track depth, bukan prevent re-entry)
+  visitedBomIds.delete(bom.id);
+}
+
+// ─── MODULE ─────────────────────────────────────────────────────────────────
 class OrderScheduleModule extends BaseModule {
 
   async list(req, res) {
@@ -1348,10 +928,37 @@ class OrderScheduleModule extends BaseModule {
         distinct: true,
       });
 
+      // On-the-fly: total_products & total_planned_qty per PO
+      const poIds = rows.map((r) => r.id);
+      const aggMap = new Map();
+      if (poIds.length > 0) {
+        const allProducts = await SProductionOrderProduct.findAll({
+          where:      { po_id: poIds },
+          attributes: ['po_id', 'part_id', 'planned_qty', 'scheduled_qty'],
+        });
+        for (const p of allProducts) {
+          if (!aggMap.has(p.po_id)) aggMap.set(p.po_id, { parts: new Set(), total_qty: 0, qty_scheduled: 0 });
+          const entry = aggMap.get(p.po_id);
+          entry.parts.add(p.part_id);
+          entry.total_qty += p.planned_qty;
+          entry.qty_scheduled += p.scheduled_qty;
+        }
+      }
+
+      const data = rows.map((r) => {
+        const agg = aggMap.get(r.id);
+        return {
+          ...r.toJSON(),
+          total_products:    agg ? agg.parts.size : 0,
+          total_planned_qty: agg ? agg.total_qty  : 0,
+          total_scheduled_qty: agg ? agg.qty_scheduled : 0,
+        };
+      });
+
       return helper.sendResponse(res, {
         status: true,
         code:   200,
-        data:   helper.getPaginationData(rows, count, page, limit),
+        data:   helper.getPaginationData(data, count, page, limit),
       });
     } catch (error) {
       console.log('[OrderScheduleModule][list]:', error);
@@ -1376,6 +983,7 @@ class OrderScheduleModule extends BaseModule {
         SProductionOrderProduct.findAll({
           where:   { po_id: id },
           include: PO_PRODUCT_INCLUDE,
+          order: [['delivery_date', 'ASC'], ['sequence', 'ASC']],
         }),
         SProductionOrderSchedule.findAll({
           where:   { po_id: id },
@@ -1384,7 +992,7 @@ class OrderScheduleModule extends BaseModule {
             { model: SParts,  as: 'part',  attributes: ['id', 'part_number', 'part_name'] },
             { model: SLines,  as: 'line',  attributes: ['id', 'line_code', 'name'] },
           ],
-          order: [['sequence', 'ASC'], ['production_date', 'ASC']],
+          order: [['production_date', 'ASC'], ['sequence', 'ASC']],
         }),
         SProductionOrderRescheduleLog.findAll({
           where: { po_id: id },
@@ -1393,10 +1001,25 @@ class OrderScheduleModule extends BaseModule {
         }),
       ]);
 
+      const total_products    = new Set(products.map((p) => p.part_id)).size;
+      const total_planned_qty = products.reduce((s, p) => s + p.planned_qty, 0);
+      const total_scheduled_qty = schedules.reduce((s, r) => s + r.planned_qty_per_day, 0);
+
+      // Derive overtime flag per row, accounting for cumulative regular usage within each shared slot
+      const schedulesWithOvertime = deriveOvertimeFlags(schedules.map((r) => r.toJSON()));
+
       return helper.sendResponse(res, {
         status: true,
         code:   200,
-        data:   { ...po.toJSON(), products, schedules, reschedule_logs: rescheduleLogs },
+        data:   {
+          ...po.toJSON(),
+          total_products,
+          total_planned_qty,
+          total_scheduled_qty,
+          products,
+          schedules: schedulesWithOvertime,
+          reschedule_logs: rescheduleLogs,
+        },
       });
     } catch (error) {
       console.log('[OrderScheduleModule][detail]:', error);
@@ -1448,9 +1071,8 @@ class OrderScheduleModule extends BaseModule {
         });
       }
 
-      const startDt  = new Date(production_start_date);
-      const endDt    = new Date(production_end_date);
-      const latestDO = plan.latest_delivery_date ? new Date(plan.latest_delivery_date) : null;
+      const startDt = new Date(production_start_date);
+      const endDt   = new Date(production_end_date);
 
       if (endDt <= startDt) {
         await t.rollback();
@@ -1459,16 +1081,33 @@ class OrderScheduleModule extends BaseModule {
           error:  'production_end_date must be after production_start_date',
         });
       }
-      if (latestDO && endDt > latestDO) {
+
+      // Ganti validasi latest_delivery_date → validasi bulan plan
+      const [planYear, planMonth] = plan.plan_month.split('-').map(Number);
+
+      const startYear  = startDt.getUTCFullYear();
+      const startMonth = startDt.getUTCMonth() + 1;
+      const endYear    = endDt.getUTCFullYear();
+      const endMonth   = endDt.getUTCMonth() + 1;
+
+      if (startYear !== planYear || startMonth !== planMonth) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `production_end_date must not exceed the latest delivery date (${plan.latest_delivery_date})`,
+          error:  `production_start_date must be within the plan month (${plan.plan_month})`,
+        });
+      }
+      if (endYear !== planYear || endMonth !== planMonth) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  `production_end_date must be within the plan month (${plan.plan_month})`,
         });
       }
 
       const po_number = await generatePoNumber(t);
 
+      // Single-line: assigned_line_id & routing_id langsung dari plan_detail
       const planDetails = await SProductionPlanDetail.findAll({
         where:       { plan_id, deleted_at: null },
         order:       [['sequence', 'ASC']],
@@ -1483,20 +1122,14 @@ class OrderScheduleModule extends BaseModule {
         });
       }
 
-      const detailIds     = planDetails.map((d) => d.id);
-      const detailLineMap = await getDetailLinesByDetailIds(detailIds, t);
-
-      const unroutedDetails = planDetails.filter((d) => !(detailLineMap.get(d.id) ?? []).length);
+      const unroutedDetails = planDetails.filter((d) => !d.assigned_line_id);
       if (unroutedDetails.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `${unroutedDetails.length} plan detail(s) have no routing configured.`,
+          error:  `${unroutedDetails.length} plan detail(s) have no routing/line configured.`,
         });
       }
-
-      const total_products    = planDetails.length;
-      const total_planned_qty = planDetails.reduce((s, d) => s + (d.qty_request || 0), 0);
 
       const po = await SProductionOrder.create({
         po_number,
@@ -1507,33 +1140,29 @@ class OrderScheduleModule extends BaseModule {
         latest_delivery_date:   plan.latest_delivery_date,
         priority,
         po_description,
-        total_products,
-        total_planned_qty,
         status:     'Draft',
         created_by: req.user?.id ?? null,
       }, { transaction: t });
 
-      const productRows = [];
-      for (const detail of planDetails) {
-        const lines = detailLineMap.get(detail.id);
-        for (const { line_id, sequence: routingSeq } of lines) {
-          productRows.push({
-            po_id:          po.id,
-            plan_detail_id: detail.id,
-            sequence:       routingSeq,
-            customer_id:    detail.customer_id,
-            part_id:        detail.part_id,
-            line_id,
-            delivery_date:  detail.delivery_date,
-            planned_qty:    detail.qty_request,
-          });
-        }
-      }
+      // Satu baris per plan_detail (single-line)
+      const productRows = planDetails.map((detail) => ({
+        po_id:          po.id,
+        plan_detail_id: detail.id,
+        sequence:       1,
+        customer_id:    detail.customer_id,
+        part_id:        detail.part_id,
+        line_id:        detail.assigned_line_id,
+        delivery_date:  detail.delivery_date,
+        planned_qty:    detail.qty_request,
+      }));
 
       await SProductionOrderProduct.bulkCreate(productRows, { transaction: t });
 
-      const lineCount  = new Set(productRows.map((r) => r.line_id)).size;
-      const stageCount = new Set(productRows.map((r) => r.sequence)).size;
+      const lineCount = new Set(productRows.map((r) => r.line_id)).size;
+
+      // On-the-fly summary
+      const total_products    = new Set(productRows.map((r) => r.part_id)).size;
+      const total_planned_qty = productRows.reduce((s, r) => s + r.planned_qty, 0);
 
       await this.logActivity(req, {
         moduleCode:   'production_order',
@@ -1541,7 +1170,7 @@ class OrderScheduleModule extends BaseModule {
         resourceId:   po.id,
         newData:      po,
         description:  `Created Production Order ${po_number} — ` +
-                      `${productRows.length} product-line row(s) across ${lineCount} line(s)`,
+                      `${productRows.length} product row(s) across ${lineCount} line(s)`,
         transaction:  t,
       });
 
@@ -1553,9 +1182,10 @@ class OrderScheduleModule extends BaseModule {
         data: {
           id:                po.id,
           po_number:         po.po_number,
+          total_products,
+          total_planned_qty,
           product_line_rows: productRows.length,
           lines_count:       lineCount,
-          stage_count:       stageCount,
         },
       });
     } catch (error) {
@@ -1569,31 +1199,30 @@ class OrderScheduleModule extends BaseModule {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
-
+  
       const schema = Joi.object({
         production_start_date: Joi.date().iso().optional(),
         production_end_date:   Joi.date().iso().optional(),
         po_description:        Joi.string().optional().allow('', null),
         priority:              Joi.string().valid('Low', 'Medium', 'High').optional(),
       });
-
+  
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
         await t.rollback();
         return helper.sendResponse(res, validation);
       }
-
+  
       const po = await this._getPoEditable(id, t);
       if (!po.ok) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: po.code, error: po.error });
       }
-
+  
       const { production_start_date, production_end_date } = validation.value;
       const endDt   = production_end_date   ? new Date(production_end_date)   : new Date(po.data.production_end_date);
       const startDt = production_start_date ? new Date(production_start_date) : new Date(po.data.production_start_date);
-      const latestDO = po.data.latest_delivery_date ? new Date(po.data.latest_delivery_date) : null;
-
+  
       if (endDt <= startDt) {
         await t.rollback();
         return helper.sendResponse(res, {
@@ -1601,27 +1230,58 @@ class OrderScheduleModule extends BaseModule {
           error:  'production_end_date must be after production_start_date',
         });
       }
-      if (latestDO && endDt > latestDO) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  `production_end_date must not exceed the latest delivery date (${po.data.latest_delivery_date})`,
+  
+      // Fetch plan untuk dapat plan_month — hanya jika ada perubahan tanggal
+      if (production_start_date || production_end_date) {
+        const plan = await SProductionPlan.findOne({
+          where:       { id: po.data.plan_id },
+          attributes:  ['plan_month'],
+          transaction: t,
         });
+  
+        if (!plan) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  'Associated Production Plan not found',
+          });
+        }
+  
+        const [planYear, planMonth] = plan.plan_month.split('-').map(Number);
+  
+        const startYear  = startDt.getUTCFullYear();
+        const startMonth = startDt.getUTCMonth() + 1;
+        const endYear    = endDt.getUTCFullYear();
+        const endMonth   = endDt.getUTCMonth() + 1;
+  
+        if (startYear !== planYear || startMonth !== planMonth) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `production_start_date must be within the plan month (${plan.plan_month})`,
+          });
+        }
+        if (endYear !== planYear || endMonth !== planMonth) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `production_end_date must be within the plan month (${plan.plan_month})`,
+          });
+        }
       }
-
+  
       const datesChanged = !!(production_start_date || production_end_date);
       const oldData      = po.data.toJSON();
       await po.data.update(validation.value, { transaction: t });
-
+  
       if (datesChanged) {
         const existing = await SProductionOrderSchedule.count({ where: { po_id: id }, transaction: t });
         if (existing > 0) {
           await SProductionOrderSchedule.destroy({ where: { po_id: id }, transaction: t, force: true });
           await SProductionOrderProduct.update({ scheduled_qty: 0 }, { where: { po_id: id }, transaction: t });
-          await po.data.update({ total_scheduled_qty: 0 }, { transaction: t });
         }
       }
-
+  
       await this.logActivity(req, {
         moduleCode:   'production_order',
         activityCode: 'UPDATE',
@@ -1631,7 +1291,7 @@ class OrderScheduleModule extends BaseModule {
         description:  `Updated Production Order ${po.data.po_number}`,
         transaction:  t,
       });
-
+  
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
@@ -1695,27 +1355,50 @@ class OrderScheduleModule extends BaseModule {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
-
+  
       const po = await this._getPoEditable(id, t);
       if (!po.ok) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: po.code, error: po.error });
       }
-
-      const products = await SProductionOrderProduct.findAll({
-        where:       { po_id: id },
-        order:       [['sequence', 'ASC'], ['delivery_date', 'ASC']],
+  
+      // Load plan to detect amendment
+      const plan = await SProductionPlan.findByPk(po.data.plan_id, {
+        attributes: ['id', 'plan_type', 'parent_plan_id', 'plan_month'],
         transaction: t,
       });
 
+      if (plan?.plan_month) {
+        const [planYear, planMonth] = plan.plan_month.split('-').map(Number);
+        const startDt = new Date(po.data.production_start_date);
+        const endDt   = new Date(po.data.production_end_date);
+      
+        if (
+          startDt.getUTCFullYear() !== planYear || startDt.getUTCMonth() + 1 !== planMonth ||
+          endDt.getUTCFullYear()   !== planYear || endDt.getUTCMonth()   + 1 !== planMonth
+        ) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `PO dates are outside the plan month (${plan.plan_month}). Update the PO dates first.`,
+          });
+        }
+      }
+  
+      const products = await SProductionOrderProduct.findAll({
+        where:       { po_id: id },
+        order:       [['delivery_date', 'ASC'], ['sequence', 'ASC']],
+        transaction: t,
+      });
+  
       if (!products.length) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  'No products found in this Production Order',
+          error:  'No products found in this Production Order.',
         });
       }
-
+  
       const unassigned = products.filter((p) => !p.line_id);
       if (unassigned.length > 0) {
         await t.rollback();
@@ -1724,20 +1407,12 @@ class OrderScheduleModule extends BaseModule {
           error:  `${unassigned.length} product row(s) have no line assigned.`,
         });
       }
-
-      const missingSeq = products.filter((p) => p.sequence == null);
-      if (missingSeq.length > 0) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  `${missingSeq.length} product row(s) have no sequence assigned.`,
-        });
-      }
-
+  
       const lineIds = [...new Set(products.map((p) => p.line_id))];
-
+  
+      // ── 1. Resolve capacity params ──────────────────────────────────────────
       const capacityInfoByLine = await resolveCapacityPerLine(po.data.plan_id, lineIds, t);
-
+  
       for (const lineId of lineIds) {
         const info = capacityInfoByLine.get(lineId);
         if (!info || info.capPerShift === 0) {
@@ -1745,173 +1420,156 @@ class OrderScheduleModule extends BaseModule {
           return helper.sendResponse(res, {
             status: false, code: 400,
             error:  `Line ID ${lineId} has zero capacity per shift. ` +
-                    `Check max_takt_time and working_hours configuration.`,
+                    `Check max_takt_time and working_hours_per_shift configuration.`,
           });
         }
       }
-
-      const effectiveWorkingDaysByLine = new Map(
-        [...capacityInfoByLine.entries()].map(([lid, info]) => [lid, info.workingDays])
-      );
-      const hardCutoffDate = po.data.production_end_date; // string YYYY-MM-DD
-
-      const workingDaysByLine = new Map();
+  
+      // ── 2. Resolve effective working days, shifts, and overtime ─────────────
+      const workingDaysByLine         = new Map();
+      const dayShiftsMapByLine        = new Map();
+      const overtimeByDateShiftByLine = new Map();
+  
       for (const lineId of lineIds) {
-        const adjustedCount = effectiveWorkingDaysByLine.get(lineId);
-
-        const days = await getWorkingDaysWithAdjustment(
+        const result = await resolveEffectiveWorkingDaysAndShifts(
           lineId,
+          po.data.plan_id,
           po.data.production_start_date,
-          hardCutoffDate,
-          adjustedCount,
-          hardCutoffDate,
+          po.data.production_end_date,
           t,
         );
-
-        if (!days.length) {
+  
+        if (!result || result.workingDays.length === 0) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `No active working days for line ID ${lineId} in the production date range ` +
-                    `[${po.data.production_start_date} ~ ${hardCutoffDate}]. ` +
-                    `Check shift calendar configuration or extend production_end_date.`,
+            error:  `No active working days found for line ID ${lineId} within ` +
+                    `[${po.data.production_start_date} ~ ${po.data.production_end_date}]. ` +
+                    `Ensure shift calendar is configured.`,
           });
         }
-        workingDaysByLine.set(lineId, days);
+  
+        workingDaysByLine.set(lineId, result.workingDays);
+        dayShiftsMapByLine.set(lineId, result.dayShiftsMap);
+        overtimeByDateShiftByLine.set(lineId, result.overtimeByDateShift);
       }
-
-      const lineRows    = await SLines.findAll({
-        where:       { id: lineIds },
-        include:     [{ model: SFactories, as: 'factory', attributes: ['id'] }],
-        transaction: t,
-      });
+  
+      // ── 3. Load line master data ────────────────────────────────────────────
+      const lineRows    = await SLines.findAll({ where: { id: lineIds }, transaction: t });
       const lineByIdMap = new Map(lineRows.map((l) => [l.id, l]));
-
-      const shiftsByLine         = new Map();
-      const syntheticDatesByLine = new Map();
-      const allCoverageWarnings  = [];
-
-      for (const lineId of lineIds) {
-        const info     = capacityInfoByLine.get(lineId);
-        const workDays = workingDaysByLine.get(lineId) ?? [];
-
-        // [ATURAN 2] resolveShiftsForWorkingDays menangani hari virtual in-memory
-        // (injeksi pseudo-calendar, TIDAK INSERT ke DB)
-        const { shifts, syntheticDates, coverageWarnings } =
-          await resolveShiftsForWorkingDays(lineId, workDays, t);
-
-        syntheticDatesByLine.set(lineId, syntheticDates);
-        allCoverageWarnings.push(...coverageWarnings);
-
-        // ── SINKRONISASI: overtimeHoursPerShift sudah per-shift (hasil fix GAP-2) ────
-        // info.overtimeHoursPerShift = accumulatedOT_per_hari / shifts_per_day
-        // → dikalikan 60 → menit OT per shift, langsung masuk calcCapacityFromShifts
-        const overtimeMinPerShift = (info?.overtimeHoursPerShift ?? 0) * 60;
-        const finalShifts = info?.maxTaktSec > 0
-          ? calcCapacityFromShifts(shifts, info.maxTaktSec, info.efficiencyFactor, overtimeMinPerShift)
-          : shifts;
-
-        shiftsByLine.set(lineId, finalShifts);
-      }
-
-      for (const lineId of lineIds) {
-        if (!shiftsByLine.get(lineId)?.length) {
-          await t.rollback();
-          return helper.sendResponse(res, {
-            status: false, code: 400,
-            error:  `No REGULAR PRODUCTIVE shifts found for line ID ${lineId}.`,
-          });
-        }
-      }
-
+  
+      // ── 4. Build slot map per line ──────────────────────────────────────────
       const initialSlotMapByLine = new Map();
-      const capPerShiftByLine    = new Map();
-
+  
       for (const lineId of lineIds) {
-        const workDays    = workingDaysByLine.get(lineId) ?? [];
-        const shifts      = shiftsByLine.get(lineId) ?? [];
-        const info        = capacityInfoByLine.get(lineId);
-        const capPerShift = info?.capPerShift ?? 0;
-
-        capPerShiftByLine.set(lineId, capPerShift);
-
-        const capObj  = capacityInfoByLine.get(lineId);
-        const synthDates = syntheticDatesByLine.get(lineId) ?? new Set();
-        const slotMap = buildShiftSlotMap(workDays, shifts, capObj, undefined, synthDates);
+        const info                = capacityInfoByLine.get(lineId);
+        const dayShiftsMap        = dayShiftsMapByLine.get(lineId);
+        const overtimeByDateShift = overtimeByDateShiftByLine.get(lineId) ?? new Map();
+  
+        const slotMap = buildShiftSlotMap(dayShiftsMap, info, overtimeByDateShift);
         initialSlotMapByLine.set(lineId, slotMap);
       }
-
+  
+      // ── 5. Validate total slot capacity is not zero ─────────────────────────
       for (const lineId of lineIds) {
         const slotMap  = initialSlotMapByLine.get(lineId) ?? new Map();
-        const totalCap = [...slotMap.values()].reduce((s, v) => s + v, 0);
+        const totalCap = [...slotMap.values()].reduce((s, slot) => s + slot.totalCap, 0);
         if (totalCap === 0) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `Line ID ${lineId} has zero total capacity across all working days/shifts.`,
+            error:  `Line ID ${lineId} has zero total capacity across all working days and shifts.`,
           });
         }
       }
-
-      // Pre-flight: Validasi kapasitas sebelum scheduling dimulai
-      const capacityViolations = validateCapacityBeforeScheduling(
-        products, capacityInfoByLine, lineByIdMap
-      );
-      if (capacityViolations.length > 0) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status:     false,
-          code:       400,
-          error:      `Kapasitas tidak mencukupi pada ${capacityViolations.length} lini. ` +
-                      `Perbaiki konfigurasi kapasitas di Plan Module sebelum generate schedule.`,
-          violations: capacityViolations.map((v) => ({
-            line_id:                v.line_id,
-            line_name:              v.line_name,
-            severity:               v.severity,
-            total_demand:           v.total_demand,
-            total_capacity:         v.total_capacity,
-            shortage:               v.shortage,
-            additional_days_needed: v.additional_days_needed,
-            message:                v.message,
-          })),
+  
+      // ── 6. For amendment POs: read occupied slots from Released sibling POs ─
+      // Sibling POs are Released POs whose plan_id is the parent_plan_id of this plan.
+      const occupiedSlotMap = new Map(); // Map<`date_shiftNumber`, totalUsedQty>
+  
+      if (plan?.plan_type === 'AMENDMENT' && plan?.parent_plan_id) {
+        const siblingPOs = await SProductionOrder.findAll({
+          where: {
+            plan_id:    plan.parent_plan_id,
+            status:     'Released',
+            deleted_at: null,
+          },
+          attributes:  ['id'],
+          transaction: t,
         });
+  
+        if (siblingPOs.length > 0) {
+          const siblingPoIds = siblingPOs.map((p) => p.id);
+  
+          const siblingSchedules = await SProductionOrderSchedule.findAll({
+            where: {
+              po_id:   { [Op.in]: siblingPoIds },
+              line_id: { [Op.in]: lineIds },
+            },
+            attributes:  ['production_date', 'shift_id', 'line_id', 'planned_qty_per_day'],
+            include: [{
+              model:      SShifts,
+              as:         'shift',
+              attributes: ['shift_number'],
+              required:   false,
+            }],
+            transaction: t,
+          });
+  
+          for (const sched of siblingSchedules) {
+            const shiftNum = sched.shift?.shift_number;
+            if (!shiftNum) continue;
+            const dateStr = typeof sched.production_date === 'string'
+              ? sched.production_date.split('T')[0]
+              : new Date(sched.production_date).toISOString().split('T')[0];
+            const key     = `${dateStr}_${shiftNum}`;
+            occupiedSlotMap.set(key, (occupiedSlotMap.get(key) ?? 0) + (sched.planned_qty_per_day ?? 0));
+          }
+        }
       }
-
+  
+      // ── 7. Clear old schedule rows ──────────────────────────────────────────
       await SProductionOrderSchedule.destroy({ where: { po_id: id }, transaction: t, force: true });
       await SProductionOrderProduct.update({ scheduled_qty: 0 }, { where: { po_id: id }, transaction: t });
-
-      const { scheduleRows, errors, stageCompletionDate, stageCompletionSlot } =
-        buildOverlappingSchedule({
-          products,
-          workingDaysByLine,
-          shiftsByLine,
-          initialSlotMapByLine,
-          lineByIdMap,
-          capPerShiftByLine,
-          capacityInfoByLine,
-          po_id: id,
-        });
-
-      // Klasifikasi errors: FATAL (hentikan) vs WARNING (lanjut dengan info)
-      const fatalErrors   = errors.filter((e) =>
-        e.includes('missing slot config')
-      );
-      // PERINGATAN-KAPASITAS dan KAPASITAS PARSIAL adalah WARNING, bukan fatal.
-      const warningErrors = errors.filter((e) => !fatalErrors.includes(e));
-
+  
+      // ── 8. Generate schedule (EDF with delivery date slot filter) ───────────
+      const { scheduleRows, errors, stageCompletionDate } = buildSchedule({
+        products,
+        workingDaysByLine,
+        dayShiftsMapByLine,
+        initialSlotMapByLine,
+        lineByIdMap,
+        po_id: id,
+        poEndDate: po.data.production_end_date,
+        occupiedSlotMap,
+      });
+  
+      const partialErrors = errors.filter((e) => e.includes('PARTIAL_CAPACITY'));
+      const fatalErrors   = errors.filter((e) => e.includes('missing slot config'));
+  
       if (fatalErrors.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
-          status:   false,
-          code:     400,
-          error:    `Penjadwalan gagal karena kapasitas lini tidak mencukupi. ` +
-                    `Tinjau konfigurasi di Plan Module dan hitung ulang kapasitas.`,
-          errors:   fatalErrors,
-          warnings: warningErrors.length > 0 ? warningErrors : undefined,
+          status: false,
+          code:   400,
+          error:  'Scheduling failed: slot configuration not found for one or more lines.',
+          errors: fatalErrors,
         });
       }
-      await SProductionOrderSchedule.bulkCreate(scheduleRows, { transaction: t });
-
+  
+      // ── 9. Persist schedule rows — strip internal flags before insert ────────
+      const overtimeSummary = scheduleRows
+        .filter((r) => r._has_overtime)
+        .map((r) => ({
+          date:         r.production_date,
+          shift_id:     r.shift_id,
+          overtime_cap: r._overtime_cap,
+        }));
+  
+      const rowsToInsert = scheduleRows.map(({ _has_overtime, _overtime_cap, ...rest }) => rest);
+      await SProductionOrderSchedule.bulkCreate(rowsToInsert, { transaction: t });
+  
+      // ── 10. Update scheduled_qty per product ────────────────────────────────
       const scheduledByProduct = new Map();
       for (const row of scheduleRows) {
         scheduledByProduct.set(
@@ -1925,93 +1583,48 @@ class OrderScheduleModule extends BaseModule {
           { where: { id: productId }, transaction: t }
         );
       }
-
-      await po.data.update({ total_scheduled_qty: po.data.total_planned_qty }, { transaction: t });
-
-      const stageSummary = {};
-      for (const [detailId, stageMap] of stageCompletionDate.entries()) {
-        stageSummary[detailId] = {};
-        for (const [seq, date] of stageMap.entries()) {
-          stageSummary[detailId][`stage_${seq}`] = date;
-        }
-      }
-
-      const stageShiftSummary = {};
-      for (const [detailId, stageMap] of stageCompletionSlot.entries()) {
-        stageShiftSummary[detailId] = {};
-        for (const [seq, slot] of stageMap.entries()) {
-          stageShiftSummary[detailId][`stage_${seq}`] = {
-            date:         slot.date,
-            shift_number: slot.shiftNumber,
-          };
-        }
-      }
-
-      const stagesUsed = [...new Set(products.map((p) => p.sequence))].sort((a, b) => a - b);
-
-      const syntheticDaysSummary = Object.fromEntries(
-        [...syntheticDatesByLine.entries()]
-          .filter(([, dates]) => dates.size > 0)
-          .map(([lid, dates]) => [lid, [...dates]])
-      );
-
+  
+      // ── 11. Build response summary ──────────────────────────────────────────
+      const completionSummary = Object.fromEntries(stageCompletionDate.entries());
+  
       const capacitySummary = Object.fromEntries(
         [...capacityInfoByLine.entries()].map(([lid, info]) => [lid, {
-          cap_per_shift:             info.capPerShift,
-          cap_per_day:               info.capPerDay,
-          total_cap_units:           info.totalCapUnits,
-          shifts_per_day:            info.shiftsPerDay,
-          working_days_effective:    info.workingDays,
-          // Tampilkan keduanya agar audit mudah:
-          overtime_hours_per_day:    info.overtimeHoursPerDay   ?? 0, // total OT per hari (raw)
-          overtime_hours_per_shift:  info.overtimeHoursPerShift ?? 0, // terdistribusi per shift
-          effective_min_per_shift:   parseFloat((info.effectiveMinPerShift ?? 0).toFixed(4)),
-          // [ATURAN 1] Tampilkan production_end_date yang dipakai sebagai cutoff
-          hard_cutoff_date:          hardCutoffDate,
+          cap_per_shift:           info.capPerShift,
+          cap_per_day:             info.capPerDay,
+          total_cap_units:         info.totalCapUnits,
+          shifts_per_day:          info.shiftsPerDay,
+          working_days_effective:  info.workingDays,
+          effective_min_per_shift: parseFloat((info.effectiveMinPerShift ?? 0).toFixed(4)),
         }])
       );
-
+  
       await this.logActivity(req, {
         moduleCode:   'production_order',
         activityCode: 'GENERATE_SCHEDULE',
         resourceId:   po.data.id,
-        newData:      { schedule_count: scheduleRows.length },
-        description:  `Generated ${scheduleRows.length} schedule rows for PO ${po.data.po_number} — ` +
-                      `cutoff at production_end_date=${hardCutoffDate}`,
+        newData:      { schedule_count: rowsToInsert.length },
+        description:  `Generated ${rowsToInsert.length} schedule row(s) for PO ${po.data.po_number}`,
         transaction:  t,
       });
-
+  
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: `Schedule generated successfully: ${scheduleRows.length} row(s) — ` +
-                 `${stagesUsed.length} stage(s) across ${lineIds.length} line(s). ` +
-                 `Hard cutoff: ${hardCutoffDate}.`,
+        message: `Schedule generated: ${rowsToInsert.length} row(s) across ${lineIds.length} line(s).`,
         data: {
-          schedule_count:         scheduleRows.length,
-          lines_used:             lineIds.length,
-          sequential_stages:      stagesUsed.length,
-          stage_order:            stagesUsed,
-          production_end_date:    hardCutoffDate,
-          stage_completion:       stageSummary,
-          stage_completion_shift: stageShiftSummary,
-          working_days_by_line:   Object.fromEntries(
+          schedule_count:       rowsToInsert.length,
+          lines_used:           lineIds.length,
+          plan_type:            plan?.plan_type ?? 'ORIGINAL',
+          production_end_date:  po.data.production_end_date,
+          product_completion:   completionSummary,
+          working_days_by_line: Object.fromEntries(
             [...workingDaysByLine.entries()].map(([lid, days]) => [lid, days.length])
           ),
-          capacity_by_line:    capacitySummary,
-          synthetic_days_used: Object.keys(syntheticDaysSummary).length > 0
-            ? syntheticDaysSummary
-            : undefined,
-          warnings: [
-          ...(allCoverageWarnings.length > 0 ? allCoverageWarnings : []),
-          ...(warningErrors.length > 0 ? warningErrors : []),
-        ].length > 0
-          ? [
-              ...(allCoverageWarnings.length > 0 ? allCoverageWarnings : []),
-              ...(warningErrors.length > 0 ? warningErrors : []),
-            ]
-          : undefined,
+          capacity_by_line:     capacitySummary,
+          overtime_slots:       overtimeSummary.length > 0 ? overtimeSummary : undefined,
+          occupied_slots_count: occupiedSlotMap.size > 0 ? occupiedSlotMap.size : undefined,
+          warnings:             partialErrors.length > 0 ? partialErrors : undefined,
         },
       });
     } catch (error) {
@@ -2021,7 +1634,6 @@ class OrderScheduleModule extends BaseModule {
     }
   }
 
-  // Update Schedule
   async updateSchedule(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -2085,43 +1697,44 @@ class OrderScheduleModule extends BaseModule {
       }
 
       if (planned_qty_per_day !== undefined) {
-        const cap = schedule.line_capacity_per_day ?? 0;
-        if (cap > 0 && planned_qty_per_day > cap) {
+        const otherRowsSum = await SProductionOrderSchedule.sum('planned_qty_per_day', {
+          where: {
+            po_id:         id,
+            po_product_id: schedule.po_product_id,
+            id:            { [Op.ne]: schedule_id },
+          },
+          transaction: t,
+        });
+      
+        const product = await SProductionOrderProduct.findOne({
+          where: { id: schedule.po_product_id }, transaction: t,
+        });
+      
+        const newTotal = (otherRowsSum ?? 0) + planned_qty_per_day;
+        if (newTotal > product.planned_qty) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `planned_qty_per_day (${planned_qty_per_day}) exceeds line capacity per slot (${cap})`,
+            error:  `Total scheduled qty (${newTotal}) akan melebihi planned qty (${product.planned_qty}).`,
           });
         }
-        validation.value.utilization_pct = cap > 0
-          ? Math.round((planned_qty_per_day / cap) * 10000) / 100
-          : 0;
       }
 
       await schedule.update(validation.value, { transaction: t });
 
-      // Sync scheduled_qty on product
       const schedSum = await SProductionOrderSchedule.sum('planned_qty_per_day', {
-        where:       { po_id: id, po_product_id: schedule.po_product_id },
-        transaction: t,
+        where: { po_id: id, po_product_id: schedule.po_product_id }, transaction: t,
       });
       await SProductionOrderProduct.update(
         { scheduled_qty: schedSum || 0 },
         { where: { id: schedule.po_product_id }, transaction: t }
       );
 
-      // Sync total_scheduled_qty on PO header
-      const totalSched = await SProductionOrderSchedule.sum('planned_qty_per_day', {
-        where:       { po_id: id },
-        transaction: t,
-      });
-      await po.data.update({ total_scheduled_qty: totalSched || 0 }, { transaction: t });
-
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: 'Schedule row updated. Note: manual edits may violate stage precedence — consider regenerating the full schedule for consistency.',
+        message: 'Schedule row updated.',
         data:    schedule,
       });
     } catch (error) {
@@ -2131,7 +1744,6 @@ class OrderScheduleModule extends BaseModule {
     }
   }
 
-  // Submit
   async submit(req, res) {
     const t = await sequelize.transaction();
     try {
@@ -2139,7 +1751,7 @@ class OrderScheduleModule extends BaseModule {
 
       const po = await SProductionOrder.findOne({
         where:       { id, deleted_at: null },
-        include:     [{ model: SProductionPlan, as: 'plan', attributes: ['latest_delivery_date'] }],
+        include:     [{ model: SProductionPlan, as: 'plan', attributes: ['plan_month'] }],
         transaction: t,
       });
       if (!po) {
@@ -2154,14 +1766,16 @@ class OrderScheduleModule extends BaseModule {
         });
       }
 
-      const latestDO = po.plan?.latest_delivery_date ? new Date(po.plan.latest_delivery_date) : null;
-      const endDt    = new Date(po.production_end_date);
-      if (latestDO && endDt > latestDO) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  `production_end_date (${po.production_end_date}) must not exceed the latest delivery date (${po.plan.latest_delivery_date})`,
-        });
+      if (po.plan?.plan_month) {
+        const [planYear, planMonth] = po.plan.plan_month.split('-').map(Number);
+        const endDt = new Date(po.production_end_date);
+        if (endDt.getUTCFullYear() !== planYear || endDt.getUTCMonth() + 1 !== planMonth) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `production_end_date must be within the plan month (${po.plan.plan_month})`,
+          });
+        }
       }
 
       const scheduleCount = await SProductionOrderSchedule.count({ where: { po_id: id }, transaction: t });
@@ -2173,8 +1787,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
 
-      const products = await SProductionOrderProduct.findAll({ where: { po_id: id }, transaction: t });
-
+      const products  = await SProductionOrderProduct.findAll({ where: { po_id: id }, transaction: t });
       const integrity = await validateScheduleIntegrity(po, products, t);
       if (!integrity.ok) {
         await t.rollback();
@@ -2208,12 +1821,10 @@ class OrderScheduleModule extends BaseModule {
     }
   }
 
-  // Approve
   async approve(req, res) {
     const t = await sequelize.transaction();
     try {
-      const { id } = req.params;
-
+      const { id }     = req.params;
       const schema     = Joi.object({ notes: Joi.string().optional().allow('', null) });
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
@@ -2264,12 +1875,10 @@ class OrderScheduleModule extends BaseModule {
     }
   }
 
-  // Reject
   async reject(req, res) {
     const t = await sequelize.transaction();
     try {
-      const { id } = req.params;
-
+      const { id }     = req.params;
       const schema     = Joi.object({ notes: Joi.string().required() });
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
@@ -2322,21 +1931,22 @@ class OrderScheduleModule extends BaseModule {
     }
   }
 
-  // Release
   async release(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
    
-      // Validasi Production Order
+      // ========== VALIDATION: Production Order Basic ==========
       const po = await SProductionOrder.findOne({
         where:       { id, deleted_at: null },
         transaction: t,
       });
       if (!po) {
         await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 404, error: 'Production Order not found',
+        return helper.sendResponse(res, { 
+          status: false, 
+          code: 404, 
+          error: 'Production Order not found' 
         });
       }
       if (po.status !== 'Approved') {
@@ -2347,7 +1957,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // Validasi schedule sudah ada
+      // ========== VALIDATION: Schedules Exist ==========
       const schedules = await SProductionOrderSchedule.findAll({
         where:       { po_id: po.id },
         transaction: t,
@@ -2360,82 +1970,119 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // Bangun lookup PO Products
+      // ========== PRELOAD: PO Products, Plan Details, Routings ==========
       const poProducts = await SProductionOrderProduct.findAll({
         where:       { po_id: po.id },
         transaction: t,
       });
-      const prodMap = Object.fromEntries(poProducts.map((p) => [p.id, p]));
+      const prodMap = new Map(poProducts.map((p) => [p.id, p]));
    
-      // Bangun line-to-factory map
-      const lineIds         = [...new Set(schedules.map((s) => s.line_id))];
-      const lineFactoryRows = await SLines.findAll({
-        where:       { id: lineIds },
-        attributes:  ['id', 'factory_id'],
+      const planDetailIds = [...new Set(poProducts.map((p) => p.plan_detail_id))];
+      const planDetails   = await SProductionPlanDetail.findAll({
+        where:       { id: planDetailIds },
+        attributes:  ['id', 'routing_id'],
         transaction: t,
       });
-      const lineToFactory = new Map(lineFactoryRows.map((l) => [l.id, l.factory_id]));
+      const planDetailMap = new Map(planDetails.map((d) => [d.id, d]));
    
-      // Pre-fetch SStations + SStationJobs per line_id (di-cache)
-      const stationsByLine = new Map();
-      for (const lineId of lineIds) {
-        const stations = await db.SStations.findAll({
-          where: { line_id: lineId, status: true, deleted_at: null },
-          include: [{
-            model:    db.SStationJobs,
-            as:       'station_jobs',
-            where:    { active: true, deleted_at: null },
-            required: false,
-            include:  [{
-              model:      db.SJobs,
-              as:         'job',
-              attributes: ['id', 'job_code', 'name', 'standard_time'],
-              required:   false,
-            }],
-            order: [['sequence', 'ASC']],
-          }],
-          order:       [['sequence', 'ASC']],
-          transaction: t,
-        });
-        stationsByLine.set(lineId, stations);
-      }
+      // ========== VALIDATION: All PO Products punya Routing ==========
+      const routingIds = [...new Set(
+        planDetails.map((d) => d.routing_id).filter(Boolean)
+      )];
    
-      const [approvedDocStatus, activeActStatus] = await Promise.all([
-        db.RefBomDocumentStatus.findOne({
-          where:       { code: 'APPROVED' },
-          attributes:  ['id'],
-          transaction: t,
-        }),
-        db.RefBomActivationStatus.findOne({
-          where:       { code: 'ACTIVE' },
-          attributes:  ['id'],
-          transaction: t,
-        }),
-      ]);
-   
-      if (!approvedDocStatus || !activeActStatus) {
+      const missingRouting = poProducts.filter((p) => {
+        const detail = planDetailMap.get(p.plan_detail_id);
+        return !detail?.routing_id;
+      });
+      if (missingRouting.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
-          status: false, code: 500,
-          error:  'BOM status reference data not found. ' +
-                  `doc_status 'APPROVED': ${approvedDocStatus ? 'OK' : 'MISSING'}, ` +
-                  `activation_status 'ACTIVE': ${activeActStatus ? 'OK' : 'MISSING'}.`,
+          status: false, code: 400,
+          error:  `${missingRouting.length} product(s) have no routing configured in their plan detail. ` +
+                  `Assign a routing to all plan details before releasing.`,
         });
       }
    
-      // Bersihkan Draft WOs lama (safe regenerate)
+      // ========== PRELOAD: Routing Details, Stations, Materials ==========
+      const routingDetails = await SPartRoutingDetails.findAll({
+        where:       { routing_id: routingIds },
+        order:       [['sequence', 'ASC']],
+        transaction: t,
+      });
+   
+      // routingStationMap: routing_id → unique station_ids sorted by sequence
+      const routingStationMap = new Map();
+      for (const rd of routingDetails) {
+        if (!routingStationMap.has(rd.routing_id)) {
+          routingStationMap.set(rd.routing_id, []);
+        }
+        const existing = routingStationMap.get(rd.routing_id);
+        if (!existing.find((s) => s.station_id === rd.station_id)) {
+          existing.push({ station_id: rd.station_id, sequence: rd.sequence });
+        }
+      }
+   
+      const routingStationMaterials = await SRoutingStationMaterial.findAll({
+        where:       { routing_id: routingIds },
+        transaction: t,
+      });
+   
+      // materialMap: `routing_id_station_id` → array of { part_id, qty_per_unit, uom }
+      const materialMap = new Map();
+      for (const rsm of routingStationMaterials) {
+        const key = `${rsm.routing_id}_${rsm.station_id}`;
+        if (!materialMap.has(key)) materialMap.set(key, []);
+        materialMap.get(key).push({
+          part_id:      rsm.part_id,
+          qty_per_unit: parseFloat(rsm.qty_per_unit),
+          uom:          rsm.uom,
+        });
+      }
+   
+      // ========== VALIDATION: Routings punya Material pada minimal 1 station ==========
+      const routingsWithoutAnyMaterial = routingIds.filter((routingId) => {
+        const stations = routingStationMap.get(routingId) ?? [];
+        return !stations.some(({ station_id }) =>
+          materialMap.has(`${routingId}_${station_id}`) &&
+          materialMap.get(`${routingId}_${station_id}`).length > 0
+        );
+      });
+      if (routingsWithoutAnyMaterial.length > 0) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  `${routingsWithoutAnyMaterial.length} routing(s) have no material mapping on any station. ` +
+                  `Complete s_routing_station_materials master data before releasing.`,
+          missing: routingsWithoutAnyMaterial,
+        });
+      }
+   
+      // ========== VALIDATION: All Stations Exist & Active ==========
+      const allStationIds = [...new Set(routingDetails.map((rd) => rd.station_id))];
+      const activeStations = await db.SStations.findAll({
+        where:       { id: allStationIds, status: true, deleted_at: null },
+        attributes:  ['id', 'sequence'],
+        transaction: t,
+      });
+      const activeStationIds = new Set(activeStations.map((s) => s.id));
+   
+      // ========== CLEANUP: Remove Old Draft Work Orders ==========
       await SWorkOrder.destroy({
         where:       { po_id: po.id, status: 'Draft' },
         transaction: t,
       });
    
-      // Serial loop — generateWoNumber() TIDAK boleh dijalankan paralel
-      for (const sched of schedules) {
+      let woCreatedCount = 0;
    
-        const poProd = prodMap[sched.po_product_id];
+      // ========== MAIN LOOP: Per Schedule → Create WO + Stations + Materials ==========
+      for (const sched of schedules) {
+        const poProd = prodMap.get(sched.po_product_id);
         if (!poProd) {
           throw new Error(`Missing PO Product record for schedule id=${sched.id}`);
         }
+   
+        const planDetail = planDetailMap.get(poProd.plan_detail_id);
+        const routingId  = planDetail.routing_id;
    
         // Resolve shift calendar
         const { cal: shiftCal, isExact } = await resolveShiftCalendar(
@@ -2446,28 +2093,26 @@ class OrderScheduleModule extends BaseModule {
         );
         if (!shiftCal) {
           throw new Error(
-            `No shift calendar found for line ${sched.line_id} on date ${sched.production_date}. ` +
-            `Cannot generate Work Order.`
+            `No shift calendar found for line ${sched.line_id} on date ${sched.production_date}.`
           );
         }
         if (!isExact) {
           console.warn(
             `[Release] Line ${sched.line_id} date=${sched.production_date}: ` +
-            `using nearest shift calendar id=${shiftCal.id} (extra working day from plan adjustment)`
+            `using nearest shift calendar id=${shiftCal.id}`
           );
         }
    
-        // Generate WO Number (serial)
+        // Generate WO number
         const woNumber = await generateWoNumber(sched.production_date, t);
    
-        // Buat SWorkOrder 
+        // Create Work Order
         const createdWo = await SWorkOrder.create({
           wo_number:           woNumber,
           po_id:               po.id,
           po_schedule_id:      sched.id,
           part_id:             poProd.part_id,
           line_id:             sched.line_id,
-          factory_id:          lineToFactory.get(sched.line_id) ?? null,
           shift_id:            sched.shift_id,
           work_date:           sched.production_date,
           planned_quantity:    sched.planned_qty_per_day,
@@ -2478,153 +2123,157 @@ class OrderScheduleModule extends BaseModule {
           shift_name_snapshot: sched.shift_name_snapshot ?? null,
         }, { transaction: t });
    
-        // Insert SWorkOrderStation + SWorkOrderStationJob
-        const lineStations = stationsByLine.get(sched.line_id) ?? [];
-        if (lineStations.length === 0) {
-          console.warn(
-            `[Release] Line ${sched.line_id} tidak memiliki station aktif. ` +
-            `WO ${woNumber} dibuat tanpa SWorkOrderStation.`
+        // Get routing stations
+        const routingStations = routingStationMap.get(routingId) ?? [];
+        if (routingStations.length === 0) {
+          throw new Error(
+            `Routing id=${routingId} has no station details. ` +
+            `Add routing details before releasing.`
           );
         }
    
-        const lineCap = await db.SProductionPlanCapacityResult.findOne({
-          where:       { plan_id: po.plan_id, line_id: sched.line_id },
-          attributes:  ['max_takt_time'],
-          transaction: t,
-        });
-        const taktTimeSec = parseFloat(lineCap?.max_takt_time ?? 0);
-   
-        for (const station of lineStations) {
-          const woStation = await SWorkOrderStation.create({
-            wo_id:            createdWo.id,
-            station_id:       station.id,
-            sequence:         station.sequence,
-            planned_quantity: createdWo.planned_quantity,
-            actual_quantity:  0,
-            status:           'Pending',
-          }, { transaction: t });
-   
-          const stationJobs = station.station_jobs ?? [];
-          if (stationJobs.length === 0) {
-            console.warn(
-              `[Release] Station id=${station.id} (${station.name}) tidak memiliki job aktif.`
+        // ========== INNER LOOP: Per Station → Create WO Station + Materials ==========
+        let stationSeq = 0;
+        for (const { station_id, sequence } of routingStations) {
+          // Validate station active
+          if (!activeStationIds.has(station_id)) {
+            throw new Error(
+              `Station id=${station_id} in routing id=${routingId} is inactive or deleted. ` +
+              `Deactivate the routing or fix the station before releasing.`
             );
-            continue;
           }
    
-          const jobCount   = stationJobs.length;
-          const woJobRows  = stationJobs.map((sj) => {
-            let resolvedTime = parseFloat(sj.job?.standard_time ?? 0);
-            if (resolvedTime <= 0 && taktTimeSec > 0) {
-              resolvedTime = parseFloat((taktTimeSec / jobCount).toFixed(2));
+          stationSeq++;
+          const woStationNumber = `${woNumber}-ST${stationSeq}`;
+   
+          // Create WO Station
+          const createdStation = await SWorkOrderStation.create({
+            wo_id:             createdWo.id,
+            station_id,
+            sequence,
+            planned_quantity:  createdWo.planned_quantity,
+            actual_quantity:   0,
+            status:            'Pending',
+            wo_station_number: woStationNumber,
+          }, { transaction: t });
+   
+          // ========== BOM EXPLOSION: Get RSM materials → explode through BOM ==========
+          const key              = `${routingId}_${station_id}`;
+          const stationMaterials = materialMap.get(key) ?? [];
+   
+          if (stationMaterials.length > 0) {
+            const explodedMaterials = new Map(); // accumulator: part_id → { qty, uom }
+            const explosionWarnings = [];
+   
+            // Explode each RSM material through its BOM tree
+            try {
+              for (const { part_id, qty_per_unit, uom } of stationMaterials) {
+                const baseQty = qty_per_unit * createdWo.planned_quantity;
+                const visitedBoms = new Set();
+   
+                await explodeBomToRawMaterials(
+                  part_id,
+                  baseQty,
+                  explodedMaterials,
+                  visitedBoms,
+                  t,
+                  explosionWarnings
+                );
+              }
+            } catch (explosionError) {
+              await t.rollback();
+              return helper.sendResponse(res, {
+                status:  false,
+                code:    400,
+                error:   `BOM explosion failed for WO ${woNumber}, station_id=${station_id}: ${explosionError.message}`,
+                context: { wo_id: createdWo.id, station_id, routing_id: routingId },
+              });
             }
-            return {
-              wo_station_id:          woStation.id,
-              station_job_id:         sj.id,
-              job_id:                 sj.job_id,
-              sequence:               sj.sequence,
-              standard_time:          resolvedTime > 0 ? Math.round(resolvedTime) : 0,
-              status:                 'Pending',
-              station_name_snapshot:  station.name   ?? null,
-              job_name_snapshot:      sj.job?.name   ?? null,
-              standard_time_snapshot: resolvedTime > 0 ? Math.round(resolvedTime) : 0,
-              setup_time_snapshot:    0,
-              operator_id:            null,
-            };
-          });
-          await SWorkOrderStationJob.bulkCreate(woJobRows, { transaction: t });
+   
+            // Log warnings (not fatal — continue)
+            if (explosionWarnings.length > 0) {
+              console.warn(
+                `[Release] WO ${woNumber} / Station ${woStationNumber} explosion warnings:\n`,
+                explosionWarnings.join('\n')
+              );
+            }
+   
+            // Aggregate exploded materials → wo_station_material rows
+            const materialRows = Array.from(explodedMaterials.entries()).map(
+              ([materialPartId, { qty, uom }]) => ({
+                wo_station_id:    createdStation.id,
+                material_part_id: materialPartId,
+                planned_quantity: parseFloat(qty.toFixed(4)),
+                actual_quantity:  null,
+                uom,
+              })
+            );
+   
+            // Bulk create wo_station_material
+            if (materialRows.length > 0) {
+              await SWorkOrderMaterial.bulkCreate(materialRows, { transaction: t });
+            }
+          }
+          // ========== END BOM EXPLOSION ==========
         }
    
-        // BOM Explosion
-        const bom = await SBoms.findOne({
-          where: {
-            parent_part_id:       poProd.part_id,
-            doc_status_id:        approvedDocStatus.id,
-            activation_status_id: activeActStatus.id,
-            deleted_at:           null,
-          },
-          include: [{
-            model:    SBomDetails,
-            as:       'details',
-            required: false,
-            include:  [{ model: db.SUom, as: 'uom', attributes: ['code'] }],
-          }],
-          transaction: t,
-        });
-   
-        if (!bom) {
-          console.warn(
-            `[Release] Tidak ada BOM Approved+Active untuk part_id=${poProd.part_id}. ` +
-            `WO ${woNumber} dibuat tanpa material explosion.`
-          );
-        } else if (!bom.details?.length) {
-          console.warn(
-            `[Release] BOM id=${bom.id} untuk part_id=${poProd.part_id} tidak memiliki detail komponen.`
-          );
-        } else {
-          const woMaterials = bom.details.map((detail) => ({
-            wo_id:            createdWo.id,
-            material_part_id: detail.part_id,
-            planned_quantity: parseFloat(detail.qty_required)
-                            * parseFloat(createdWo.planned_quantity)
-                            * (1 + (parseFloat(detail.scrap_percentage ?? 0) / 100)),
-            actual_quantity:  0,
-            uom:              detail.uom?.code ?? 'PCS',
-          }));
-          await SWorkOrderMaterial.bulkCreate(woMaterials, { transaction: t });
-        }
+        woCreatedCount++;
       }
-      // End serial loop
    
-      // Update status PO menjadi Released
+      // ========== FINALIZE: Update PO Status ==========
       await po.update({
         status:      'Released',
         released_by: req.user?.id ?? null,
         released_at: new Date(),
       }, { transaction: t });
    
+      // ========== LOG ACTIVITY ==========
       await this.logActivity(req, {
         moduleCode:   'production_order',
         activityCode: 'RELEASE',
         resourceId:   po.id,
         description:  `Released Production Order ${po.po_number} — ` +
-                      `generated ${schedules.length} Work Order(s) with Station/Job & BOM explosion`,
+                      `generated ${woCreatedCount} Work Order(s) with BOM-exploded materials per station`,
         transaction:  t,
       });
    
+      // ========== COMMIT & RESPOND ==========
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: `Production Order released successfully. ${schedules.length} Work Order(s) generated with Station/Job mapping and BOM explosion.`,
-        data:    { id: po.id, po_number: po.po_number, work_orders_created: schedules.length },
+        message: `Production Order released. ${woCreatedCount} Work Order(s) generated.`,
+        data:    { id: po.id, po_number: po.po_number, work_orders_created: woCreatedCount },
       });
    
     } catch (error) {
       await t.rollback();
-      console.log('[OrderScheduleModule][release]:', error);
-      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+      console.error('[OrderScheduleModule][release]:', error);
+      return helper.sendResponse(res, { 
+        status: false, 
+        code: 500, 
+        error: error.message 
+      });
     }
   }
 
-  // Reschedule
   async reschedule(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id } = req.params;
-
+ 
       const schema = Joi.object({
         new_start_date:    Joi.date().iso().required(),
         new_end_date:      Joi.date().iso().required(),
         reschedule_reason: Joi.string().required(),
       });
-
+ 
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
         await t.rollback();
         return helper.sendResponse(res, validation);
       }
-
+ 
       const po = await SProductionOrder.findOne({ where: { id, deleted_at: null }, transaction: t });
       if (!po) {
         await t.rollback();
@@ -2637,12 +2286,11 @@ class OrderScheduleModule extends BaseModule {
           error:  'Only Released Production Orders can be rescheduled',
         });
       }
-
+ 
       const { new_start_date, new_end_date, reschedule_reason } = validation.value;
       const newStart = new Date(new_start_date);
       const newEnd   = new Date(new_end_date);
-      const latestDO = po.latest_delivery_date ? new Date(po.latest_delivery_date) : null;
-
+ 
       if (newEnd <= newStart) {
         await t.rollback();
         return helper.sendResponse(res, {
@@ -2650,16 +2298,36 @@ class OrderScheduleModule extends BaseModule {
           error:  'new_end_date must be after new_start_date',
         });
       }
-      // Consistent with create() and update(): use > not >=
-      if (latestDO && newEnd > latestDO) {
-        await t.rollback();
-        return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  `new_end_date must not exceed the latest delivery date (${po.latest_delivery_date})`,
-        });
+ 
+      const plan = await SProductionPlan.findOne({
+        where:       { id: po.plan_id },
+        attributes:  ['plan_month'],
+        transaction: t,
+      });
+ 
+      if (plan?.plan_month) {
+        const [planYear, planMonth] = plan.plan_month.split('-').map(Number);
+        const startYear  = newStart.getUTCFullYear();
+        const startMonth = newStart.getUTCMonth() + 1;
+        const endYear    = newEnd.getUTCFullYear();
+        const endMonth   = newEnd.getUTCMonth() + 1;
+ 
+        if (startYear !== planYear || startMonth !== planMonth) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `new_start_date must be within the plan month (${plan.plan_month})`,
+          });
+        }
+        if (endYear !== planYear || endMonth !== planMonth) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `new_end_date must be within the plan month (${plan.plan_month})`,
+          });
+        }
       }
-
-      // Count and summarize impacted Work Orders by stage
+ 
       const impactedWos = await SWorkOrder.findAll({
         where:       { po_id: id, deleted_at: null },
         attributes:  ['id', 'sequence'],
@@ -2671,8 +2339,47 @@ class OrderScheduleModule extends BaseModule {
         const s = wo.sequence ?? 1;
         stageWoCounts[s] = (stageWoCounts[s] ?? 0) + 1;
       }
-
-      // Log the reschedule event
+ 
+      if (impactedWoCount > 0) {
+        const woIds = impactedWos.map((w) => w.id);
+ 
+        // Collect station IDs first — SWorkOrderMaterial FK is wo_station_id, not wo_id
+        const impactedStations = await SWorkOrderStation.findAll({
+          where:       { wo_id: woIds },
+          attributes:  ['id'],
+          paranoid: false,
+          transaction: t,
+        });
+        const stationIds = impactedStations.map((s) => s.id);
+ 
+        if (stationIds.length > 0) {
+          // Semua child harus dihapus dengan force: true
+          // karena SWorkOrderStation adalah non-paranoid (hard delete)
+          // dan PostgreSQL tidak peduli dengan deleted_at
+          
+          await SWorkOrderMaterial.destroy({
+            where:       { wo_station_id: stationIds },
+            transaction: t,
+            force:       true,  // WAJIB — soft delete tidak cukup
+          });
+        
+          await SWorkOrderProgress.destroy({
+            where:       { wo_station_id: stationIds },
+            transaction: t,
+            // paranoid: false, jadi force tidak diperlukan, tapi aman untuk ditambahkan
+          });
+        
+          await SWorkOrderIssue.destroy({
+            where:       { wo_station_id: stationIds },
+            transaction: t,
+            force:       true,  // WAJIB
+          });
+        }
+ 
+        await SWorkOrderStation.destroy({ where: { wo_id: woIds }, transaction: t });
+        await SWorkOrder.destroy({ where: { id: woIds }, force: true, transaction: t });
+      }
+ 
       await SProductionOrderRescheduleLog.create({
         po_id:             po.id,
         old_start_date:    po.production_start_date,
@@ -2684,53 +2391,33 @@ class OrderScheduleModule extends BaseModule {
         rescheduled_by:    req.user?.id ?? null,
         rescheduled_at:    new Date(),
       }, { transaction: t });
-
-      // Cancel existing Work Orders and their child records
-      if (impactedWoCount > 0) {
-        const woIds = impactedWos.map((w) => w.id);
-        const existingStations = await SWorkOrderStation.findAll({
-          where:       { wo_id: woIds },
-          attributes:  ['id'],
-          transaction: t,
-        });
-        if (existingStations.length > 0) {
-          const stationIds = existingStations.map((s) => s.id);
-          await SWorkOrderStationJob.destroy({ where: { wo_station_id: stationIds }, transaction: t });
-          await SWorkOrderStation.destroy({ where: { wo_id: woIds }, transaction: t });
-        }
-        await SWorkOrderMaterial.destroy({ where: { wo_id: woIds }, transaction: t });
-        await SWorkOrder.destroy({ where: { id: woIds }, transaction: t });
-      }
-
-      // Clear schedule rows and reset quantities
+ 
       await SProductionOrderSchedule.destroy({ where: { po_id: id }, transaction: t, force: true });
       await SProductionOrderProduct.update({ scheduled_qty: 0 }, { where: { po_id: id }, transaction: t });
-
-      // Revert to Approved so generate-schedule → release can be re-run
+ 
       await po.update({
         production_start_date: newStart.toISOString().split('T')[0],
         production_end_date:   newEnd.toISOString().split('T')[0],
-        total_scheduled_qty:   0,
         status:                'Approved',
         released_by:           null,
         released_at:           null,
       }, { transaction: t });
-
+ 
       await this.logActivity(req, {
         moduleCode:   'production_order',
         activityCode: 'RESCHEDULE',
         resourceId:   po.id,
         newData:      { new_start_date, new_end_date, stage_wo_counts: stageWoCounts },
         description:  `Rescheduled Production Order ${po.po_number}: ` +
-                      `${impactedWoCount} Work Order(s) cancelled across all stages`,
+                      `${impactedWoCount} Work Order(s) cancelled`,
         transaction:  t,
       });
-
+ 
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: `Reschedule recorded. ${impactedWoCount} Work Order(s) cancelled across all stages. ` +
+        message: `Reschedule recorded. ${impactedWoCount} Work Order(s) cancelled. ` +
                  `Please regenerate the schedule and re-release.`,
         data: {
           id:                po.id,

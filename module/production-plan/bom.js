@@ -10,8 +10,6 @@ const {
   SParts,
   SUom,
   SUsers,
-  RefBomDocumentStatus,
-  RefBomActivationStatus,
   sequelize,
 } = db;
 
@@ -20,8 +18,6 @@ const ALLOWED_DETAIL_TYPES = ['RAW', 'WIP', 'PRODUCT'];
 const BOM_HEADER_INCLUDE = [
   { model: SParts,                  as: 'parent_part',       attributes: ['id', 'part_number', 'part_name', 'part_type_code'] },
   { model: SUom,                    as: 'uom',               attributes: ['id', 'code', 'name'] },
-  { model: RefBomDocumentStatus,    as: 'doc_status',        attributes: ['id', 'code', 'name'] },
-  { model: RefBomActivationStatus,  as: 'activation_status', attributes: ['id', 'code', 'name'] },
   { model: SUsers,                  as: 'creator',           attributes: ['id', 'email'] },
   { model: SUsers,                  as: 'approver',          attributes: ['id', 'email'] },
 ];
@@ -149,55 +145,45 @@ async function validateDetails(details, bomId, parentPartId, transaction) {
   return { ok: true };
 }
 
-// Letakkan di luar class, di-resolve saat pertama kali dibutuhkan (lazy singleton)
-let _statusCache = null;
+// // Letakkan di luar class, di-resolve saat pertama kali dibutuhkan (lazy singleton)
+// let _statusCache = null;
 
-async function getStatusIds() {
-  if (_statusCache) return _statusCache;
+// async function getStatusIds() {
+//   if (_statusCache) return _statusCache;
 
-  const [docStatuses, activationStatuses] = await Promise.all([
-    RefBomDocumentStatus.findAll({ attributes: ['id', 'code'] }),
-    RefBomActivationStatus.findAll({ attributes: ['id', 'code'] }),
-  ]);
+//   const [docStatuses, activationStatuses] = await Promise.all([
+//     RefBomDocumentStatus.findAll({ attributes: ['id', 'code'] }),
+//     RefBomActivationStatus.findAll({ attributes: ['id', 'code'] }),
+//   ]);
 
-  _statusCache = {
-    doc: Object.fromEntries(docStatuses.map((s) => [s.code, s.id])),
-    activation: Object.fromEntries(activationStatuses.map((s) => [s.code, s.id])),
-  };
+//   _statusCache = {
+//     doc: Object.fromEntries(docStatuses.map((s) => [s.code, s.id])),
+//     activation: Object.fromEntries(activationStatuses.map((s) => [s.code, s.id])),
+//   };
 
-  return _statusCache;
-}
+//   return _statusCache;
+// }
 
 // ─── Module ──────────────────────────────────────────────────────────────────
 
 class BomModule extends BaseModule {
 
   async getDocStatuses(req, res) {
-    try {
-      const rows = await RefBomDocumentStatus.findAll({
-        where: { deleted_at: null },
-        attributes: ['id', 'code', 'name', 'sequence'],
-        order: [['sequence', 'ASC']],
-      });
-      return helper.sendResponse(res, { status: true, code: 200, data: rows });
-    } catch (error) {
-      console.log('[BomModule][getDocStatuses]:', error);
-      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
-    }
+    const rows = [
+      { code: 'Draft',            name: 'Draft' },
+      { code: 'Pending_Approval', name: 'Pending Approval' },
+      { code: 'Approved',         name: 'Approved' },
+      { code: 'Rejected',         name: 'Rejected' },
+    ];
+    return helper.sendResponse(res, { status: true, code: 200, data: rows });
   }
 
   async getActivationStatuses(req, res) {
-    try {
-      const rows = await RefBomActivationStatus.findAll({
-        where: { deleted_at: null },
-        attributes: ['id', 'code', 'name', 'sequence'],
-        order: [['sequence', 'ASC']],
-      });
-      return helper.sendResponse(res, { status: true, code: 200, data: rows });
-    } catch (error) {
-      console.log('[BomModule][getActivationStatuses]:', error);
-      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
-    }
+    const rows = [
+      { code: 'Active',   name: 'Active' },
+      { code: 'Inactive', name: 'Inactive' },
+    ];
+    return helper.sendResponse(res, { status: true, code: 200, data: rows });
   }
 
   async getDropdown(req, res) {
@@ -218,7 +204,7 @@ class BomModule extends BaseModule {
   async list(req, res) {
     try {
       const { limit, page, offset } = helper.getPagination(req.query);
-      const { search = '', doc_status_id, activation_status_id, parent_part_id } = req.query;
+      const { search = '', doc_status, activation_status, parent_part_id } = req.query;
 
       const where = { deleted_at: null };
 
@@ -228,8 +214,9 @@ class BomModule extends BaseModule {
           { description: { [Op.iLike]: `%${search}%` } },
         ];
       }
-      if (doc_status_id)        where.doc_status_id        = doc_status_id;
-      if (activation_status_id) where.activation_status_id = activation_status_id;
+      
+      if (doc_status) where.doc_status = doc_status;
+      if (activation_status) where.activation_status = activation_status;
       if (parent_part_id)       where.parent_part_id       = parent_part_id;
 
       const { count, rows } = await SBoms.findAndCountAll({
@@ -335,17 +322,6 @@ class BomModule extends BaseModule {
 
       const bom_number = await generateBomNumber(parent_part_id, t);
 
-      const draftStatus = await RefBomDocumentStatus.findOne({
-        where: { code: 'DRAFT', deleted_at: null },
-        order: [['sequence', 'ASC']],
-        transaction: t,
-      });
-
-      if (!draftStatus) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 500, error: 'Document status DRAFT not configured' });
-      }
-
       // ── Handle soft-deleted BOM with same number ──
       let bom;
       const existing = await SBoms.findOne({ where: { bom_number }, paranoid: false, transaction: t });
@@ -361,8 +337,8 @@ class BomModule extends BaseModule {
         await existing.update({
           description, parent_part_id, uom_id, notes,
           bom_version: 1,
-          doc_status_id: draftStatus.id,
-          activation_status_id: null,
+          doc_status: 'Draft',
+          activation_status: 'Inactive',
           reject_reason: null,
           approved_by: null,
           approved_at: null,
@@ -380,7 +356,7 @@ class BomModule extends BaseModule {
         bom = await SBoms.create({
           bom_number, description, parent_part_id, uom_id, notes,
           bom_version: 1,
-          doc_status_id: draftStatus.id,
+          doc_status: 'Draft',
           created_by: req.user?.id ?? null,
         }, { transaction: t });
 
@@ -509,7 +485,6 @@ class BomModule extends BaseModule {
 
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
-        include: [{ model: RefBomDocumentStatus, as: 'doc_status', attributes: ['code'] }],
         transaction: t,
       });
 
@@ -517,7 +492,7 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.doc_status?.code !== 'DRAFT') {
+      if (bom.doc_status !== 'Draft') {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Only Draft BOMs can be deleted' });
       }
@@ -769,7 +744,6 @@ class BomModule extends BaseModule {
       const { id } = req.params;
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
-        include: [{ model: RefBomDocumentStatus, as: 'doc_status', attributes: ['id', 'code'] }],
         transaction: t,
       });
 
@@ -778,18 +752,13 @@ class BomModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
 
-      if (!['REJECTED', 'PENDING_APPROVAL'].includes(bom.doc_status?.code)) {
+      if (!['Rejected', 'Pending_Approval'].includes(bom.doc_status)) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Only Rejected or Pending Approval BOMs can be returned to Draft' });
       }
 
-      const draftStatus = await RefBomDocumentStatus.findOne({
-        where: { code: 'DRAFT', deleted_at: null },
-        transaction: t,
-      });
-
       const oldData = bom.toJSON();
-      await bom.update({ doc_status_id: draftStatus.id, reject_reason: null }, { transaction: t });
+      await bom.update({ doc_status: 'Draft', reject_reason: null }, { transaction: t });
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'RETURN_DRAFT',
         resourceId: bom.id, oldData, newData: bom,
@@ -817,7 +786,6 @@ class BomModule extends BaseModule {
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
         include: [
-          { model: RefBomDocumentStatus, as: 'doc_status', attributes: ['id', 'code'] },
           { model: SBomDetails, as: 'details', where: { deleted_at: null }, required: false },
         ],
         transaction: t,
@@ -827,7 +795,7 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (!['DRAFT', 'REJECTED'].includes(bom.doc_status?.code)) {
+      if (!['Draft', 'Rejected'].includes(bom.doc_status)) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
@@ -843,20 +811,14 @@ class BomModule extends BaseModule {
       }
 
       // const pendingStatus = await RefBomDocumentStatus.findOne({
-      //   where: { code: 'PENDING_APPROVAL', deleted_at: null }, transaction: t,
+      //   where: { code: 'Pending_Approval', deleted_at: null }, transaction: t,
       // });
       // if (!pendingStatus) {
       //   await t.rollback();
-      //   return helper.sendResponse(res, { status: false, code: 500, error: 'Document status PENDING_APPROVAL not configured' });
+      //   return helper.sendResponse(res, { status: false, code: 500, error: 'Document status Pending_Approval not configured' });
       // }
-      const statusIds = await getStatusIds();
-      if (!statusIds.doc['PENDING_APPROVAL']) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 500, error: 'Document status PENDING_APPROVAL not configured' });
-      }
-
       const oldData = bom.toJSON();
-      await bom.update({ doc_status_id: statusIds.doc['PENDING_APPROVAL'], reject_reason: null }, { transaction: t });
+      await bom.update({ doc_status: 'Pending_Approval', reject_reason: null }, { transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'SUBMIT',
@@ -884,7 +846,6 @@ class BomModule extends BaseModule {
 
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
-        include: [{ model: RefBomDocumentStatus, as: 'doc_status', attributes: ['id', 'code'] }],
         transaction: t,
       });
 
@@ -892,22 +853,14 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.doc_status?.code !== 'PENDING_APPROVAL') {
+      if (bom.doc_status !== 'Pending_Approval') {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'BOM is not pending approval' });
       }
 
-      const approvedStatus = await RefBomDocumentStatus.findOne({
-        where: { code: 'APPROVED', deleted_at: null }, transaction: t,
-      });
-      if (!approvedStatus) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 500, error: 'Document status APPROVED not configured' });
-      }
-
       const oldData = bom.toJSON();
       await bom.update({
-        doc_status_id: approvedStatus.id,
+        doc_status: 'Approved',
         approved_by: req.user?.id ?? null,
         approved_at: new Date(),
         reject_reason: null,
@@ -945,7 +898,6 @@ class BomModule extends BaseModule {
 
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
-        include: [{ model: RefBomDocumentStatus, as: 'doc_status', attributes: ['id', 'code'] }],
         transaction: t,
       });
 
@@ -953,22 +905,14 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.doc_status?.code !== 'PENDING_APPROVAL') {
+      if (bom.doc_status !== 'Pending_Approval') {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'BOM is not pending approval' });
       }
 
-      const rejectedStatus = await RefBomDocumentStatus.findOne({
-        where: { code: 'REJECTED', deleted_at: null }, transaction: t,
-      });
-      if (!rejectedStatus) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 500, error: 'Document status REJECTED not configured' });
-      }
-
       const oldData = bom.toJSON();
       await bom.update({
-        doc_status_id: rejectedStatus.id,
+        doc_status: 'Rejected',
         reject_reason: validation.value.reject_reason,
         approved_by: null,
         approved_at: null,
@@ -999,10 +943,6 @@ class BomModule extends BaseModule {
 
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
-        include: [
-          { model: RefBomDocumentStatus,   as: 'doc_status',        attributes: ['id', 'code'] },
-          { model: RefBomActivationStatus, as: 'activation_status', attributes: ['id', 'code'] },
-        ],
         transaction: t,
       });
 
@@ -1010,25 +950,17 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.doc_status?.code !== 'APPROVED') {
+      if (bom.doc_status !== 'Approved') {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Only Approved BOMs can be activated' });
       }
-      if (bom.activation_status?.code === 'ACTIVE') {
+      if (bom.activation_status === 'Active') {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'BOM is already active' });
       }
 
-      const activeStatus = await RefBomActivationStatus.findOne({
-        where: { code: 'ACTIVE', deleted_at: null }, transaction: t,
-      });
-      if (!activeStatus) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 500, error: 'Activation status ACTIVE not configured' });
-      }
-
       const oldData = bom.toJSON();
-      await bom.update({ activation_status_id: activeStatus.id, activated_at: new Date() }, { transaction: t });
+      await bom.update({ activation_status: 'Active', activated_at: new Date() }, { transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'ACTIVATE',
@@ -1055,7 +987,6 @@ class BomModule extends BaseModule {
 
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
-        include: [{ model: RefBomActivationStatus, as: 'activation_status', attributes: ['id', 'code'] }],
         transaction: t,
       });
 
@@ -1063,21 +994,13 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.activation_status?.code !== 'ACTIVE') {
+      if (bom.activation_status !== 'Active') {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'BOM is not active' });
       }
 
-      const inactiveStatus = await RefBomActivationStatus.findOne({
-        where: { code: 'INACTIVE', deleted_at: null }, transaction: t,
-      });
-      if (!inactiveStatus) {
-        await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 500, error: 'Activation status INACTIVE not configured' });
-      }
-
       const oldData = bom.toJSON();
-      await bom.update({ activation_status_id: inactiveStatus.id }, { transaction: t });
+      await bom.update({ activation_status: 'Inactive' }, { transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'DEACTIVATE',
@@ -1107,7 +1030,6 @@ class BomModule extends BaseModule {
       const bom = await SBoms.findOne({
         where: { id, deleted_at: null },
         include: [
-          { model: RefBomDocumentStatus, as: 'doc_status', attributes: ['code'] },
           { model: SBomDetails, as: 'details', where: { deleted_at: null }, required: false },
         ],
         transaction: t,
@@ -1117,17 +1039,13 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.doc_status?.code !== 'APPROVED') {
+      if (bom.doc_status !== 'Approved') {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
           error: 'Only Approved BOMs can spawn a new version',
         });
       }
-
-      const draftStatus = await RefBomDocumentStatus.findOne({
-        where: { code: 'DRAFT', deleted_at: null }, transaction: t,
-      });
 
       const newBomNumber = await generateBomNumber(bom.parent_part_id);
 
@@ -1148,7 +1066,7 @@ class BomModule extends BaseModule {
         uom_id:         bom.uom_id,
         notes:          bom.notes,
         bom_version:    nextVersion,
-        doc_status_id:  draftStatus?.id ?? null,
+        doc_status:     'Draft',
         created_by:     req.user?.id ?? null,
       }, { transaction: t });
 
@@ -1193,11 +1111,10 @@ class BomModule extends BaseModule {
   async _getBomEditable(id, transaction) {
     const bom = await SBoms.findOne({
       where: { id, deleted_at: null },
-      include: [{ model: RefBomDocumentStatus, as: 'doc_status', attributes: ['code'] }],
       transaction,
     });
-    if (!bom)                              return { ok: false, code: 404, error: 'BOM not found' };
-    if (bom.doc_status?.code !== 'DRAFT') return { ok: false, code: 400, error: 'Only Draft BOMs can be modified' };
+    if (!bom) return { ok: false, code: 404, error: 'BOM not found' };
+    if (bom.doc_status !== 'Draft') return { ok: false, code: 400, error: 'Only Draft BOMs can be modified' };
     return { ok: true, data: bom };
   }
 }

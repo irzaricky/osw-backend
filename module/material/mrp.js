@@ -375,7 +375,7 @@ class MRPModule extends BaseModule {
       // Fallback 1: Approved saja
       // Fallback 2: BOM apapun yang ada (dev/data belum lengkap)
       let boms = await SBoms.findAll({
-        where: { parent_part_id: { [Op.in]: productPartIds }, doc_status_id: 3, activation_status_id: 1 },
+        where: { parent_part_id: { [Op.in]: productPartIds }, doc_status: 'Approved', activation_status: 'Active' },
         attributes: ['id', 'bom_number', 'bom_version', 'description', 'parent_part_id'],
         order: [['id', 'DESC']],
       });

@@ -132,20 +132,22 @@ export default {
 
     // 5. Seed Shifts (Clean & Continuous 24-Hour Operations)
     const shifts = [
-      // ── SHIFT 1 (Pagi: 07:00 - 15:00) ────────────────────────────────────────
-      { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '07:00:00', end_time: '11:30:00', category: 'PRODUCTIVE', description: 'Shift Pagi', active: true, ...timestamp },
-      { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '11:30:00', end_time: '12:30:00', category: 'BREAK', description: 'ISHOMA', active: true, ...timestamp },
-      { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '12:30:00', end_time: '15:00:00', category: 'PRODUCTIVE', description: 'Shift Pagi Lanjutan', active: true, ...timestamp },
-
-      // ── SHIFT 2 (Sore: 15:00 - 23:00) ────────────────────────────────────────
-      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '15:00:00', end_time: '18:00:00', category: 'PRODUCTIVE', description: 'Shift Sore', active: true, ...timestamp },
-      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '18:00:00', end_time: '18:30:00', category: 'BREAK', description: 'Istirahat Maghrib', active: true, ...timestamp },
-      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '18:30:00', end_time: '23:00:00', category: 'PRODUCTIVE', description: 'Shift Sore Lanjutan', active: true, ...timestamp },
-
-      // ── SHIFT 3 (Malam: 23:00 - 07:00) ───────────────────────────────────────
-      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '23:00:00', end_time: '02:30:00', category: 'PRODUCTIVE', description: 'Shift Malam', active: true, ...timestamp },
-      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '02:30:00', end_time: '03:00:00', category: 'BREAK', description: 'Istirahat Malam', active: true, ...timestamp },
-      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '03:00:00', end_time: '07:00:00', category: 'PRODUCTIVE', description: 'Shift Malam Lanjutan', active: true, ...timestamp }
+      // ── SHIFT 1 (Pagi: 06:00 - 14:00) ──
+      { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '06:00:00', end_time: '11:30:00', category: 'PRODUCTIVE', description: 'Shift Pagi', active: true, ...timestamp },
+      { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '11:30:00', end_time: '12:30:00', category: 'BREAK', description: 'Istirahat Dzuhur & Makan Siang', active: true, ...timestamp },
+      { name: 'Shift 1', shift_number: 1, type: 'REGULAR', start_time: '12:30:00', end_time: '14:00:00', category: 'PRODUCTIVE', description: 'Shift Pagi Lanjutan', active: true, ...timestamp },
+    
+      // ── SHIFT 2 (Sore: 14:00 - 22:00) ──
+      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '14:00:00', end_time: '15:15:00', category: 'PRODUCTIVE', description: 'Shift Sore', active: true, ...timestamp },
+      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '15:15:00', end_time: '15:30:00', category: 'BREAK', description: 'Istirahat Ashar', active: true, ...timestamp },
+      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '15:30:00', end_time: '18:30:00', category: 'PRODUCTIVE', description: 'Shift Sore Lanjutan', active: true, ...timestamp },
+      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '18:30:00', end_time: '19:15:00', category: 'BREAK', description: 'Istirahat Maghrib, Isya & Makan Malam', active: true, ...timestamp },
+      { name: 'Shift 2', shift_number: 2, type: 'REGULAR', start_time: '19:15:00', end_time: '22:00:00', category: 'PRODUCTIVE', description: 'Shift Sore Malam', active: true, ...timestamp },
+    
+      // ── SHIFT 3 (Malam: 22:00 - 06:00) ──
+      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '22:00:00', end_time: '02:00:00', category: 'PRODUCTIVE', description: 'Shift Malam', active: true, ...timestamp },
+      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '02:00:00', end_time: '03:00:00', category: 'BREAK', description: 'Istirahat Makan & Subuh', active: true, ...timestamp },
+      { name: 'Shift 3', shift_number: 3, type: 'REGULAR', start_time: '03:00:00', end_time: '06:00:00', category: 'PRODUCTIVE', description: 'Shift Malam Lanjutan', active: true, ...timestamp },
     ];
 
     await queryInterface.bulkInsert('s_shifts', shifts, { ignoreDuplicates: true });

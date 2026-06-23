@@ -7,11 +7,9 @@ export default (sequelize) => {
       SWorkOrder.belongsTo(models.SProductionOrderSchedule, { foreignKey: 'po_schedule_id', as: 'schedule' });
       SWorkOrder.belongsTo(models.SParts, { foreignKey: 'part_id', as: 'part' });
       SWorkOrder.belongsTo(models.SLines, { foreignKey: 'line_id', as: 'line' });
-      SWorkOrder.belongsTo(models.SFactories, { foreignKey: 'factory_id', as: 'factory' });
       SWorkOrder.belongsTo(models.SShifts, { foreignKey: 'shift_id', as: 'shift' });
       SWorkOrder.hasMany(models.SWorkOrderStation, { foreignKey: 'wo_id', as: 'stations' });
-      SWorkOrder.hasMany(models.SWorkOrderProgress, { foreignKey: 'wo_id', as: 'progresses' });
-      SWorkOrder.hasMany(models.SWorkOrderIssue, { foreignKey: 'wo_id', as: 'issues' });
+      SWorkOrder.belongsTo(models.SUsers, { foreignKey: 'supervisor_id', as: 'supervisor' });
     }
   }
 
@@ -37,10 +35,6 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
-    factory_id: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
     shift_id: {
       type: DataTypes.INTEGER,
       allowNull: false
@@ -62,8 +56,8 @@ export default (sequelize) => {
       allowNull: false,
       defaultValue: 'Released'
     },
-    supervisor: {
-      type: DataTypes.STRING(100)
+    supervisor_id: {
+      type: DataTypes.INTEGER,
     },
     part_number_snapshot: {
       type: DataTypes.STRING,
@@ -85,7 +79,13 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 1
-    }
+    },
+    actual_start_time: {
+      type: DataTypes.DATE
+    },
+    actual_end_time: {
+      type: DataTypes.DATE
+    },
   }, {
     sequelize,
     modelName: 'SWorkOrder',

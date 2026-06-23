@@ -3,8 +3,6 @@ import { Model, DataTypes } from "sequelize";
 export default (sequelize) => {
   class SEmployee extends Model {
     static associate(models) {
-      SEmployee.belongsTo(models.SEmployeePosition, { foreignKey: 'position_id', as: 'position' });
-      SEmployee.hasMany(models.SEmployeeGroupMember, { foreignKey: 'employee_id', as: 'group_memberships' });
     }
   }
 
@@ -23,12 +21,8 @@ export default (sequelize) => {
       type: DataTypes.STRING(255),
       allowNull: false
     },
-    position_id: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: { model: 's_employee_positions', key: 'id' },
-      onUpdate: 'CASCADE',
-      onDelete: 'RESTRICT'
+    position_name: {
+      type: DataTypes.STRING(255),
     },
     active: {
       type: DataTypes.BOOLEAN,

@@ -17,33 +17,17 @@ export default (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false
     },
-    total_stations: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
-    total_jobs: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
     max_takt_time: {
       type: DataTypes.INTEGER
     },
     capacity_per_hour: {
       type: DataTypes.DECIMAL(10, 2)
     },
-    total_capacity_minutes: {
-      type: DataTypes.DECIMAL(15, 2),
-      allowNull: false
-    },
-    total_required_minutes: {
-      type: DataTypes.DECIMAL(15, 2),
-      allowNull: false
-    },
-    capacity_gap_minutes: {
+    capacity_gap_units: {
       type: DataTypes.DECIMAL(15, 2)
     },
     utilization_pct: {
-      type: DataTypes.DECIMAL(5, 2)
+      type: DataTypes.DECIMAL(10, 2)
     },
     status: {
       type: DataTypes.STRING(50),
@@ -52,10 +36,6 @@ export default (sequelize) => {
     calculated_at: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
-    },
-    calculation_version: {
-      type: DataTypes.INTEGER,
-      defaultValue: 1
     },
     total_capacity_units: {
       type: DataTypes.INTEGER,

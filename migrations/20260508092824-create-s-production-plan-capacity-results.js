@@ -28,7 +28,7 @@ export default {
       total_required_minutes: { type: Sequelize.DECIMAL(15,2), allowNull: false },
 
       capacity_gap_minutes: Sequelize.DECIMAL(15,2),
-      utilization_pct: Sequelize.DECIMAL(5,2),
+      utilization_pct: Sequelize.DECIMAL(10,2),
 
       status: { type: Sequelize.STRING(50), allowNull: false },
 

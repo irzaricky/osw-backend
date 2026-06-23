@@ -15,18 +15,6 @@ export default (sequelize) => {
         as: 'uom',
       });
 
-      // Status dokumen (Draft, Pending Approval, Approved, Rejected)
-      SBoms.belongsTo(models.RefBomDocumentStatus, {
-        foreignKey: 'doc_status_id',
-        as: 'doc_status',
-      });
-
-      // Status aktivasi (Active, Inactive)
-      SBoms.belongsTo(models.RefBomActivationStatus, {
-        foreignKey: 'activation_status_id',
-        as: 'activation_status',
-      });
-
       // User yang membuat
       SBoms.belongsTo(models.SUsers, {
         foreignKey: 'created_by',
@@ -82,12 +70,12 @@ export default (sequelize) => {
         type: DataTypes.INTEGER,
         allowNull: true,
       },
-      doc_status_id: {
-        type: DataTypes.INTEGER,
+      doc_status: {
+        type: DataTypes.ENUM('Draft', 'Pending_Approval', 'Approved', 'Rejected'),
         allowNull: true,
       },
-      activation_status_id: {
-        type: DataTypes.INTEGER,
+      activation_status: {
+        type: DataTypes.ENUM('Inactive', 'Active'),
         allowNull: true,
       },
       reject_reason: {

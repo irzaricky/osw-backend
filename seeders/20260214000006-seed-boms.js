@@ -36,25 +36,7 @@ export default {
     const uomMap = {};
     uoms.forEach((u) => { uomMap[u.code] = u.id; });
 
-    // Document Status
-    const docStatuses = await queryInterface.sequelize.query(
-      `SELECT id, code FROM ref_bom_document_statuses WHERE deleted_at IS NULL`,
-      { type: Sequelize.QueryTypes.SELECT }
-    );
-    const docStatusMap = {};
-    docStatuses.forEach((s) => { docStatusMap[s.code] = s.id; });
-
-    // Activation Status
-    const activationStatuses = await queryInterface.sequelize.query(
-      `SELECT id, code FROM ref_bom_activation_statuses WHERE deleted_at IS NULL`,
-      { type: Sequelize.QueryTypes.SELECT }
-    );
-    const activationStatusMap = {};
-    activationStatuses.forEach((s) => { activationStatusMap[s.code] = s.id; });
-
     const pcsUomId            = uomMap['PCS']      || null;
-    const approvedDocStatusId = docStatusMap['APPROVED'] || null;
-    const activeStatusId      = activationStatusMap['ACTIVE'] || null;
 
     // =====================================================
     // BOM DATA
@@ -668,8 +650,8 @@ export default {
             notes:                bomData.notes || null,
             bom_version:          bomData.bom_version || 1,
             uom_id:               pcsUomId,
-            doc_status_id:        approvedDocStatusId,
-            activation_status_id: activeStatusId,
+            doc_status:        'Approved',
+            activation_status: 'Active',
             reject_reason:        null,
             created_by:           null,
             approved_by:          null,

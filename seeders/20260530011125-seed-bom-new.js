@@ -23,10 +23,26 @@ export default {
     // =========================================================
     // 2. Ambil referensi dari s_parts untuk mapping code -> id & uom_id
     // =========================================================
-    const [partRows] = await queryInterface.sequelize.query(
-      `SELECT id, part_number, uom_id FROM s_parts WHERE deleted_at IS NULL;`
+    const [partRows] = await queryInterface.sequelize.query(`
+      SELECT
+        id,
+        part_number,
+        uom_id,
+        part_type_code
+      FROM s_parts
+      WHERE deleted_at IS NULL;
+    `);
+    
+    const partMap = Object.fromEntries(
+      partRows.map((r) => [
+        r.part_number,
+        {
+          id: r.id,
+          uom_id: r.uom_id,
+          part_type_code: r.part_type_code
+        }
+      ])
     );
-    const partMap = Object.fromEntries(partRows.map((r) => [r.part_number, { id: r.id, uom_id: r.uom_id }]));
 
     // =========================================================
     // 3. Definisikan Produk Utama & Komponen-Komponennya
@@ -42,108 +58,108 @@ export default {
     ];
 
     const voltComponents = [
-      { code: 'ASSY-WHEEL-F-26', qty: 1, type: 'Component', level: 1 },
-      { code: 'ASSY-WHEEL-R-MOTOR-26', qty: 1, type: 'Component', level: 1 },
-      { code: 'ASSY-HANDLEBAR-VC', qty: 1, type: 'Component', level: 1 },
-      { code: 'PART-FRAME-VC', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-FORK-26', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-BATT-48V', qty: 1, type: 'Component', level: 1 },
-      { code: 'PART-CONTROLLER-48V', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-BRAKE-SET', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-SADDLE', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-SEAT-CLAMP', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-PEDAL-SET', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-CHAIN', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-DISPLAY-LCD', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-THROTTLE', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-WIRING-HARNESS', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-KICKSTAND', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-RD-UNIT', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-RD-HANGER', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-HEADSET', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-SEATPOST', qty: 1, type: 'Raw Material', level: 1 },
+      { code: 'ASSY-WHEEL-F-26', qty: 1, level: 1 },
+      { code: 'ASSY-WHEEL-R-MOTOR-26', qty: 1, level: 1 },
+      { code: 'ASSY-HANDLEBAR-VC', qty: 1, level: 1 },
+      { code: 'PART-FRAME-VC', qty: 1, level: 1 },
+      { code: 'PART-FORK-26', qty: 1, level: 1 },
+      { code: 'PART-BATT-48V', qty: 1, level: 1 },
+      { code: 'PART-CONTROLLER-48V', qty: 1, level: 1 },
+      { code: 'PART-BRAKE-SET', qty: 1, level: 1 },
+      { code: 'PART-SADDLE', qty: 1, level: 1 },
+      { code: 'PART-SEAT-CLAMP', qty: 1, level: 1 },
+      { code: 'PART-PEDAL-SET', qty: 1, level: 1 },
+      { code: 'PART-CHAIN', qty: 1, level: 1 },
+      { code: 'PART-DISPLAY-LCD', qty: 1, level: 1 },
+      { code: 'PART-THROTTLE', qty: 1, level: 1 },
+      { code: 'PART-WIRING-HARNESS', qty: 1, level: 1 },
+      { code: 'PART-KICKSTAND', qty: 1, level: 1 },
+      { code: 'PART-RD-UNIT', qty: 1, level: 1 },
+      { code: 'PART-RD-HANGER', qty: 1, level: 1 },
+      { code: 'PART-HEADSET', qty: 1, level: 1 },
+      { code: 'PART-SEATPOST', qty: 1, level: 1 },
     ];
 
     const ecoComponents = [
-      { code: 'ASSY-WHEEL-F-20', qty: 1, type: 'Component', level: 1 },
-      { code: 'ASSY-WHEEL-R-MOTOR-20', qty: 1, type: 'Component', level: 1 },
-      { code: 'ASSY-HANDLEBAR-VC', qty: 1, type: 'Component', level: 1 },
-      { code: 'PART-FRAME-EF', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-FORK-20', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-BATT-36V', qty: 1, type: 'Component', level: 1 },
-      { code: 'PART-CONTROLLER-36V', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-BRAKE-SET', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-SADDLE', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-SEAT-CLAMP', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-PEDAL-SET', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-CHAIN', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-DISPLAY-LCD', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-THROTTLE', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-WIRING-HARNESS', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-KICKSTAND', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-RD-UNIT', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-RD-HANGER', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-HEADSET', qty: 1, type: 'Raw Material', level: 1 },
-      { code: 'PART-SEATPOST', qty: 1, type: 'Raw Material', level: 1 },
+      { code: 'ASSY-WHEEL-F-20', qty: 1, level: 1 },
+      { code: 'ASSY-WHEEL-R-MOTOR-20', qty: 1, level: 1 },
+      { code: 'ASSY-HANDLEBAR-VC', qty: 1, level: 1 },
+      { code: 'PART-FRAME-EF', qty: 1, level: 1 },
+      { code: 'PART-FORK-20', qty: 1, level: 1 },
+      { code: 'PART-BATT-36V', qty: 1, level: 1 },
+      { code: 'PART-CONTROLLER-36V', qty: 1, level: 1 },
+      { code: 'PART-BRAKE-SET', qty: 1, level: 1 },
+      { code: 'PART-SADDLE', qty: 1, level: 1 },
+      { code: 'PART-SEAT-CLAMP', qty: 1, level: 1 },
+      { code: 'PART-PEDAL-SET', qty: 1, level: 1 },
+      { code: 'PART-CHAIN', qty: 1, level: 1 },
+      { code: 'PART-DISPLAY-LCD', qty: 1, level: 1 },
+      { code: 'PART-THROTTLE', qty: 1, level: 1 },
+      { code: 'PART-WIRING-HARNESS', qty: 1, level: 1 },
+      { code: 'PART-KICKSTAND', qty: 1, level: 1 },
+      { code: 'PART-RD-UNIT', qty: 1, level: 1 },
+      { code: 'PART-RD-HANGER', qty: 1, level: 1 },
+      { code: 'PART-HEADSET', qty: 1, level: 1 },
+      { code: 'PART-SEATPOST', qty: 1, level: 1 },
     ];
 
     // Struktur BOM untuk Sub-Assembly (Multi-level)
     const subAssemblies = {
       'ASSY-WHEEL-F-26': [
-        { code: 'PART-TIRE-26', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-RIM-26', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-SPOKE-SS', qty: 36, type: 'Raw Material', level: 2 },
-        { code: 'ASSY-HUB-F', qty: 1, type: 'Component', level: 2 },
-        { code: 'PART-NUT-M12', qty: 2, type: 'Raw Material', level: 2 },
+        { code: 'PART-TIRE-26', qty: 1, level: 2 },
+        { code: 'PART-RIM-26', qty: 1, level: 2 },
+        { code: 'PART-SPOKE-SS', qty: 36, level: 2 },
+        { code: 'ASSY-HUB-F', qty: 1, level: 2 },
+        { code: 'PART-NUT-M12', qty: 2, level: 2 },
       ],
       'ASSY-WHEEL-F-20': [
-        { code: 'PART-TIRE-20', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-RIM-20', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-SPOKE-SS', qty: 36, type: 'Raw Material', level: 2 },
-        { code: 'ASSY-HUB-F', qty: 1, type: 'Component', level: 2 },
-        { code: 'PART-NUT-M12', qty: 2, type: 'Raw Material', level: 2 },
+        { code: 'PART-TIRE-20', qty: 1, level: 2 },
+        { code: 'PART-RIM-20', qty: 1, level: 2 },
+        { code: 'PART-SPOKE-SS', qty: 36, level: 2 },
+        { code: 'ASSY-HUB-F', qty: 1, level: 2 },
+        { code: 'PART-NUT-M12', qty: 2, level: 2 },
       ],
       'ASSY-WHEEL-R-MOTOR-26': [
-        { code: 'PART-TIRE-26', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-RIM-26', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-SPOKE-SS', qty: 36, type: 'Raw Material', level: 2 },
-        { code: 'ASSY-MOTOR-HUB-48V', qty: 1, type: 'Component', level: 2 },
-        { code: 'PART-FREEWHEEL', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-NUT-M12', qty: 2, type: 'Raw Material', level: 2 },
+        { code: 'PART-TIRE-26', qty: 1, level: 2 },
+        { code: 'PART-RIM-26', qty: 1, level: 2 },
+        { code: 'PART-SPOKE-SS', qty: 36, level: 2 },
+        { code: 'ASSY-MOTOR-HUB-48V', qty: 1, level: 2 },
+        { code: 'PART-FREEWHEEL', qty: 1, level: 2 },
+        { code: 'PART-NUT-M12', qty: 2, level: 2 },
       ],
       'ASSY-WHEEL-R-MOTOR-20': [
-        { code: 'PART-TIRE-20', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-RIM-20', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-SPOKE-SS', qty: 36, type: 'Raw Material', level: 2 },
-        { code: 'ASSY-MOTOR-HUB-36V', qty: 1, type: 'Component', level: 2 },
-        { code: 'PART-FREEWHEEL', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-NUT-M12', qty: 2, type: 'Raw Material', level: 2 },
+        { code: 'PART-TIRE-20', qty: 1, level: 2 },
+        { code: 'PART-RIM-20', qty: 1, level: 2 },
+        { code: 'PART-SPOKE-SS', qty: 36, level: 2 },
+        { code: 'ASSY-MOTOR-HUB-36V', qty: 1, level: 2 },
+        { code: 'PART-FREEWHEEL', qty: 1, level: 2 },
+        { code: 'PART-NUT-M12', qty: 2, level: 2 },
       ],
       'ASSY-HANDLEBAR-VC': [
-        { code: 'PART-STEM', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-GRIP-RUBBER', qty: 2, type: 'Raw Material', level: 2 },
+        { code: 'PART-STEM', qty: 1, level: 2 },
+        { code: 'PART-GRIP-RUBBER', qty: 2, level: 2 },
       ],
       'ASSY-HUB-F': [
-        { code: 'PART-AXLE-F', qty: 1, type: 'Raw Material', level: 3 },
-        { code: 'PART-BEARING-608', qty: 2, type: 'Raw Material', level: 3 },
+        { code: 'PART-AXLE-F', qty: 1, level: 3 },
+        { code: 'PART-BEARING-608', qty: 2, level: 3 },
       ],
       'ASSY-MOTOR-HUB-48V': [
-        { code: 'PART-AXLE-R', qty: 1, type: 'Raw Material', level: 3 },
-        { code: 'PART-BEARING-608', qty: 2, type: 'Raw Material', level: 3 },
+        { code: 'PART-AXLE-R', qty: 1, level: 3 },
+        { code: 'PART-BEARING-608', qty: 2, level: 3 },
       ],
       'ASSY-MOTOR-HUB-36V': [
-        { code: 'PART-AXLE-R', qty: 1, type: 'Raw Material', level: 3 },
-        { code: 'PART-BEARING-608', qty: 2, type: 'Raw Material', level: 3 },
+        { code: 'PART-AXLE-R', qty: 1, level: 3 },
+        { code: 'PART-BEARING-608', qty: 2, level: 3 },
       ],
       'PART-BATT-48V': [
-        { code: 'PART-BATT-CASE', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-BMS-48V', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-CELL-18650', qty: 52, type: 'Raw Material', level: 2 },
+        { code: 'PART-BATT-CASE', qty: 1, level: 2 },
+        { code: 'PART-BMS-48V', qty: 1, level: 2 },
+        { code: 'PART-CELL-18650', qty: 52, level: 2 },
       ],
       'PART-BATT-36V': [
-        { code: 'PART-BATT-CASE', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-BMS-36V', qty: 1, type: 'Raw Material', level: 2 },
-        { code: 'PART-CELL-18650', qty: 40, type: 'Raw Material', level: 2 },
+        { code: 'PART-BATT-CASE', qty: 1, level: 2 },
+        { code: 'PART-BMS-36V', qty: 1, level: 2 },
+        { code: 'PART-CELL-18650', qty: 40, level: 2 },
       ]
     };
 
@@ -165,8 +181,8 @@ export default {
         notes: `Seeder otomatis produksi untuk item tipe ${parentCode}`,
         bom_version: 1,
         uom_id: parentData.uom_id,
-        doc_status_id: 3,         // APPROVED (Sesuai id master data Anda)
-        activation_status_id: 2,  // ACTIVE (Sesuai id master data Anda)
+        doc_status:        'Approved',
+        activation_status: 'Active',
         reject_reason: null,
         created_by: 1,            // Diarahkan ke user id administrator 1
         approved_by: 1,           // Disetujui oleh user id 1
@@ -249,12 +265,21 @@ export default {
         // maka kaitkan ID BOM miliknya ke kolom child_bom_id. Jika raw material biasa, isi null.
         const childBomId = partIdToBomIdMap[compData.id] || null;
 
+        const allowedTypes = ['RAW', 'WIP', 'PRODUCT'];
+
+        if (!allowedTypes.includes(compData.part_type_code)) {
+          console.warn(
+            `[WARN] Part '${comp.code}' memiliki type '${compData.part_type_code}' yang tidak valid`
+          );
+          continue;
+        }
+
         detailInserts.push({
           bom_id: bomId,
           part_id: compData.id,
           qty_required: comp.qty,
           level: comp.level,                            // Mengisi kolom level (1, 2, atau 3)
-          type: comp.type,                              // Mengisi kolom type ('Component' / 'Raw Material')
+          type: compData.part_type_code,                              // Mengisi kolom type ('Component' / 'Raw Material')
           notes: `Bahan baku operasional untuk ${group.bomCode}`,
           uom_id: compData.uom_id,                      // Mengikuti UOM part bawaan komponen
           scrap_percentage: 0.00,                       // Default scrap 0.00%

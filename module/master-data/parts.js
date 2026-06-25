@@ -25,6 +25,7 @@ const {
   TStationBufferStock,
   SPartRoutings,
   SPartRoutingDetails,
+  SPartRoutingDetailMaterials,
   SRoutingStationMaterial,
   sequelize
 } = db
@@ -289,27 +290,43 @@ class PartsModule extends BaseModule {
           whereClause += ` AND part.id IN (:requiredPartIds)`;
           replacements.requiredPartIds = requiredPartIds;
         } else if (station_id) {
-          const materials = await SRoutingStationMaterial.findAll({
+          const materials = await SPartRoutingDetails.findAll({
             where: {
-              station_id
+              station_id,
             },
             include: [
               {
-                model: SParts,
-                as: 'part',
+                model: SPartRoutings,
+                as: 'routing',
                 required: true,
                 where: {
-                  part_type_code: 'RAW'
+                  active: true,
+                  is_default: true
                 }
+              },
+              {
+                model: SPartRoutingDetailMaterials,
+                as: 'materials',
+                required: true,
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    required: true,
+                    where: {
+                      part_type_code: 'RAW'
+                    }
+                  }
+                ]
               }
             ]
           });
-
-          for (const material of materials) {
-            if (!requiredPartIds.includes(material.part_id)) {
-              requiredPartIds.push(
-                material.part_id
-              );
+          
+          for (const detail of materials) {
+            for (const material of detail.materials) {
+              if (!requiredPartIds.includes(material.part.id)) {
+                requiredPartIds.push(material.part.id);
+              }
             }
           }
 

@@ -10,6 +10,7 @@ const {
   SParts,
   SUom,
   SUsers,
+  SUserDetail,
   sequelize,
 } = db;
 
@@ -18,8 +19,8 @@ const ALLOWED_DETAIL_TYPES = ['RAW', 'WIP', 'PRODUCT'];
 const BOM_HEADER_INCLUDE = [
   { model: SParts,                  as: 'parent_part',       attributes: ['id', 'part_number', 'part_name', 'part_type_code'] },
   { model: SUom,                    as: 'uom',               attributes: ['id', 'code', 'name'] },
-  { model: SUsers,                  as: 'creator',           attributes: ['id', 'email'] },
-  { model: SUsers,                  as: 'approver',          attributes: ['id', 'email'] },
+  { model: SUsers,                  as: 'creator',           attributes: ['id', 'email'], include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }] },
+  { model: SUsers,                  as: 'approver',          attributes: ['id', 'email'], include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }] },
 ];
 
 const BOM_DETAIL_INCLUDE = [

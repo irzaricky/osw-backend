@@ -24,7 +24,7 @@ const {
   SCustomers,
   SParts,
   SPartRoutingDetails,
-  SRoutingStationMaterial,
+  SPartRoutingDetailMaterials,
   SLines,
   SFactories,
   SShifts,
@@ -755,150 +755,46 @@ async function validateScheduleIntegrity(po, products, transaction) {
   return { ok: true };
 }
 
-async function explodeBomToRawMaterials(
-  partId,
-  qtyMultiplier,
-  accumulator,
-  visitedBomIds,
-  transaction,
-  logWarnings = []
-) {
-  // Fetch BOM untuk part ini
-  const bom = await SBoms.findOne({
-    where: {
-      parent_part_id:    partId,
-      doc_status:        'Approved',
-      activation_status: 'Active',
-      deleted_at:        null,
-    },
-    include: [{
-      model:    SBomDetails,
-      as:       'details',
-      required: false,
-      where:    { deleted_at: null },
-      include:  [{ model: db.SUom, as: 'uom', attributes: ['code'] }],
-    }],
-    transaction,
-  });
+function explodeBomToRaw(bomId, allBomDetails, multiplier = 1, visited = new Set()) {
+  if (visited.has(bomId)) {
+    console.warn(`[explodeBomToRaw] Circular BOM reference at bom_id=${bomId}, skipping.`);
+    return new Map();
+  }
+  visited.add(bomId);
  
-  // Case 1: No BOM atau BOM kosong → treat sebagai raw material (leaf node)
-  if (!bom || !bom.details?.length) {
-    // Guard: check supplier_id pada leaf part
-    const leafPart = await db.SParts.findOne({
-      where: { id: partId },
-      attributes: ['id', 'supplier_id', 'part_number'],
-      transaction,
-    });
+  const details = allBomDetails.get(bomId) ?? [];
+  const result  = new Map(); // part_id → { qty, uom }
  
-    if (leafPart?.supplier_id) {
-      const warning = 
-        `[BOM Explosion] Leaf material part_id=${partId} (${leafPart.part_number}) ` +
-        `has supplier_id=${leafPart.supplier_id}. Data ambiguous: treating as WIP leaf despite supplier. ` +
-        `Consider null-ing supplier_id for all manufactured parts.`;
-      logWarnings.push(warning);
-      console.warn(warning);
-    }
+  for (const detail of details) {
+    const effectiveQty = parseFloat(detail.qty_required) * multiplier;
  
-    // Aggregate ke accumulator
-    const existing = accumulator.get(partId);
-    if (existing) {
-      existing.qty += qtyMultiplier;
-      // Validate UOM consistency
-      if (existing.uom && existing.uom !== (leafPart?.uom ?? 'PCS')) {
-        throw new Error(
-          `UOM mismatch for leaf part_id=${partId}: ` +
-          `previously ${existing.uom}, now ${leafPart?.uom ?? 'PCS'}. ` +
-          `Check BOM structure for consistency.`
-        );
+    if (!detail.child_bom_id) {
+      const existing = result.get(detail.part_id);
+      if (existing) {
+        existing.qty += effectiveQty;
+      } else {
+        result.set(detail.part_id, { qty: effectiveQty, uom: detail.uom ?? 'PCS' });
       }
     } else {
-      accumulator.set(partId, { 
-        qty: qtyMultiplier, 
-        uom: leafPart?.uom ?? 'PCS' 
-      });
-    }
-    return;
-  }
- 
-  // Case 2: BOM ditemukan → check circular reference
-  if (visitedBomIds.has(bom.id)) {
-    throw new Error(
-      `Circular BOM reference detected at bom_id=${bom.id} (part_id=${partId}). ` +
-      `Please fix the BOM structure before releasing this Production Order.`
-    );
-  }
- 
-  visitedBomIds.add(bom.id);
- 
-  // Case 3: Non-leaf BOM → explode each detail
-  for (const detail of bom.details) {
-    const qtyRequired  = parseFloat(detail.qty_required);
-    const scrapFactor  = 1 + (parseFloat(detail.scrap_percentage ?? 0) / 100);
-    const qtyThisLevel = qtyRequired * scrapFactor * qtyMultiplier;
-    const uomCode      = detail.uom?.code ?? 'PCS';
- 
-    // Sub-case A: Detail punya child_bom_id → ini sub-assembly WIP
-    if (detail.child_bom_id) {
-      const childBom = await SBoms.findOne({
-        where: {
-          id:                detail.child_bom_id,
-          doc_status:        'Approved',
-          activation_status: 'Active',
-          deleted_at:        null,
-        },
-        attributes: ['id', 'parent_part_id'],
-        transaction,
-      });
- 
-      // Validate child BOM exists dan active
-      if (!childBom) {
-        throw new Error(
-          `Sub-assembly part_id=${detail.part_id} references child_bom_id=${detail.child_bom_id} ` +
-          `which is not Approved and Active. ` +
-          `Please approve the sub-assembly BOM before releasing this Production Order.`
-        );
-      }
- 
-      // Sanity check: child BOM parent_part_id harus match detail.part_id
-      if (childBom.parent_part_id !== detail.part_id) {
-        throw new Error(
-          `BOM structural error: detail.part_id=${detail.part_id} but ` +
-          `child_bom_id=${detail.child_bom_id} has parent_part_id=${childBom.parent_part_id}. ` +
-          `These must match. Fix BOM linkage.`
-        );
-      }
- 
-      // Recursive: explode part_id dengan sub-BOM-nya
-      await explodeBomToRawMaterials(
-        detail.part_id,
-        qtyThisLevel,
-        accumulator,
-        visitedBomIds,
-        transaction,
-        logWarnings
+      const childRaws = explodeBomToRaw(
+        detail.child_bom_id,
+        allBomDetails,
+        effectiveQty,
+        new Set(visited),
       );
-    } 
-    // Sub-case B: Detail tidak punya child_bom_id → leaf material
-    else {
-      const existing = accumulator.get(detail.part_id);
-      if (existing) {
-        existing.qty += qtyThisLevel;
-        // Validate UOM consistency
-        if (existing.uom && existing.uom !== uomCode) {
-          throw new Error(
-            `UOM mismatch for part_id=${detail.part_id}: ` +
-            `previously ${existing.uom}, now ${uomCode}. ` +
-            `Check BOM details for consistency.`
-          );
+      for (const [childPartId, childMat] of childRaws) {
+        const existing = result.get(childPartId);
+        if (existing) {
+          existing.qty += childMat.qty;
+        } else {
+          result.set(childPartId, { qty: childMat.qty, uom: childMat.uom });
         }
-      } else {
-        accumulator.set(detail.part_id, { qty: qtyThisLevel, uom: uomCode });
       }
     }
   }
  
-  // Remove dari visited saat selesai (untuk track depth, bukan prevent re-entry)
-  visitedBomIds.delete(bom.id);
+  visited.delete(bomId);
+  return result;
 }
 
 // ─── MODULE ─────────────────────────────────────────────────────────────────
@@ -1936,18 +1832,14 @@ class OrderScheduleModule extends BaseModule {
     try {
       const { id } = req.params;
    
-      // ========== VALIDATION: Production Order Basic ==========
+      // ── 1. Validasi PO ────────────────────────────────────────────────────
       const po = await SProductionOrder.findOne({
         where:       { id, deleted_at: null },
         transaction: t,
       });
       if (!po) {
         await t.rollback();
-        return helper.sendResponse(res, { 
-          status: false, 
-          code: 404, 
-          error: 'Production Order not found' 
-        });
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Production Order not found' });
       }
       if (po.status !== 'Approved') {
         await t.rollback();
@@ -1957,7 +1849,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ========== VALIDATION: Schedules Exist ==========
+      // ── 2. Validasi schedules ─────────────────────────────────────────────
       const schedules = await SProductionOrderSchedule.findAll({
         where:       { po_id: po.id },
         transaction: t,
@@ -1970,7 +1862,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ========== PRELOAD: PO Products, Plan Details, Routings ==========
+      // ── 3. Fetch PO products & plan details ───────────────────────────────
       const poProducts = await SProductionOrderProduct.findAll({
         where:       { po_id: po.id },
         transaction: t,
@@ -1985,11 +1877,11 @@ class OrderScheduleModule extends BaseModule {
       });
       const planDetailMap = new Map(planDetails.map((d) => [d.id, d]));
    
-      // ========== VALIDATION: All PO Products punya Routing ==========
       const routingIds = [...new Set(
         planDetails.map((d) => d.routing_id).filter(Boolean)
       )];
    
+      // Validasi semua PO product punya routing_id
       const missingRouting = poProducts.filter((p) => {
         const detail = planDetailMap.get(p.plan_detail_id);
         return !detail?.routing_id;
@@ -2003,78 +1895,129 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ========== PRELOAD: Routing Details, Stations, Materials ==========
+      // ── 4. Fetch routing details ──────────────────────────────────────────
+      //
+      // Setelah migration, s_part_routing_details sudah unique per
+      // (routing_id, station_id) — tidak ada duplikasi, tidak perlu guard.
+   
       const routingDetails = await SPartRoutingDetails.findAll({
         where:       { routing_id: routingIds },
+        attributes:  ['id', 'routing_id', 'station_id', 'sequence'],
         order:       [['sequence', 'ASC']],
         transaction: t,
       });
    
-      // routingStationMap: routing_id → unique station_ids sorted by sequence
+      // routingStationMap: routing_id → [{ routing_detail_id, station_id, sequence }]
       const routingStationMap = new Map();
       for (const rd of routingDetails) {
-        if (!routingStationMap.has(rd.routing_id)) {
-          routingStationMap.set(rd.routing_id, []);
-        }
-        const existing = routingStationMap.get(rd.routing_id);
-        if (!existing.find((s) => s.station_id === rd.station_id)) {
-          existing.push({ station_id: rd.station_id, sequence: rd.sequence });
-        }
-      }
-   
-      const routingStationMaterials = await SRoutingStationMaterial.findAll({
-        where:       { routing_id: routingIds },
-        transaction: t,
-      });
-   
-      // materialMap: `routing_id_station_id` → array of { part_id, qty_per_unit, uom }
-      const materialMap = new Map();
-      for (const rsm of routingStationMaterials) {
-        const key = `${rsm.routing_id}_${rsm.station_id}`;
-        if (!materialMap.has(key)) materialMap.set(key, []);
-        materialMap.get(key).push({
-          part_id:      rsm.part_id,
-          qty_per_unit: parseFloat(rsm.qty_per_unit),
-          uom:          rsm.uom,
+        if (!routingStationMap.has(rd.routing_id)) routingStationMap.set(rd.routing_id, []);
+        routingStationMap.get(rd.routing_id).push({
+          routing_detail_id: rd.id,
+          station_id:        rd.station_id,
+          sequence:          rd.sequence,
         });
       }
    
-      // ========== VALIDATION: Routings punya Material pada minimal 1 station ==========
+      // ── 5. Fetch material per routing detail ──────────────────────────────
+      //
+      // Ganti SRoutingStationMaterial → SPartRoutingDetailMaterials.
+      // Lookup sekarang via routing_detail_id langsung.
+   
+      const routingDetailIds = routingDetails.map((rd) => rd.id);
+   
+      const detailMaterials = await SPartRoutingDetailMaterials.findAll({
+        where:       { routing_detail_id: routingDetailIds },
+        attributes:  ['routing_detail_id', 'part_id'],
+        transaction: t,
+      });
+   
+      // detailMaterialMap: routing_detail_id → [part_id, ...]
+      const detailMaterialMap = new Map();
+      for (const dm of detailMaterials) {
+        if (!detailMaterialMap.has(dm.routing_detail_id)) {
+          detailMaterialMap.set(dm.routing_detail_id, []);
+        }
+        detailMaterialMap.get(dm.routing_detail_id).push(dm.part_id);
+      }
+   
+      // Validasi: minimal 1 routing detail harus punya material
       const routingsWithoutAnyMaterial = routingIds.filter((routingId) => {
         const stations = routingStationMap.get(routingId) ?? [];
-        return !stations.some(({ station_id }) =>
-          materialMap.has(`${routingId}_${station_id}`) &&
-          materialMap.get(`${routingId}_${station_id}`).length > 0
+        return !stations.some(({ routing_detail_id }) =>
+          detailMaterialMap.has(routing_detail_id) &&
+          detailMaterialMap.get(routing_detail_id).length > 0
         );
       });
       if (routingsWithoutAnyMaterial.length > 0) {
         await t.rollback();
         return helper.sendResponse(res, {
-          status: false, code: 400,
-          error:  `${routingsWithoutAnyMaterial.length} routing(s) have no material mapping on any station. ` +
-                  `Complete s_routing_station_materials master data before releasing.`,
+          status:  false, code: 400,
+          error:   `${routingsWithoutAnyMaterial.length} routing(s) have no material mapping on any station. ` +
+                   `Complete s_part_routing_detail_materials master data before releasing.`,
           missing: routingsWithoutAnyMaterial,
         });
       }
    
-      // ========== VALIDATION: All Stations Exist & Active ==========
-      const allStationIds = [...new Set(routingDetails.map((rd) => rd.station_id))];
-      const activeStations = await db.SStations.findAll({
-        where:       { id: allStationIds, status: true, deleted_at: null },
-        attributes:  ['id', 'sequence'],
+      // ── 6. Fetch BOM data untuk explosion ────────────────────────────────
+      const allPartIds = [...new Set(detailMaterials.map((dm) => dm.part_id))];
+   
+      const initialBoms = await SBoms.findAll({
+        where:       { parent_part_id: allPartIds, deleted_at: null, doc_status: 'Approved' },
+        attributes:  ['id', 'parent_part_id'],
         transaction: t,
       });
-      const activeStationIds = new Set(activeStations.map((s) => s.id));
+      const partBomMap = new Map(initialBoms.map((b) => [b.parent_part_id, b.id]));
    
-      // ========== CLEANUP: Remove Old Draft Work Orders ==========
+      // BFS fetch semua BOM details hingga closure penuh
+      const allBomDetails = new Map(); // bom_id → SBomDetails[]
+      let   pendingBomIds = new Set(initialBoms.map((b) => b.id));
+   
+      while (pendingBomIds.size > 0) {
+        const details = await SBomDetails.findAll({
+          where:       { bom_id: [...pendingBomIds], deleted_at: null },
+          transaction: t,
+        });
+   
+        for (const d of details) {
+          if (!allBomDetails.has(d.bom_id)) allBomDetails.set(d.bom_id, []);
+          allBomDetails.get(d.bom_id).push(d);
+        }
+   
+        const nextBomIds = new Set();
+        for (const d of details) {
+          if (d.child_bom_id && !allBomDetails.has(d.child_bom_id)) {
+            nextBomIds.add(d.child_bom_id);
+          }
+        }
+        pendingBomIds = nextBomIds;
+      }
+   
+      // ── 7. Tentukan part_id sub-assembly yang sudah punya WO aktif ────────
+      const existingSubAssyWOs = await SWorkOrder.findAll({
+        where:       { po_id: po.id, status: { [Op.notIn]: ['Draft'] } },
+        attributes:  ['part_id'],
+        transaction: t,
+      });
+      const subAssyCoveredPartIds = new Set(existingSubAssyWOs.map((w) => w.part_id));
+   
+      // ── 8. Hapus WO Draft lama ────────────────────────────────────────────
       await SWorkOrder.destroy({
         where:       { po_id: po.id, status: 'Draft' },
         transaction: t,
       });
    
+      // ── 9. Fetch station master untuk validasi aktif ──────────────────────
+      const allStationIds  = [...new Set(routingDetails.map((rd) => rd.station_id))];
+      const activeStations = await db.SStations.findAll({
+        where:       { id: allStationIds, status: true, deleted_at: null },
+        attributes:  ['id'],
+        transaction: t,
+      });
+      const activeStationIds = new Set(activeStations.map((s) => s.id));
+   
+      // ── 10. Generate WO per schedule ──────────────────────────────────────
       let woCreatedCount = 0;
    
-      // ========== MAIN LOOP: Per Schedule → Create WO + Stations + Materials ==========
       for (const sched of schedules) {
         const poProd = prodMap.get(sched.po_product_id);
         if (!poProd) {
@@ -2084,7 +2027,6 @@ class OrderScheduleModule extends BaseModule {
         const planDetail = planDetailMap.get(poProd.plan_detail_id);
         const routingId  = planDetail.routing_id;
    
-        // Resolve shift calendar
         const { cal: shiftCal, isExact } = await resolveShiftCalendar(
           sched.line_id,
           sched.shift_id,
@@ -2103,10 +2045,7 @@ class OrderScheduleModule extends BaseModule {
           );
         }
    
-        // Generate WO number
-        const woNumber = await generateWoNumber(sched.production_date, t);
-   
-        // Create Work Order
+        const woNumber  = await generateWoNumber(sched.production_date, t);
         const createdWo = await SWorkOrder.create({
           wo_number:           woNumber,
           po_id:               po.id,
@@ -2123,7 +2062,6 @@ class OrderScheduleModule extends BaseModule {
           shift_name_snapshot: sched.shift_name_snapshot ?? null,
         }, { transaction: t });
    
-        // Get routing stations
         const routingStations = routingStationMap.get(routingId) ?? [];
         if (routingStations.length === 0) {
           throw new Error(
@@ -2132,10 +2070,10 @@ class OrderScheduleModule extends BaseModule {
           );
         }
    
-        // ========== INNER LOOP: Per Station → Create WO Station + Materials ==========
+        // ── 10a. Buat WO stations & material per station ──────────────────
         let stationSeq = 0;
-        for (const { station_id, sequence } of routingStations) {
-          // Validate station active
+   
+        for (const { routing_detail_id, station_id, sequence } of routingStations) {
           if (!activeStationIds.has(station_id)) {
             throw new Error(
               `Station id=${station_id} in routing id=${routingId} is inactive or deleted. ` +
@@ -2146,7 +2084,6 @@ class OrderScheduleModule extends BaseModule {
           stationSeq++;
           const woStationNumber = `${woNumber}-ST${stationSeq}`;
    
-          // Create WO Station
           const createdStation = await SWorkOrderStation.create({
             wo_id:             createdWo.id,
             station_id,
@@ -2157,87 +2094,88 @@ class OrderScheduleModule extends BaseModule {
             wo_station_number: woStationNumber,
           }, { transaction: t });
    
-          // ========== BOM EXPLOSION: Get RSM materials → explode through BOM ==========
-          const key              = `${routingId}_${station_id}`;
-          const stationMaterials = materialMap.get(key) ?? [];
+          // Lookup material via routing_detail_id langsung
+          const partIds = detailMaterialMap.get(routing_detail_id) ?? [];
+          if (partIds.length === 0) continue; // station pass-through
    
-          if (stationMaterials.length > 0) {
-            const explodedMaterials = new Map(); // accumulator: part_id → { qty, uom }
-            const explosionWarnings = [];
+          // Kumpulkan raw material untuk station ini
+          const stationRawMaterials = new Map(); // part_id → { planned_quantity, uom }
    
-            // Explode each RSM material through its BOM tree
-            try {
-              for (const { part_id, qty_per_unit, uom } of stationMaterials) {
-                const baseQty = qty_per_unit * createdWo.planned_quantity;
-                const visitedBoms = new Set();
+          for (const part_id of partIds) {
+            const bomId = partBomMap.get(part_id);
    
-                await explodeBomToRawMaterials(
-                  part_id,
-                  baseQty,
-                  explodedMaterials,
-                  visitedBoms,
-                  t,
-                  explosionWarnings
-                );
+            if (!bomId) {
+              // Tidak ada BOM → sudah raw, masuk langsung
+              // qty diambil dari BOM parent produk (sudah resolved di explosion)
+              // Untuk part tanpa BOM yang ada di detail material, qty = 1 per unit
+              // karena qty otoritatif ada di s_bom_details parent
+              const existing = stationRawMaterials.get(part_id);
+              if (existing) {
+                existing.planned_quantity += createdWo.planned_quantity;
+              } else {
+                stationRawMaterials.set(part_id, {
+                  planned_quantity: createdWo.planned_quantity,
+                  uom: 'PCS',
+                });
               }
-            } catch (explosionError) {
-              await t.rollback();
-              return helper.sendResponse(res, {
-                status:  false,
-                code:    400,
-                error:   `BOM explosion failed for WO ${woNumber}, station_id=${station_id}: ${explosionError.message}`,
-                context: { wo_id: createdWo.id, station_id, routing_id: routingId },
-              });
-            }
-   
-            // Log warnings (not fatal — continue)
-            if (explosionWarnings.length > 0) {
-              console.warn(
-                `[Release] WO ${woNumber} / Station ${woStationNumber} explosion warnings:\n`,
-                explosionWarnings.join('\n')
+            } else if (subAssyCoveredPartIds.has(part_id)) {
+              console.info(
+                `[Release] WO ${woNumber} station ${station_id}: ` +
+                `part_id=${part_id} skipped (covered by existing sub-assembly WO)`
               );
-            }
-   
-            // Aggregate exploded materials → wo_station_material rows
-            const materialRows = Array.from(explodedMaterials.entries()).map(
-              ([materialPartId, { qty, uom }]) => ({
-                wo_station_id:    createdStation.id,
-                material_part_id: materialPartId,
-                planned_quantity: parseFloat(qty.toFixed(4)),
-                actual_quantity:  null,
-                uom,
-              })
-            );
-   
-            // Bulk create wo_station_material
-            if (materialRows.length > 0) {
-              await SWorkOrderMaterial.bulkCreate(materialRows, { transaction: t });
+            } else {
+              // Explode BOM ke raw material
+              const rawMats = explodeBomToRaw(bomId, allBomDetails, 1);
+              for (const [rawPartId, { qty: rawQty, uom: rawUom }] of rawMats) {
+                const totalQty = rawQty * createdWo.planned_quantity;
+                const existing = stationRawMaterials.get(rawPartId);
+                if (existing) {
+                  existing.planned_quantity += totalQty;
+                } else {
+                  stationRawMaterials.set(rawPartId, {
+                    planned_quantity: totalQty,
+                    uom:              rawUom,
+                  });
+                }
+              }
             }
           }
-          // ========== END BOM EXPLOSION ==========
+   
+          if (stationRawMaterials.size === 0) continue;
+   
+          const materialRows = [];
+          for (const [rawPartId, { planned_quantity, uom }] of stationRawMaterials) {
+            materialRows.push({
+              wo_station_id:    createdStation.id,
+              material_part_id: rawPartId,
+              planned_quantity: parseFloat(planned_quantity.toFixed(4)),
+              actual_quantity:  null,
+              uom,
+            });
+          }
+   
+          await SWorkOrderMaterial.bulkCreate(materialRows, { transaction: t });
         }
    
         woCreatedCount++;
       }
    
-      // ========== FINALIZE: Update PO Status ==========
+      // ── 11. Update PO status ──────────────────────────────────────────────
       await po.update({
         status:      'Released',
         released_by: req.user?.id ?? null,
         released_at: new Date(),
       }, { transaction: t });
    
-      // ========== LOG ACTIVITY ==========
       await this.logActivity(req, {
         moduleCode:   'production_order',
         activityCode: 'RELEASE',
         resourceId:   po.id,
         description:  `Released Production Order ${po.po_number} — ` +
-                      `generated ${woCreatedCount} Work Order(s) with BOM-exploded materials per station`,
+                      `generated ${woCreatedCount} Work Order(s) with BOM-exploded raw material per station`,
         transaction:  t,
       });
    
-      // ========== COMMIT & RESPOND ==========
       await t.commit();
       return helper.sendResponse(res, {
         status:  true,
@@ -2248,12 +2186,8 @@ class OrderScheduleModule extends BaseModule {
    
     } catch (error) {
       await t.rollback();
-      console.error('[OrderScheduleModule][release]:', error);
-      return helper.sendResponse(res, { 
-        status: false, 
-        code: 500, 
-        error: error.message 
-      });
+      console.log('[OrderScheduleModule][release]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
 

@@ -16,6 +16,7 @@ const {
   SParts,
   SPartRoutings,
   SPartRoutingDetails,
+  SPartRoutingDetailMaterials,
   SRoutingStationMaterial,
   SStations,
   RefStationTypes,
@@ -234,41 +235,53 @@ class WorkOrderStoringModule extends BaseModule {
   }
 
   async validateBufferItems(stationId, items, transaction) {
-    const stationMaterials = await SRoutingStationMaterial.findAll({
+    const routingDetails = await SPartRoutingDetails.findAll({
       where: {
         station_id: stationId
       },
       include: [
         {
-          model: SParts,
-          as: 'part',
+          model: SPartRoutings,
+          as: 'routing',
           required: true,
           where: {
-            part_type_code: 'RAW'
+            active: true,
+            is_default: true
           }
+        },
+        {
+          model: SPartRoutingDetailMaterials,
+          as: 'materials',
+          required: true,
+          include: [
+            {
+              model: SParts,
+              as: 'part',
+              required: true,
+              where: {
+                part_type_code: 'RAW'
+              }
+            }
+          ]
         }
       ],
       transaction
     });
-
-    if (!stationMaterials.length) {
-      throw new Error(
-        'No material configured for this station'
-      );
+  
+    if (!routingDetails.length) {
+      throw new Error('No material configured for this station');
     }
-
+  
     const allowedPartIds = new Set();
-
-    for (const material of stationMaterials) {
-      allowedPartIds.add(
-        material.part_id
-      );
+  
+    for (const detail of routingDetails) {
+      for (const material of detail.materials) {
+        allowedPartIds.add(material.part_id);
+      }
     }
-
-    const partIds = items.map(
-      item => item.part_id
-    );
-
+  
+    const partIds = items.map(item => item.part_id);
+  
     const parts = await SParts.findAll({
       where: {
         id: {
@@ -284,42 +297,32 @@ class WorkOrderStoringModule extends BaseModule {
       ],
       transaction
     });
-
-    const partMap = new Map(
-      parts.map(
-        part => [part.id, part]
-      )
-    );
-
+  
+    const partMap = new Map(parts.map(part => [part.id, part]));
+  
     const itemResults = [];
-
+  
     for (const item of items) {
       if (!allowedPartIds.has(item.part_id)) {
-        throw new Error(
-          `Part ${item.part_id} is not allowed for selected station`
-        );
+        throw new Error(`Part ${item.part_id} is not allowed for selected station`);
       }
-
-      const part = partMap.get(
-        item.part_id
-      );
-
+  
+      const part = partMap.get(item.part_id);
+  
       if (!part) {
-        throw new Error(
-          `Part ${item.part_id} not found`
-        );
+        throw new Error(`Part ${item.part_id} not found`);
       }
-
+  
       const capacity = Number(part.package?.capacity || 1);
-
       const qtyPcs = Number(item.total_kanban) * capacity;
-
+  
       itemResults.push({
         part_id: item.part_id,
         buffer_used_qty_pcs: 0,
         buffer_added_qty_pcs: qtyPcs
       });
     }
+  
     return itemResults;
   }
 
@@ -2502,123 +2505,129 @@ class WorkOrderStoringModule extends BaseModule {
       }
 
       if (take_out_purpose === 'buffer') {
-        const stations = await SRoutingStationMaterial.findAll({
-          attributes: ['station_id', 'part_id'],
+        const routingDetails = await SPartRoutingDetails.findAll({
           include: [
+            {
+              model: SPartRoutings,
+              as: 'routing',
+              required: true,
+              where: {
+                active: true,
+                is_default: true
+              }
+            },
             {
               model: SStations,
               as: 'station',
               attributes: ['id', 'station_code', 'name']
             },
             {
-              model: SParts,
-              as: 'part',
+              model: SPartRoutingDetailMaterials,
+              as: 'materials',
               required: true,
-              where: {
-                part_type_code: 'RAW'
-              },
-              attributes: ['id', 'part_number', 'part_name', 'standard_buffer_stock'],
               include: [
                 {
-                  model: SPackages,
-                  as: 'package',
-                  attributes: ['capacity']
-                },
-                {
-                  model: SUom,
-                  as: 'uom',
-                  attributes: ['id', 'code', 'name']
+                  model: SParts,
+                  as: 'part',
+                  required: true,
+                  where: {
+                    part_type_code: 'RAW'
+                  },
+                  attributes: ['id', 'part_number', 'part_name', 'standard_buffer_stock'],
+                  include: [
+                    {
+                      model: SPackages,
+                      as: 'package',
+                      attributes: ['capacity']
+                    },
+                    {
+                      model: SUom,
+                      as: 'uom',
+                      attributes: ['id', 'code', 'name']
+                    }
+                  ]
                 }
               ]
             }
           ],
-          order: [
-            ['station_id', 'ASC']
-          ]
+          order: [['station_id', 'ASC']]
         });
-
+      
         const stationMap = new Map();
-
-        for (const row of stations) {
-          if (!stationMap.has(row.station_id)) {
-            stationMap.set(
-              row.station_id,
-              {
-                id: row.station.id,
-                station_code: row.station.station_code,
-                name: row.station.name,
-
-                materials: [],
-                materialIds: new Set()
-              }
-            );
+      
+        for (const detail of routingDetails) {
+          const stationId = detail.station_id;
+      
+          if (!stationMap.has(stationId)) {
+            stationMap.set(stationId, {
+              id: detail.station.id,
+              station_code: detail.station.station_code,
+              name: detail.station.name,
+              materials: [],
+              materialIds: new Set()
+            });
           }
-
-          const stationData = stationMap.get(
-            row.station_id
-          );
-
-          // prevent duplicate material
-          if (stationData.materialIds.has(row.part_id)) {
-            continue;
-          }
-
-          stationData.materialIds.add(
-            row.part_id
-          );
-
-          const packageCapacity = Number(row.part?.package?.capacity || 1);
-          const minBuffer = Number(row.part?.standard_buffer_stock || 0);
-
-          const bufferStock = await TStationBufferStock.findOne({
-            where: {
-              station_id: row.station_id,
-              part_id: row.part_id
+      
+          const stationData = stationMap.get(stationId);
+      
+          // Iterate through materials di routing_detail ini
+          for (const material of detail.materials) {
+            const partId = material.part_id;
+      
+            // prevent duplicate material
+            if (stationData.materialIds.has(partId)) {
+              continue;
             }
-          });
-
-          const bufferQty = Number(bufferStock?.qty_pcs || 0);
-          const refillQty = Math.max(minBuffer - bufferQty, 0);
-
-          const areas = await db.sequelize.query(`
-            SELECT
-              wa.id,
-              wa.area_code,
-              wa.name,
-              COUNT(ws.id)::int AS available_stock
-            FROM t_warehouse_stock ws
-            JOIN s_warehouse_bins wb ON wb.id = ws.bin_id AND wb.deleted_at IS NULL
-            JOIN s_warehouse_areas wa ON wa.id = wb.area_id AND wa.deleted_at IS NULL
-            JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
-            JOIN t_part_labels pl ON pl.id = wil.label_id AND pl.deleted_at IS NULL
-            WHERE ws.deleted_at IS NULL AND pl.part_id = :part_id
-            GROUP BY wa.id, wa.area_code, wa.name
-            ORDER BY wa.name
-          `, {
-            replacements: {
-              part_id: row.part_id
-            },
-            type: QueryTypes.SELECT
-          });
-
-          stationMap.get(row.station_id)
-            .materials.push({
-              part_id: row.part.id,
-              part_number: row.part.part_number,
-              part_name: row.part.part_name,
+      
+            stationData.materialIds.add(partId);
+      
+            const packageCapacity = Number(material.part?.package?.capacity || 1);
+            const minBuffer = Number(material.part?.standard_buffer_stock || 0);
+      
+            const bufferStock = await TStationBufferStock.findOne({
+              where: {
+                station_id: stationId,
+                part_id: partId
+              }
+            });
+      
+            const bufferQty = Number(bufferStock?.qty_pcs || 0);
+            const refillQty = Math.max(minBuffer - bufferQty, 0);
+      
+            const areas = await db.sequelize.query(`
+              SELECT
+                wa.id,
+                wa.area_code,
+                wa.name,
+                COUNT(ws.id)::int AS available_stock
+              FROM t_warehouse_stock ws
+              JOIN s_warehouse_bins wb ON wb.id = ws.bin_id AND wb.deleted_at IS NULL
+              JOIN s_warehouse_areas wa ON wa.id = wb.area_id AND wa.deleted_at IS NULL
+              JOIN t_work_order_storing_item_label wil ON wil.id = ws.wo_item_label_id AND wil.deleted_at IS NULL
+              JOIN t_part_labels pl ON pl.id = wil.label_id AND pl.deleted_at IS NULL
+              WHERE ws.deleted_at IS NULL AND pl.part_id = :part_id
+              GROUP BY wa.id, wa.area_code, wa.name
+              ORDER BY wa.name
+            `, {
+              replacements: { part_id: partId },
+              type: QueryTypes.SELECT
+            });
+      
+            stationData.materials.push({
+              part_id: material.part.id,
+              part_number: material.part.part_number,
+              part_name: material.part.part_name,
               current_buffer_stock: bufferQty,
               min_buffer_stock: minBuffer,
               refill_qty: refillQty,
               qty_per_kanban: packageCapacity,
-
-              uom: row.part.uom
+              uom: material.part.uom
                 ? {
-                    id: row.part.uom.id,
-                    code: row.part.uom.code,
-                    name: row.part.uom.name
+                    id: material.part.uom.id,
+                    code: material.part.uom.code,
+                    name: material.part.uom.name
                   }
                 : null,
-
               areas: areas.map(area => ({
                 id: area.id,
                 area_code: area.area_code,
@@ -2626,13 +2635,12 @@ class WorkOrderStoringModule extends BaseModule {
                 available_stock: Number(area.available_stock)
               }))
             });
+          }
         }
-
+      
         return {
           status: true,
-          data: Array.from(
-            stationMap.values()
-          ).map(station => ({
+          data: Array.from(stationMap.values()).map(station => ({
             id: station.id,
             station_code: station.station_code,
             name: station.name,

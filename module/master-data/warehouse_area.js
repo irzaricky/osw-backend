@@ -17,6 +17,9 @@ const {
   SStations,
   SParts,
   SPackages,
+  SPartRoutings,
+  SPartRoutingDetails,
+  SPartRoutingDetailMaterials,
   SRoutingStationMaterial,
   TWorkOrderStoring,
   TWorkOrderStoringItem 
@@ -472,37 +475,52 @@ class WarehouseAreaModule extends BaseModule {
 
         // Take Out Supply Buffer
         else if (station_id) {
-          const materials = await SRoutingStationMaterial.findAll({
+          const materials = await SPartRoutingDetails.findAll({
             where: {
               station_id
             },
-            attributes: ['part_id'],
             include: [
               {
-                model: SParts,
-                as: 'part',
+                model: SPartRoutings,
+                as: 'routing',
                 required: true,
                 where: {
-                  part_type_code: 'RAW'
-                },
-                attributes: ['id']
+                  active: true,
+                  is_default: true
+                }
+              },
+              {
+                model: SPartRoutingDetailMaterials,
+                as: 'materials',
+                required: true,
+                include: [
+                  {
+                    model: SParts,
+                    as: 'part',
+                    required: true,
+                    where: {
+                      part_type_code: 'RAW'
+                    }
+                  }
+                ]
               }
             ]
           });
-
+        
           const partIdsSet = new Set();
-
-          for (const material of materials) {
-            partIdsSet.add(
-              material.part_id
-            );
+        
+          for (const detail of materials) {
+            for (const material of detail.materials) {
+              partIdsSet.add(material.part_id);
+            }
           }
-
+        
           partIds = [...partIdsSet];
-
+        
           if (!partIds.length) {
             return {
               status: true,
+              code: 200,
               data: []
             };
           }

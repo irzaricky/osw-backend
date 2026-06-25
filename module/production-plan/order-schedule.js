@@ -1679,7 +1679,7 @@ class OrderScheduleModule extends BaseModule {
     try {
       const { id } = req.params;
    
-      // ── 1. Validasi PO ────────────────────────────────────────────────────
+      // Validasi PO
       const po = await SProductionOrder.findOne({
         where:       { id, deleted_at: null },
         transaction: t,
@@ -1696,7 +1696,22 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 2. Validasi schedules ─────────────────────────────────────────────
+      // Validasi schedules
+      // Fetch schedules — kecualikan yang sudah punya WO In_Progress/Completed
+      const existingActiveWoScheduleIds = await SWorkOrder.findAll({
+        where: {
+          po_id:          po.id,
+          status:         { [Op.in]: ['In_Progress', 'Completed'] },
+          po_schedule_id: { [Op.ne]: null },
+        },
+        attributes:  ['po_schedule_id'],
+        transaction: t,
+      });
+
+      const lockedScheduleIds = new Set(
+        existingActiveWoScheduleIds.map((w) => w.po_schedule_id)
+      );
+
       const schedules = await SProductionOrderSchedule.findAll({
         where: {
           po_id: po.id,
@@ -1714,7 +1729,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 3. Fetch PO products & plan details ───────────────────────────────
+      // Fetch PO products & plan details
       const poProducts = await SProductionOrderProduct.findAll({
         where:       { po_id: po.id },
         transaction: t,
@@ -1747,11 +1762,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 4. Fetch routing details ──────────────────────────────────────────
-      //
-      // Setelah migration, s_part_routing_details sudah unique per
-      // (routing_id, station_id) — tidak ada duplikasi, tidak perlu guard.
-   
+      // Fetch routing details
       const routingDetails = await SPartRoutingDetails.findAll({
         where:       { routing_id: routingIds },
         attributes:  ['id', 'routing_id', 'station_id', 'sequence'],
@@ -1770,11 +1781,8 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 5. Fetch material per routing detail ──────────────────────────────
-      //
-      // Ganti SRoutingStationMaterial → SPartRoutingDetailMaterials.
-      // Lookup sekarang via routing_detail_id langsung.
-   
+      // Fetch material per routing detail
+      
       const routingDetailIds = routingDetails.map((rd) => rd.id);
    
       const detailMaterials = await SPartRoutingDetailMaterials.findAll({
@@ -2024,7 +2032,8 @@ class OrderScheduleModule extends BaseModule {
         activityCode: 'RELEASE',
         resourceId:   po.id,
         description:  `Released Production Order ${po.po_number} — ` +
-                      `generated ${woCreatedCount} Work Order(s) with BOM-exploded raw material per station`,
+                      `generated ${woCreatedCount} Work Order(s). ` +
+                      `${lockedScheduleIds.size} schedule(s) skipped (WO already active/completed).`,
         transaction:  t,
       });
    

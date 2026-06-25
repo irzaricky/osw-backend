@@ -18,11 +18,14 @@ const {
   SBomDetails,
   SSuppliers,
   SWorkOrder, 
+  SWorkOrderMaterial,
+  SWorkOrderStation,
   TWorkOrderStoring, 
   TWorkOrderStoringItem,
   TStationBufferStock,
   SPartRoutings,
   SPartRoutingDetails,
+  SRoutingStationMaterial,
   sequelize
 } = db
 
@@ -132,10 +135,18 @@ class PartsModule extends BaseModule {
 
         // Take Out Supply Production
         if (production_wo_id) {
+          if (!station_id) {
+            return helper.sendResponse(res, {
+              status: false,
+              code: 400,
+              message: 'Station is required'
+            });
+          }
+
           const wo = await SWorkOrder.findByPk(
             production_wo_id,
             {
-              attributes: ['id', 'part_id', 'planned_quantity']
+              attributes: ['id']
             }
           );
 
@@ -147,90 +158,39 @@ class PartsModule extends BaseModule {
             });
           }
 
-          const bom = await SBoms.findOne({
-            where: {
-              parent_part_id: wo.part_id,
-              doc_status_id: 3, // Approved
-              activation_status_id: 2 // Active
-            },
+          const materials = await SWorkOrderMaterial.findAll({
             include: [
               {
-                model: SBomDetails,
-                as: 'details',
+                model: SWorkOrderStation,
+                as: 'work_order_station',
                 required: true,
                 where: {
-                  type: 'Raw Material'
+                  wo_id: production_wo_id,
+                  station_id
+                }
+              },
+              {
+                model: SParts,
+                as: 'material_part',
+                required: true,
+                where: {
+                  part_type_code: 'RAW'
                 },
+                attributes: ['id'],
                 include: [
                   {
-                    model: SParts,
-                    as: 'part',
-                    required: true,
-                    attributes: ['id'],
-                    include: [
-                      {
-                        model: SPackages,
-                        as: 'package',
-                        attributes: ['capacity']
-                      }
-                    ]
+                    model: SPackages,
+                    as: 'package',
+                    attributes: ['capacity']
                   }
                 ]
               }
             ]
           });
 
-          if (!bom) {
-            return helper.sendResponse(res, {
-              status: false,
-              code: 404,
-              message: 'Active BOM not found'
-            });
-          }
-
-          let firstAssemblyStation = null;
-
-          const routing = await SPartRoutings.findOne({
-            where: { 
-              part_id: wo.part_id,
-              active: true
-            },
-            include: [
-              {
-                model: SPartRoutingDetails,
-                as: 'routing_details',
-                include: [
-                  {
-                    model: SStations,
-                    as: 'station',
-                    include: [
-                      {
-                        model: RefStationTypes,
-                        as: 'station_type'
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          })
-
-          if (routing?.routing_details?.length) {
-            const sorted = [...routing.routing_details]
-              .sort((a, b) => a.sequence - b.sequence);
-
-            firstAssemblyStation = sorted.find(
-              r => r.station?.station_type?.name?.toLowerCase().includes('assembly')
-            )?.station;
-
-            if (!firstAssemblyStation) {
-              firstAssemblyStation = sorted[0]?.station ?? null;
-            }
-          }
-
-          for (const detail of bom.details) {
-            const requiredQty = Number(detail.qty_required) * Number(wo.planned_quantity);
-            const packageCapacity = Number(detail.part?.package?.capacity || 1);
+          for (const material of materials) {
+            const requiredQty = Number(material.planned_quantity);
+            const packageCapacity = Number(material.material_part?.package?.capacity || 1);
 
             const suppliedKanban = await TWorkOrderStoringItem.sum(
               'total_kanban',
@@ -239,9 +199,12 @@ class PartsModule extends BaseModule {
                   {
                     model: TWorkOrderStoring,
                     as: 'work_order',
+                    attributes: [],
                     required: true,
                     where: {
-                      production_wo_id: wo.id,
+                      production_wo_id,
+                      station_id,
+                      take_out_purpose: 'production',
                       wo_status_id: {
                         [Op.in]: [2, 3, 4]
                       }
@@ -249,7 +212,7 @@ class PartsModule extends BaseModule {
                   }
                 ],
                 where: {
-                  part_id: detail.part_id
+                  part_id: material.material_part_id
                 }
               }
             ) || 0;
@@ -263,9 +226,12 @@ class PartsModule extends BaseModule {
                   {
                     model: TWorkOrderStoring,
                     as: 'work_order',
+                    attributes: [],
                     required: true,
                     where: {
-                      production_wo_id: wo.id,
+                      production_wo_id,
+                      station_id,
+                      take_out_purpose: 'production',
                       wo_status_id: {
                         [Op.in]: [2, 3, 4]
                       }
@@ -273,7 +239,7 @@ class PartsModule extends BaseModule {
                   }
                 ],
                 where: {
-                  part_id: detail.part_id
+                  part_id: material.material_part_id
                 }
               }
             ) || 0;
@@ -283,13 +249,12 @@ class PartsModule extends BaseModule {
 
             const bufferStock = await TStationBufferStock.findOne({
               where: {
-                station_id: firstAssemblyStation?.id,
-                part_id: detail.part_id
+                station_id,
+                part_id: material.material_part_id
               }
             });
 
             const bufferQty = Number(bufferStock?.qty_pcs || 0);
-
             let maxKanban = Math.floor(remainingQty / packageCapacity);
             const remainder = remainingQty % packageCapacity;
 
@@ -297,14 +262,18 @@ class PartsModule extends BaseModule {
               maxKanban += 1;
             }
 
+            if (remainingQty > 0 && maxKanban === 0) {
+              maxKanban = 1;
+            }
+            
             maxKanbanMap.set(
-              detail.part_id,
+              material.material_part_id,
               maxKanban
             );
 
-            if (remainingQty > 0 && !requiredPartIds.includes(detail.part_id)) {
+            if (remainingQty > 0 && !requiredPartIds.includes(material.material_part_id)) {
               requiredPartIds.push(
-                detail.part_id
+                material.material_part_id
               );
             }
           }
@@ -320,90 +289,27 @@ class PartsModule extends BaseModule {
           whereClause += ` AND part.id IN (:requiredPartIds)`;
           replacements.requiredPartIds = requiredPartIds;
         } else if (station_id) {
-          const routings = await SPartRoutings.findAll({
+          const materials = await SRoutingStationMaterial.findAll({
             where: {
-              active: true
-            },
-            attributes: ['part_id'],
-            include: [
-              {
-                model: SPartRoutingDetails,
-                as: 'routing_details',
-                required: true,
-                attributes: ['station_id', 'sequence'],
-                include: [
-                  {
-                    model: SStations,
-                    as: 'station',
-                    required: true,
-                    include: [
-                      {
-                        model: RefStationTypes,
-                        as: 'station_type',
-                        required: true,
-                        where: {
-                          name: 'ASSEMBLY'
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          });
-
-          const parentPartIds = [];
-
-          for (const routing of routings) {
-            const firstAssembly = [...routing.routing_details]
-              .sort((a, b) => a.sequence - b.sequence)[0];
-
-            if (!firstAssembly) {
-              continue;
-            }
-
-            if (firstAssembly.station_id !== station_id) {
-              continue;
-            }
-
-            parentPartIds.push(routing.part_id);
-          }
-
-          if (!parentPartIds.length) {
-            return helper.sendResponse(res, {
-              status: true,
-              code: 200,
-              data: []
-            });
-          }
-
-          const boms = await SBoms.findAll({
-            where: {
-              parent_part_id: {
-                [Op.in]: parentPartIds
-              },
-              doc_status_id: 3, // Approved
-              activation_status_id: 2 // Active
+              station_id
             },
             include: [
               {
-                model: SBomDetails,
-                as: 'details',
+                model: SParts,
+                as: 'part',
                 required: true,
                 where: {
-                  type: 'Raw Material'
+                  part_type_code: 'RAW'
                 }
               }
             ]
           });
 
-          for (const bom of boms) {
-            for (const detail of bom.details) {
-              if (!requiredPartIds.includes(detail.part_id)) {
-                requiredPartIds.push(
-                  detail.part_id
-                );
-              }
+          for (const material of materials) {
+            if (!requiredPartIds.includes(material.part_id)) {
+              requiredPartIds.push(
+                material.part_id
+              );
             }
           }
 

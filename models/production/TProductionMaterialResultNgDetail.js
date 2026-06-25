@@ -42,6 +42,11 @@ export default (sequelize) => {
         allowNull: true
       },
 
+      source_wo_item_label_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+      },
+
       qty_ng: {
         type: DataTypes.INTEGER,
         allowNull: false,

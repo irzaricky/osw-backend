@@ -100,6 +100,7 @@ async listProductionResult(req) {
     const productionResultIds = rows.map(row => row.id)
 
     let ngDetails = []
+    let usedMaterials = []
 
     if (productionResultIds.length) {
       ngDetails = await db.sequelize.query(`
@@ -113,6 +114,7 @@ async listProductionResult(req) {
 
           ng.source_label_id,
           ng.source_label_number,
+          ng.source_wo_item_label_id,
 
           ng.qty_ng,
           ng.remarks,
@@ -132,6 +134,60 @@ async listProductionResult(req) {
         },
         type: QueryTypes.SELECT
       })
+
+      usedMaterials = await db.sequelize.query(`
+        SELECT
+          pmr.id AS production_result_id,
+
+          item.part_id AS material_part_id,
+          part.part_number AS material_part_number,
+          part.part_name AS material_part_name,
+
+          wil.id AS wo_item_label_id,
+          lbl.id AS label_id,
+          lbl.label_number,
+
+          wos.id AS wo_storing_id,
+          wos.wo_number AS wo_storing_number,
+
+          wil.is_scanned_out,
+          wil.created_at
+
+        FROM t_production_material_result pmr
+
+        JOIN t_work_order_storing wos
+          ON wos.production_wo_id = pmr.production_wo_id
+          AND wos.station_id = pmr.station_id
+          AND wos.take_out_purpose = 'production'
+          AND wos.deleted_at IS NULL
+
+        JOIN t_work_order_storing_item item
+          ON item.wo_id = wos.id
+          AND item.deleted_at IS NULL
+
+        JOIN s_parts part
+          ON part.id = item.part_id
+          AND part.deleted_at IS NULL
+
+        JOIN t_work_order_storing_item_label wil
+          ON wil.wo_item_id = item.id
+          AND wil.is_scanned_out = true
+          AND wil.deleted_at IS NULL
+
+        JOIN t_part_labels lbl
+          ON lbl.id = wil.label_id
+          AND lbl.deleted_at IS NULL
+
+        WHERE pmr.id IN (:production_result_ids)
+          AND pmr.deleted_at IS NULL
+
+        ORDER BY pmr.id ASC, part.part_number ASC, lbl.label_number ASC
+      `, {
+        replacements: {
+          production_result_ids: productionResultIds
+        },
+        type: QueryTypes.SELECT
+      })
     }
 
     const ngDetailsMap = ngDetails.reduce((map, item) => {
@@ -144,8 +200,36 @@ async listProductionResult(req) {
       return map
     }, {})
 
-    const rowsWithNgMaterials = rows.map(row => ({
+    const usedMaterialMap = usedMaterials.reduce((map, item) => {
+      if (!map[item.production_result_id]) {
+        map[item.production_result_id] = {}
+      }
+
+      if (!map[item.production_result_id][item.material_part_id]) {
+        map[item.production_result_id][item.material_part_id] = {
+          material_part_id: item.material_part_id,
+          material_part_number: item.material_part_number,
+          material_part_name: item.material_part_name,
+          labels: []
+        }
+      }
+
+      map[item.production_result_id][item.material_part_id].labels.push({
+        wo_item_label_id: item.wo_item_label_id,
+        label_id: item.label_id,
+        label_number: item.label_number,
+        wo_storing_id: item.wo_storing_id,
+        wo_storing_number: item.wo_storing_number,
+        is_scanned_out: item.is_scanned_out,
+        created_at: item.created_at
+      })
+
+      return map
+    }, {})
+
+    const rowsWithDetails = rows.map(row => ({
       ...row,
+      used_materials: Object.values(usedMaterialMap[row.id] || {}),
       ng_materials: ngDetailsMap[row.id] || []
     }))
 
@@ -170,7 +254,7 @@ async listProductionResult(req) {
 
     return {
       status: true,
-      data: rowsWithNgMaterials,
+      data: rowsWithDetails,
       meta: {
         page: Number(page),
         limit: Number(limit),
@@ -297,6 +381,31 @@ async createProductionResult(req) {
       }
     }
 
+    const [existingResult] = await db.sequelize.query(`
+      SELECT id
+      FROM t_production_material_result
+      WHERE production_wo_id = :production_wo_id
+        AND station_id = :station_id
+        AND deleted_at IS NULL
+      LIMIT 1
+    `, {
+      replacements: {
+        production_wo_id: data.production_wo_id,
+        station_id: data.station_id
+      },
+      type: QueryTypes.SELECT,
+      transaction
+    })
+
+    if (existingResult) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Production result for this station already exists',
+        code: 400
+      }
+    }
+
     const ngMaterials = Array.isArray(data.ng_materials)
       ? data.ng_materials
       : []
@@ -378,6 +487,7 @@ async createProductionResult(req) {
             material_part_id,
             source_label_id,
             source_label_number,
+            source_wo_item_label_id,
             qty_ng,
             remarks,
             created_by,
@@ -390,6 +500,7 @@ async createProductionResult(req) {
             :material_part_id,
             :source_label_id,
             :source_label_number,
+            :source_wo_item_label_id,
             :qty_ng,
             :remarks,
             :created_by,
@@ -402,6 +513,7 @@ async createProductionResult(req) {
             material_part_id: item.material_part_id,
             source_label_id: item.label_id || null,
             source_label_number: item.label_number || null,
+            source_wo_item_label_id: item.wo_item_label_id || null,
             qty_ng: qtyNg,
             remarks: item.remarks || null,
             created_by: req.user?.id || null

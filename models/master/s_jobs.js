@@ -5,7 +5,6 @@ export default (sequelize) => {
     static associate(models) {
       SJobs.belongsTo(models.RefJobTypes, { foreignKey: 'job_type_id', as: 'job_type' });
       SJobs.hasMany(models.SStationJobs, { foreignKey: 'job_id', as: 'station_jobs' });
-      SJobs.hasMany(models.SPartRoutingDetails, { foreignKey: 'job_id', as: 'routing_details' });
     }
   }
 

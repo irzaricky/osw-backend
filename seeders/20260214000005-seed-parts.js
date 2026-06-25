@@ -96,6 +96,43 @@ export default {
       { part_number: 'PART-AXLE-F',           part_name: 'Front Axle Shaft',                         part_type_code: 'RAW', part_category_code: 'SMALL',  price: 75000,    safety_stock: 200,  lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.220 },
       { part_number: 'PART-AXLE-R',           part_name: 'Rear Axle Shaft',                          part_type_code: 'RAW', part_category_code: 'SMALL',  price: 95000,    safety_stock: 100,  lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.280 },
       { part_number: 'PART-NUT-M12',          part_name: 'Flange Nut M12',                           part_type_code: 'RAW', part_category_code: 'BIG',    price: 4000,     safety_stock: 500,  lead_time_days: 2,  uom_code: 'PCS', package_code: 'PKG-BOX-L', weight: 0.025 },
+      // ============================================
+      // ADDITIONAL PARTS (Critical Missing Items)
+      // ============================================
+      // --- NEW: Drivetrain Components ---
+      { part_number: 'PART-CHAINRING',         part_name: 'Front Chainring 44T',                         part_type_code: 'RAW', part_category_code: 'SMALL',  price: 180000,   safety_stock: 50,   lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.220 },
+      { part_number: 'PART-CASSETTE-7SP',      part_name: 'Rear Cassette 7-Speed',                       part_type_code: 'RAW', part_category_code: 'SMALL',  price: 240000,   safety_stock: 50,   lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.280 },
+
+      // --- NEW: Cable System ---
+      { part_number: 'PART-BRAKE-CABLE',       part_name: 'Hydraulic/Mechanical Brake Cable',           part_type_code: 'RAW', part_category_code: 'SMALL',  price: 35000,    safety_stock: 100,  lead_time_days: 2,  uom_code: 'PCS', package_code: 'PKG-BULK-S', weight: 0.050 },
+      { part_number: 'PART-DERAIL-CABLE',      part_name: 'Derailleur Control Cable',                   part_type_code: 'RAW', part_category_code: 'SMALL',  price: 28000,    safety_stock: 100,  lead_time_days: 2,  uom_code: 'PCS', package_code: 'PKG-BULK-S', weight: 0.040 },
+
+      // --- NEW: Brake Components ---
+      { part_number: 'PART-BRAKE-ROTOR-160',   part_name: 'Hydraulic Disc Brake Rotor 160mm',           part_type_code: 'RAW', part_category_code: 'SMALL',  price: 120000,   safety_stock: 100,  lead_time_days: 3,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.180 },
+      { part_number: 'PART-BRAKE-PADS-SET',    part_name: 'Disc Brake Pads Set (F+R)',                  part_type_code: 'RAW', part_category_code: 'SMALL',  price: 85000,    safety_stock: 100,  lead_time_days: 2,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.120 },
+
+      // --- NEW: Fasteners (Hardware Variants) ---
+      { part_number: 'PART-NUT-M8',            part_name: 'Hex Nut M8',                                 part_type_code: 'RAW', part_category_code: 'SMALL',  price: 2000,     safety_stock: 500,  lead_time_days: 1,  uom_code: 'PCS', package_code: 'PKG-BULK-S', weight: 0.012 },
+      { part_number: 'PART-NUT-M6',            part_name: 'Hex Nut M6',                                 part_type_code: 'RAW', part_category_code: 'SMALL',  price: 1500,     safety_stock: 500,  lead_time_days: 1,  uom_code: 'PCS', package_code: 'PKG-BULK-S', weight: 0.008 },
+      { part_number: 'PART-BOLT-M8-25',        part_name: 'Hex Bolt M8x25mm',                           part_type_code: 'RAW', part_category_code: 'SMALL',  price: 3500,     safety_stock: 300,  lead_time_days: 1,  uom_code: 'PCS', package_code: 'PKG-BULK-S', weight: 0.020 },
+      { part_number: 'PART-WASHER-M8',         part_name: 'Flat Washer M8',                             part_type_code: 'RAW', part_category_code: 'SMALL',  price: 1000,     safety_stock: 500,  lead_time_days: 1,  uom_code: 'PCS', package_code: 'PKG-BULK-S', weight: 0.005 },
+
+      // --- NEW: Electrical Connectors ---
+      { part_number: 'PART-CONNECTOR-MOTOR',   part_name: 'Motor Power Connector (Weatherproof)',       part_type_code: 'RAW', part_category_code: 'SMALL',  price: 45000,    safety_stock: 50,   lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.040 },
+      { part_number: 'PART-CONNECTOR-DISPLAY', part_name: 'Display Data Connector (CAN/Serial)',        part_type_code: 'RAW', part_category_code: 'SMALL',  price: 32000,    safety_stock: 50,   lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.025 },
+      { part_number: 'PART-CONNECTOR-BATTERY', part_name: 'Battery XT60 Connector Pair',                part_type_code: 'RAW', part_category_code: 'SMALL',  price: 28000,    safety_stock: 100,  lead_time_days: 3,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.020 },
+
+      // --- NEW: Fork & Handlebar Hardware ---
+      { part_number: 'PART-FORK-CROWN-RACE',   part_name: 'Fork Crown Race Bearing (Headset)',          part_type_code: 'RAW', part_category_code: 'SMALL',  price: 65000,    safety_stock: 50,   lead_time_days: 3,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.080 },
+      { part_number: 'PART-HANDLEBAR-ENDCAP',  part_name: 'Handlebar End Cap Pair',                     part_type_code: 'RAW', part_category_code: 'SMALL',  price: 25000,    safety_stock: 100,  lead_time_days: 2,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.050 },
+      { part_number: 'PART-STEM-BOLT-SET',     part_name: 'Stem Clamp Bolt Set',                        part_type_code: 'RAW', part_category_code: 'SMALL',  price: 18000,    safety_stock: 100,  lead_time_days: 2,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.040 },
+
+      // --- NEW: Battery & Electronics Accessories ---
+      { part_number: 'PART-BATTERY-FUSE',      part_name: 'Fuse Module 48V 60A',                        part_type_code: 'RAW', part_category_code: 'SMALL',  price: 95000,    safety_stock: 50,   lead_time_days: 7,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.150 },
+      { part_number: 'PART-CHARGE-PORT',       part_name: 'XLR Charging Port Module',                   part_type_code: 'RAW', part_category_code: 'SMALL',  price: 85000,    safety_stock: 50,   lead_time_days: 5,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.090 },
+
+      // --- NEW: Sensor (PAS / Torque Sensor) ---
+      { part_number: 'PART-SENSOR-PAS',        part_name: 'Pedal Assist Sensor Module',                 part_type_code: 'RAW', part_category_code: 'SMALL',  price: 320000,   safety_stock: 50,   lead_time_days: 7,  uom_code: 'PCS', package_code: 'PKG-BOX-S', weight: 0.180 },
     ];
 
     const allItems = [...products, ...parts];

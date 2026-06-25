@@ -1258,29 +1258,6 @@ class OrderScheduleModule extends BaseModule {
         return helper.sendResponse(res, { status: false, code: po.code, error: po.error });
       }
   
-      // Load plan to detect amendment
-      const plan = await SProductionPlan.findByPk(po.data.plan_id, {
-        attributes: ['id', 'plan_type', 'parent_plan_id', 'plan_month'],
-        transaction: t,
-      });
-
-      if (plan?.plan_month) {
-        const [planYear, planMonth] = plan.plan_month.split('-').map(Number);
-        const startDt = new Date(po.data.production_start_date);
-        const endDt   = new Date(po.data.production_end_date);
-      
-        if (
-          startDt.getUTCFullYear() !== planYear || startDt.getUTCMonth() + 1 !== planMonth ||
-          endDt.getUTCFullYear()   !== planYear || endDt.getUTCMonth()   + 1 !== planMonth
-        ) {
-          await t.rollback();
-          return helper.sendResponse(res, {
-            status: false, code: 400,
-            error:  `PO dates are outside the plan month (${plan.plan_month}). Update the PO dates first.`,
-          });
-        }
-      }
-  
       const products = await SProductionOrderProduct.findAll({
         where:       { po_id: id },
         order:       [['delivery_date', 'ASC'], ['sequence', 'ASC']],
@@ -1306,223 +1283,93 @@ class OrderScheduleModule extends BaseModule {
   
       const lineIds = [...new Set(products.map((p) => p.line_id))];
   
-      // ── 1. Resolve capacity params ──────────────────────────────────────────
-      const capacityInfoByLine = await resolveCapacityPerLine(po.data.plan_id, lineIds, t);
+      // ── Resolve retained WO (In_Progress/Completed) ──────────────────────
+      const retainedWoQty      = new Map(); // po_product_id → locked qty
+      let   retainedScheduleIds = new Set();
   
-      for (const lineId of lineIds) {
-        const info = capacityInfoByLine.get(lineId);
-        if (!info || info.capPerShift === 0) {
-          await t.rollback();
-          return helper.sendResponse(res, {
-            status: false, code: 400,
-            error:  `Line ID ${lineId} has zero capacity per shift. ` +
-                    `Check max_takt_time and working_hours_per_shift configuration.`,
-          });
-        }
-      }
+      const retainedWos = await SWorkOrder.findAll({
+        where: {
+          po_id:  id,
+          status: { [Op.in]: ['In_Progress', 'Completed'] },
+        },
+        attributes: ['po_schedule_id', 'planned_quantity'],
+        transaction: t,
+      });
   
-      // ── 2. Resolve effective working days, shifts, and overtime ─────────────
-      const workingDaysByLine         = new Map();
-      const dayShiftsMapByLine        = new Map();
-      const overtimeByDateShiftByLine = new Map();
+      if (retainedWos.length > 0) {
+        const retainedSchedIds = retainedWos
+          .map((w) => w.po_schedule_id)
+          .filter(Boolean);
   
-      for (const lineId of lineIds) {
-        const result = await resolveEffectiveWorkingDaysAndShifts(
-          lineId,
-          po.data.plan_id,
-          po.data.production_start_date,
-          po.data.production_end_date,
-          t,
-        );
-  
-        if (!result || result.workingDays.length === 0) {
-          await t.rollback();
-          return helper.sendResponse(res, {
-            status: false, code: 400,
-            error:  `No active working days found for line ID ${lineId} within ` +
-                    `[${po.data.production_start_date} ~ ${po.data.production_end_date}]. ` +
-                    `Ensure shift calendar is configured.`,
-          });
-        }
-  
-        workingDaysByLine.set(lineId, result.workingDays);
-        dayShiftsMapByLine.set(lineId, result.dayShiftsMap);
-        overtimeByDateShiftByLine.set(lineId, result.overtimeByDateShift);
-      }
-  
-      // ── 3. Load line master data ────────────────────────────────────────────
-      const lineRows    = await SLines.findAll({ where: { id: lineIds }, transaction: t });
-      const lineByIdMap = new Map(lineRows.map((l) => [l.id, l]));
-  
-      // ── 4. Build slot map per line ──────────────────────────────────────────
-      const initialSlotMapByLine = new Map();
-  
-      for (const lineId of lineIds) {
-        const info                = capacityInfoByLine.get(lineId);
-        const dayShiftsMap        = dayShiftsMapByLine.get(lineId);
-        const overtimeByDateShift = overtimeByDateShiftByLine.get(lineId) ?? new Map();
-  
-        const slotMap = buildShiftSlotMap(dayShiftsMap, info, overtimeByDateShift);
-        initialSlotMapByLine.set(lineId, slotMap);
-      }
-  
-      // ── 5. Validate total slot capacity is not zero ─────────────────────────
-      for (const lineId of lineIds) {
-        const slotMap  = initialSlotMapByLine.get(lineId) ?? new Map();
-        const totalCap = [...slotMap.values()].reduce((s, slot) => s + slot.totalCap, 0);
-        if (totalCap === 0) {
-          await t.rollback();
-          return helper.sendResponse(res, {
-            status: false, code: 400,
-            error:  `Line ID ${lineId} has zero total capacity across all working days and shifts.`,
-          });
-        }
-      }
-  
-      // ── 6. For amendment POs: read occupied slots from Released sibling POs ─
-      // Sibling POs are Released POs whose plan_id is the parent_plan_id of this plan.
-      const occupiedSlotMap = new Map(); // Map<`date_shiftNumber`, totalUsedQty>
-  
-      if (plan?.plan_type === 'AMENDMENT' && plan?.parent_plan_id) {
-        const siblingPOs = await SProductionOrder.findAll({
-          where: {
-            plan_id:    plan.parent_plan_id,
-            status:     'Released',
-            deleted_at: null,
-          },
-          attributes:  ['id'],
-          transaction: t,
-        });
-  
-        if (siblingPOs.length > 0) {
-          const siblingPoIds = siblingPOs.map((p) => p.id);
-  
-          const siblingSchedules = await SProductionOrderSchedule.findAll({
-            where: {
-              po_id:   { [Op.in]: siblingPoIds },
-              line_id: { [Op.in]: lineIds },
-            },
-            attributes:  ['production_date', 'shift_id', 'line_id', 'planned_qty_per_day'],
-            include: [{
-              model:      SShifts,
-              as:         'shift',
-              attributes: ['shift_number'],
-              required:   false,
-            }],
+        if (retainedSchedIds.length > 0) {
+          const retainedScheds = await SProductionOrderSchedule.findAll({
+            where:      { id: retainedSchedIds },
+            attributes: ['id', 'po_product_id', 'planned_qty_per_day'],
             transaction: t,
           });
   
-          for (const sched of siblingSchedules) {
-            const shiftNum = sched.shift?.shift_number;
-            if (!shiftNum) continue;
-            const dateStr = typeof sched.production_date === 'string'
-              ? sched.production_date.split('T')[0]
-              : new Date(sched.production_date).toISOString().split('T')[0];
-            const key     = `${dateStr}_${shiftNum}`;
-            occupiedSlotMap.set(key, (occupiedSlotMap.get(key) ?? 0) + (sched.planned_qty_per_day ?? 0));
+          retainedScheduleIds = new Set(retainedScheds.map((s) => s.id));
+  
+          for (const sched of retainedScheds) {
+            const prev = retainedWoQty.get(sched.po_product_id) ?? 0;
+            retainedWoQty.set(sched.po_product_id, prev + sched.planned_qty_per_day);
           }
         }
       }
   
-      // ── 7. Clear old schedule rows ──────────────────────────────────────────
-      await SProductionOrderSchedule.destroy({ where: { po_id: id }, transaction: t, force: true });
-      await SProductionOrderProduct.update({ scheduled_qty: 0 }, { where: { po_id: id }, transaction: t });
+      // Kurangi planned_qty dengan qty yang sudah dikunci retained WO
+      const adjustedProducts = products
+        .map((p) => {
+          const lockedQty    = retainedWoQty.get(p.id) ?? 0;
+          const remainingQty = Math.max(0, p.planned_qty - lockedQty);
+          return { ...p.toJSON(), planned_qty: remainingQty };
+        })
+        .filter((p) => p.planned_qty > 0);
   
-      // ── 8. Generate schedule (EDF with delivery date slot filter) ───────────
-      const { scheduleRows, errors, stageCompletionDate } = buildSchedule({
-        products,
-        workingDaysByLine,
-        dayShiftsMapByLine,
-        initialSlotMapByLine,
-        lineByIdMap,
-        po_id: id,
-        poEndDate: po.data.production_end_date,
-        occupiedSlotMap,
-      });
+      // ─────────────────────────────────────────────────────────────────────
   
-      const partialErrors = errors.filter((e) => e.includes('PARTIAL_CAPACITY'));
-      const fatalErrors   = errors.filter((e) => e.includes('missing slot config'));
+      const scheduleResult = await this._generateScheduleLogic(
+        id,
+        po.data.plan_id,
+        po.data.status,
+        po.data.production_start_date,
+        po.data.production_end_date,
+        lineIds,
+        adjustedProducts,   // ← bukan products
+        t,
+        retainedScheduleIds, // ← schedule retained tidak dihapus
+        retainedWoQty,       // ← untuk scheduled_qty yang akurat
+      );
   
-      if (fatalErrors.length > 0) {
+      if (!scheduleResult.ok) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false,
-          code:   400,
-          error:  'Scheduling failed: slot configuration not found for one or more lines.',
-          errors: fatalErrors,
+          code:   scheduleResult.code,
+          error:  scheduleResult.error,
+          errors: scheduleResult.errors,
         });
       }
-  
-      // ── 9. Persist schedule rows — strip internal flags before insert ────────
-      const overtimeSummary = scheduleRows
-        .filter((r) => r._has_overtime)
-        .map((r) => ({
-          date:         r.production_date,
-          shift_id:     r.shift_id,
-          overtime_cap: r._overtime_cap,
-        }));
-  
-      const rowsToInsert = scheduleRows.map(({ _has_overtime, _overtime_cap, ...rest }) => rest);
-      await SProductionOrderSchedule.bulkCreate(rowsToInsert, { transaction: t });
-  
-      // ── 10. Update scheduled_qty per product ────────────────────────────────
-      const scheduledByProduct = new Map();
-      for (const row of scheduleRows) {
-        scheduledByProduct.set(
-          row.po_product_id,
-          (scheduledByProduct.get(row.po_product_id) ?? 0) + row.planned_qty_per_day,
-        );
-      }
-      for (const [productId, qty] of scheduledByProduct.entries()) {
-        await SProductionOrderProduct.update(
-          { scheduled_qty: qty },
-          { where: { id: productId }, transaction: t }
-        );
-      }
-  
-      // ── 11. Build response summary ──────────────────────────────────────────
-      const completionSummary = Object.fromEntries(stageCompletionDate.entries());
-  
-      const capacitySummary = Object.fromEntries(
-        [...capacityInfoByLine.entries()].map(([lid, info]) => [lid, {
-          cap_per_shift:           info.capPerShift,
-          cap_per_day:             info.capPerDay,
-          total_cap_units:         info.totalCapUnits,
-          shifts_per_day:          info.shiftsPerDay,
-          working_days_effective:  info.workingDays,
-          effective_min_per_shift: parseFloat((info.effectiveMinPerShift ?? 0).toFixed(4)),
-        }])
-      );
   
       await this.logActivity(req, {
         moduleCode:   'production_order',
         activityCode: 'GENERATE_SCHEDULE',
         resourceId:   po.data.id,
-        newData:      { schedule_count: rowsToInsert.length },
-        description:  `Generated ${rowsToInsert.length} schedule row(s) for PO ${po.data.po_number}`,
+        newData:      { schedule_count: scheduleResult.data.schedule_count },
+        description:  `Generated ${scheduleResult.data.schedule_count} schedule row(s) for PO ${po.data.po_number}`,
         transaction:  t,
       });
   
       await t.commit();
+  
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: `Schedule generated: ${rowsToInsert.length} row(s) across ${lineIds.length} line(s).`,
-        data: {
-          schedule_count:       rowsToInsert.length,
-          lines_used:           lineIds.length,
-          plan_type:            plan?.plan_type ?? 'ORIGINAL',
-          production_end_date:  po.data.production_end_date,
-          product_completion:   completionSummary,
-          working_days_by_line: Object.fromEntries(
-            [...workingDaysByLine.entries()].map(([lid, days]) => [lid, days.length])
-          ),
-          capacity_by_line:     capacitySummary,
-          overtime_slots:       overtimeSummary.length > 0 ? overtimeSummary : undefined,
-          occupied_slots_count: occupiedSlotMap.size > 0 ? occupiedSlotMap.size : undefined,
-          warnings:             partialErrors.length > 0 ? partialErrors : undefined,
-        },
+        message: `Schedule generated: ${scheduleResult.data.schedule_count} row(s) across ` +
+                 `${scheduleResult.data.lines_used} line(s). PO status: Draft (ready for approval).`,
+        data: scheduleResult.data,
       });
+  
     } catch (error) {
       await t.rollback();
       console.log('[OrderScheduleModule][generateSchedule]:', error);
@@ -1832,7 +1679,7 @@ class OrderScheduleModule extends BaseModule {
     try {
       const { id } = req.params;
    
-      // ── 1. Validasi PO ────────────────────────────────────────────────────
+      // Validasi PO
       const po = await SProductionOrder.findOne({
         where:       { id, deleted_at: null },
         transaction: t,
@@ -1849,9 +1696,29 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 2. Validasi schedules ─────────────────────────────────────────────
+      // Validasi schedules
+      // Fetch schedules — kecualikan yang sudah punya WO In_Progress/Completed
+      const existingActiveWoScheduleIds = await SWorkOrder.findAll({
+        where: {
+          po_id:          po.id,
+          status:         { [Op.in]: ['In_Progress', 'Completed'] },
+          po_schedule_id: { [Op.ne]: null },
+        },
+        attributes:  ['po_schedule_id'],
+        transaction: t,
+      });
+
+      const lockedScheduleIds = new Set(
+        existingActiveWoScheduleIds.map((w) => w.po_schedule_id)
+      );
+
       const schedules = await SProductionOrderSchedule.findAll({
-        where:       { po_id: po.id },
+        where: {
+          po_id: po.id,
+          ...(lockedScheduleIds.size > 0 && {
+            id: { [Op.notIn]: [...lockedScheduleIds] },
+          }),
+        },
         transaction: t,
       });
       if (schedules.length === 0) {
@@ -1862,7 +1729,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 3. Fetch PO products & plan details ───────────────────────────────
+      // Fetch PO products & plan details
       const poProducts = await SProductionOrderProduct.findAll({
         where:       { po_id: po.id },
         transaction: t,
@@ -1895,11 +1762,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 4. Fetch routing details ──────────────────────────────────────────
-      //
-      // Setelah migration, s_part_routing_details sudah unique per
-      // (routing_id, station_id) — tidak ada duplikasi, tidak perlu guard.
-   
+      // Fetch routing details
       const routingDetails = await SPartRoutingDetails.findAll({
         where:       { routing_id: routingIds },
         attributes:  ['id', 'routing_id', 'station_id', 'sequence'],
@@ -1918,11 +1781,8 @@ class OrderScheduleModule extends BaseModule {
         });
       }
    
-      // ── 5. Fetch material per routing detail ──────────────────────────────
-      //
-      // Ganti SRoutingStationMaterial → SPartRoutingDetailMaterials.
-      // Lookup sekarang via routing_detail_id langsung.
-   
+      // Fetch material per routing detail
+      
       const routingDetailIds = routingDetails.map((rd) => rd.id);
    
       const detailMaterials = await SPartRoutingDetailMaterials.findAll({
@@ -2172,7 +2032,8 @@ class OrderScheduleModule extends BaseModule {
         activityCode: 'RELEASE',
         resourceId:   po.id,
         description:  `Released Production Order ${po.po_number} — ` +
-                      `generated ${woCreatedCount} Work Order(s) with BOM-exploded raw material per station`,
+                      `generated ${woCreatedCount} Work Order(s). ` +
+                      `${lockedScheduleIds.size} schedule(s) skipped (WO already active/completed).`,
         transaction:  t,
       });
    
@@ -2208,11 +2069,16 @@ class OrderScheduleModule extends BaseModule {
         return helper.sendResponse(res, validation);
       }
  
-      const po = await SProductionOrder.findOne({ where: { id, deleted_at: null }, transaction: t });
+      const po = await SProductionOrder.findOne({
+        where: { id, deleted_at: null },
+        transaction: t,
+      });
       if (!po) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'Production Order not found' });
       }
+ 
+      // Reschedule hanya diizinkan untuk PO yang sudah Released
       if (po.status !== 'Released') {
         await t.rollback();
         return helper.sendResponse(res, {
@@ -2233,6 +2099,7 @@ class OrderScheduleModule extends BaseModule {
         });
       }
  
+      // Validasi tanggal dalam plan month jika ada
       const plan = await SProductionPlan.findOne({
         where:       { id: po.plan_id },
         attributes:  ['plan_month'],
@@ -2262,58 +2129,118 @@ class OrderScheduleModule extends BaseModule {
         }
       }
  
-      const impactedWos = await SWorkOrder.findAll({
-        where:       { po_id: id, deleted_at: null },
-        attributes:  ['id', 'sequence'],
+      // ── KUNCI: Identifikasi WO yang bisa dihapus vs yang harus dipertahankan 
+      const woToDelete = await SWorkOrder.findAll({
+        where: {
+          po_id:       id,
+          status:      { [Op.in]: ['Draft', 'Released'] },
+          deleted_at:  null,
+        },
+        attributes: ['id', 'status'],
         transaction: t,
       });
-      const impactedWoCount = impactedWos.length;
-      const stageWoCounts   = {};
-      for (const wo of impactedWos) {
-        const s = wo.sequence ?? 1;
-        stageWoCounts[s] = (stageWoCounts[s] ?? 0) + 1;
-      }
+ 
+      const impactedWoCount = woToDelete.length;
+      let deletedByStatus = { Draft: 0, Released: 0 };
  
       if (impactedWoCount > 0) {
-        const woIds = impactedWos.map((w) => w.id);
+        const woIds = woToDelete.map((w) => w.id);
  
-        // Collect station IDs first — SWorkOrderMaterial FK is wo_station_id, not wo_id
-        const impactedStations = await SWorkOrderStation.findAll({
+        // Track status breakdown untuk log
+        for (const wo of woToDelete) {
+          if (wo.status === 'Draft') deletedByStatus.Draft++;
+          if (wo.status === 'Released') deletedByStatus.Released++;
+        }
+ 
+        // Collect station IDs dari WO yang akan dihapus
+        const stationsToDelete = await SWorkOrderStation.findAll({
           where:       { wo_id: woIds },
           attributes:  ['id'],
-          paranoid: false,
           transaction: t,
         });
-        const stationIds = impactedStations.map((s) => s.id);
+        const stationIds = stationsToDelete.map((s) => s.id);
  
         if (stationIds.length > 0) {
-          // Semua child harus dihapus dengan force: true
-          // karena SWorkOrderStation adalah non-paranoid (hard delete)
-          // dan PostgreSQL tidak peduli dengan deleted_at
-          
+          // Hapus semua child data dari station yang akan dihapus
           await SWorkOrderMaterial.destroy({
             where:       { wo_station_id: stationIds },
             transaction: t,
-            force:       true,  // WAJIB — soft delete tidak cukup
+            force:       true,
           });
-        
+ 
           await SWorkOrderProgress.destroy({
             where:       { wo_station_id: stationIds },
             transaction: t,
-            // paranoid: false, jadi force tidak diperlukan, tapi aman untuk ditambahkan
+            force:       true,
           });
-        
+ 
           await SWorkOrderIssue.destroy({
             where:       { wo_station_id: stationIds },
             transaction: t,
-            force:       true,  // WAJIB
+            force:       true,
           });
         }
  
-        await SWorkOrderStation.destroy({ where: { wo_id: woIds }, transaction: t });
-        await SWorkOrder.destroy({ where: { id: woIds }, force: true, transaction: t });
+        // Hapus stations dan WO itu sendiri
+        await SWorkOrderStation.destroy({
+          where:       { wo_id: woIds },
+          transaction: t,
+        });
+ 
+        await SWorkOrder.destroy({
+          where: { id: woIds },
+          force: true,
+          transaction: t,
+        });
       }
  
+      // ── Identifikasi WO yang harus dipertahankan ──
+      const remainingWos = await SWorkOrder.findAll({
+        where: {
+          po_id:       id,
+          status:      { [Op.in]: ['In_Progress', 'Completed'] },
+          deleted_at:  null,
+        },
+        attributes: ['id'],
+        transaction: t,
+      });
+ 
+      const remainingWoIds = remainingWos.map((w) => w.id);
+ 
+      // Cari schedule_id yang masih direferensi WO aktif/completed
+      let scheduleIdsToKeep = new Set();
+
+      if (remainingWoIds.length > 0) {
+        const retainedSchedRefs = await SWorkOrder.findAll({
+          attributes: ['po_schedule_id'],
+          where: {
+            id:             remainingWoIds,
+            po_schedule_id: { [Op.ne]: null },
+          },
+          raw:         true,
+          transaction: t,
+        });
+        scheduleIdsToKeep = new Set(retainedSchedRefs.map((w) => w.po_schedule_id));
+      }
+
+      // Hapus hanya schedule yang tidak direferensi WO manapun
+      const scheduleDestroyWhere = scheduleIdsToKeep.size > 0
+        ? { po_id: id, id: { [Op.notIn]: [...scheduleIdsToKeep] } }
+        : { po_id: id };
+
+      await SProductionOrderSchedule.destroy({
+        where:       scheduleDestroyWhere,
+        transaction: t,
+        force:       true,
+      });
+ 
+      // Reset scheduled_qty untuk product (akan dihitung ulang dari schedule yang ada)
+      await SProductionOrderProduct.update(
+        { scheduled_qty: 0 },
+        { where: { po_id: id }, transaction: t }
+      );
+ 
+      // Catat reschedule di log
       await SProductionOrderRescheduleLog.create({
         po_id:             po.id,
         old_start_date:    po.production_start_date,
@@ -2326,13 +2253,11 @@ class OrderScheduleModule extends BaseModule {
         rescheduled_at:    new Date(),
       }, { transaction: t });
  
-      await SProductionOrderSchedule.destroy({ where: { po_id: id }, transaction: t, force: true });
-      await SProductionOrderProduct.update({ scheduled_qty: 0 }, { where: { po_id: id }, transaction: t });
- 
+      // Update PO ke Draft + reset release info
       await po.update({
         production_start_date: newStart.toISOString().split('T')[0],
         production_end_date:   newEnd.toISOString().split('T')[0],
-        status:                'Approved',
+        status:                'Draft',
         released_by:           null,
         released_at:           null,
       }, { transaction: t });
@@ -2341,25 +2266,138 @@ class OrderScheduleModule extends BaseModule {
         moduleCode:   'production_order',
         activityCode: 'RESCHEDULE',
         resourceId:   po.id,
-        newData:      { new_start_date, new_end_date, stage_wo_counts: stageWoCounts },
+        newData:      {
+          new_start_date,
+          new_end_date,
+          wo_deleted_count:         impactedWoCount,
+          wo_deleted_by_status:     deletedByStatus,
+          wo_retained_count:        remainingWoIds.length,
+        },
         description:  `Rescheduled Production Order ${po.po_number}: ` +
-                      `${impactedWoCount} Work Order(s) cancelled`,
+                      `deleted ${deletedByStatus.Draft} Draft + ${deletedByStatus.Released} Released WO(s). ` +
+                      `Retained ${remainingWoIds.length} active/completed WO(s) with their schedules.`,
         transaction:  t,
       });
  
+      // Sebelum commit, load products untuk generateSchedule
+      const products = await SProductionOrderProduct.findAll({
+        where:       { po_id: id },
+        order:       [['delivery_date', 'ASC'], ['sequence', 'ASC']],
+        transaction: t,
+      });
+ 
+      if (!products.length) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  'No products found in this Production Order.',
+        });
+      }
+ 
+      const unassigned = products.filter((p) => !p.line_id);
+      if (unassigned.length > 0) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  `${unassigned.length} product row(s) have no line assigned.`,
+        });
+      }
+ 
+      const lineIds = [...new Set(products.map((p) => p.line_id))];
+
+      // Hitung qty yang sudah "dikunci" oleh WO In_Progress/Completed per po_product_id
+      const retainedWoQty = new Map(); // po_product_id → total retained qty
+
+      if (remainingWoIds.length > 0) {
+        const retainedWos = await SWorkOrder.findAll({
+          where: {
+            id:     remainingWoIds,
+            po_id:  id,
+          },
+          attributes: ['po_schedule_id', 'planned_quantity'],
+          transaction: t,
+        });
+
+        // Kita butuh mapping po_schedule_id → po_product_id
+        const retainedSchedIds = retainedWos
+          .map((w) => w.po_schedule_id)
+          .filter(Boolean);
+
+        if (retainedSchedIds.length > 0) {
+          const retainedScheds = await SProductionOrderSchedule.findAll({
+            where:       { id: retainedSchedIds },
+            attributes:  ['id', 'po_product_id', 'planned_qty_per_day'],
+            transaction: t,
+          });
+
+          for (const sched of retainedScheds) {
+            const prev = retainedWoQty.get(sched.po_product_id) ?? 0;
+            retainedWoQty.set(sched.po_product_id, prev + sched.planned_qty_per_day);
+          }
+        }
+      }
+
+      // Kurangi planned_qty produk dengan qty yang sudah dikunci
+      const adjustedProducts = products.map((p) => {
+        const lockedQty     = retainedWoQty.get(p.id) ?? 0;
+        const remainingQty  = Math.max(0, p.planned_qty - lockedQty);
+        return { ...p.toJSON(), planned_qty: remainingQty };
+      }).filter((p) => p.planned_qty > 0); // skip produk yang sudah 100% dikerjakan
+ 
+      // Jalankan logic schedule generation dalam transaction yang sama
+      const scheduleResult = await this._generateScheduleLogic(
+        id,
+        po.plan_id,
+        'Draft',  // status baru setelah reschedule
+        newStart.toISOString().split('T')[0],
+        newEnd.toISOString().split('T')[0],
+        lineIds,
+        adjustedProducts,
+        t,
+        scheduleIdsToKeep,
+        retainedWoQty,
+      );
+ 
+      if (!scheduleResult.ok) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false,
+          code:   scheduleResult.code,
+          error:  scheduleResult.error,
+          errors: scheduleResult.errors,
+        });
+      }
+ 
+      await this.logActivity(req, {
+        moduleCode:   'production_order',
+        activityCode: 'GENERATE_SCHEDULE',
+        resourceId:   po.id,
+        newData:      { schedule_count: scheduleResult.data.schedule_count },
+        description:  `Auto-generated ${scheduleResult.data.schedule_count} schedule row(s) after reschedule`,
+        transaction:  t,
+      });
+ 
+      // Commit seluruh transaction sekaligus
       await t.commit();
+ 
       return helper.sendResponse(res, {
         status:  true,
         code:    200,
-        message: `Reschedule recorded. ${impactedWoCount} Work Order(s) cancelled. ` +
-                 `Please regenerate the schedule and re-release.`,
+        message: `Reschedule completed. ${impactedWoCount} WO(s) deleted. ` +
+                 `${remainingWoIds.length} active/completed WO(s) retained with their schedules. ` +
+                 `Schedule regenerated (status: Draft, ready for approval).`,
         data: {
-          id:                po.id,
-          po_number:         po.po_number,
-          impacted_wo_count: impactedWoCount,
-          impacted_by_stage: stageWoCounts,
+          id:                            po.id,
+          po_number:                     po.po_number,
+          new_status:                    'Draft',
+          impacted_wo_count:             impactedWoCount,
+          impacted_by_status:            deletedByStatus,
+          retained_active_wo_count:      remainingWoIds.length,
+          schedule_count:                scheduleResult.data.schedule_count,
+          schedule_lines_used:           scheduleResult.data.lines_used,
         },
       });
+ 
     } catch (error) {
       await t.rollback();
       console.log('[OrderScheduleModule][reschedule]:', error);
@@ -2372,6 +2410,297 @@ class OrderScheduleModule extends BaseModule {
     if (!po)                   return { ok: false, code: 404, error: 'Production Order not found' };
     if (po.status !== 'Draft') return { ok: false, code: 400, error: 'Only Draft Production Orders can be modified' };
     return { ok: true, data: po };
+  }
+
+  async _generateScheduleLogic(
+    po_id,
+    plan_id,
+    po_status,
+    po_start_date,
+    po_end_date,
+    lineIds,
+    products,
+    t,
+    retainedScheduleIds = new Set(),
+    retainedQtyByProduct = new Map(), 
+  ) {
+    // Validasi PO status
+    if (!['Draft', 'Approved'].includes(po_status)) {
+      return {
+        ok: false,
+        code: 400,
+        error: `Cannot generate schedule for PO with status '${po_status}'. Status must be Draft or Approved.`,
+      };
+    }
+  
+    // Load plan
+    const plan = await SProductionPlan.findByPk(plan_id, {
+      attributes: ['id', 'plan_type', 'parent_plan_id', 'plan_month'],
+      transaction: t,
+    });
+  
+    if (plan?.plan_month) {
+      const [planYear, planMonth] = plan.plan_month.split('-').map(Number);
+      const startDt = new Date(po_start_date);
+      const endDt   = new Date(po_end_date);
+  
+      if (
+        startDt.getUTCFullYear() !== planYear || startDt.getUTCMonth() + 1 !== planMonth ||
+        endDt.getUTCFullYear()   !== planYear || endDt.getUTCMonth()   + 1 !== planMonth
+      ) {
+        return {
+          ok: false,
+          code: 400,
+          error: `PO dates are outside the plan month (${plan.plan_month}). Update the PO dates first.`,
+        };
+      }
+    }
+  
+    // ── 1. Resolve capacity params ──────────────────────────────────────────
+    const capacityInfoByLine = await resolveCapacityPerLine(plan_id, lineIds, t);
+  
+    for (const lineId of lineIds) {
+      const info = capacityInfoByLine.get(lineId);
+      if (!info || info.capPerShift === 0) {
+        return {
+          ok: false,
+          code: 400,
+          error: `Line ID ${lineId} has zero capacity per shift. ` +
+                 `Check max_takt_time and working_hours_per_shift configuration.`,
+        };
+      }
+    }
+  
+    // ── 2. Resolve effective working days, shifts, and overtime ─────────────
+    const workingDaysByLine         = new Map();
+    const dayShiftsMapByLine        = new Map();
+    const overtimeByDateShiftByLine = new Map();
+  
+    for (const lineId of lineIds) {
+      const result = await resolveEffectiveWorkingDaysAndShifts(
+        lineId,
+        plan_id,
+        po_start_date,
+        po_end_date,
+        t,
+      );
+  
+      if (!result || result.workingDays.length === 0) {
+        return {
+          ok: false,
+          code: 400,
+          error: `No active working days found for line ID ${lineId} within ` +
+                 `[${po_start_date} ~ ${po_end_date}]. Ensure shift calendar is configured.`,
+        };
+      }
+  
+      workingDaysByLine.set(lineId, result.workingDays);
+      dayShiftsMapByLine.set(lineId, result.dayShiftsMap);
+      overtimeByDateShiftByLine.set(lineId, result.overtimeByDateShift);
+    }
+  
+    // ── 3. Load line master data ────────────────────────────────────────────
+    const lineRows    = await SLines.findAll({ where: { id: lineIds }, transaction: t });
+    const lineByIdMap = new Map(lineRows.map((l) => [l.id, l]));
+  
+    // ── 4. Build slot map per line ──────────────────────────────────────────
+    const initialSlotMapByLine = new Map();
+  
+    for (const lineId of lineIds) {
+      const info                = capacityInfoByLine.get(lineId);
+      const dayShiftsMap        = dayShiftsMapByLine.get(lineId);
+      const overtimeByDateShift = overtimeByDateShiftByLine.get(lineId) ?? new Map();
+  
+      const slotMap = buildShiftSlotMap(dayShiftsMap, info, overtimeByDateShift);
+      initialSlotMapByLine.set(lineId, slotMap);
+    }
+  
+    // ── 5. Validate total slot capacity ─────────────────────────────────────
+    for (const lineId of lineIds) {
+      const slotMap  = initialSlotMapByLine.get(lineId) ?? new Map();
+      const totalCap = [...slotMap.values()].reduce((s, slot) => s + slot.totalCap, 0);
+      if (totalCap === 0) {
+        return {
+          ok: false,
+          code: 400,
+          error: `Line ID ${lineId} has zero total capacity across all working days and shifts.`,
+        };
+      }
+    }
+  
+    // ── 6. For amendment POs: read occupied slots from Released sibling POs ─
+    const occupiedSlotMap = new Map();
+  
+    if (plan?.plan_type === 'AMENDMENT' && plan?.parent_plan_id) {
+      const siblingPOs = await SProductionOrder.findAll({
+        where: {
+          plan_id:    plan.parent_plan_id,
+          status:     'Released',
+          deleted_at: null,
+        },
+        attributes: ['id'],
+        transaction: t,
+      });
+  
+      if (siblingPOs.length > 0) {
+        const siblingPoIds = siblingPOs.map((p) => p.id);
+  
+        const siblingSchedules = await SProductionOrderSchedule.findAll({
+          where: {
+            po_id:   { [Op.in]: siblingPoIds },
+            line_id: { [Op.in]: lineIds },
+          },
+          attributes: ['production_date', 'shift_id', 'line_id', 'planned_qty_per_day'],
+          include: [{
+            model:      SShifts,
+            as:         'shift',
+            attributes: ['shift_number'],
+            required:   false,
+          }],
+          transaction: t,
+        });
+  
+        for (const sched of siblingSchedules) {
+          const shiftNum = sched.shift?.shift_number;
+          if (!shiftNum) continue;
+          const dateStr = typeof sched.production_date === 'string'
+            ? sched.production_date.split('T')[0]
+            : new Date(sched.production_date).toISOString().split('T')[0];
+          const key = `${dateStr}_${shiftNum}`;
+          occupiedSlotMap.set(key, (occupiedSlotMap.get(key) ?? 0) + (sched.planned_qty_per_day ?? 0));
+        }
+      }
+    }
+  
+    // ── 7. Clear old schedule rows (kecuali yang retained) ──────────────────
+    const destroyWhere = retainedScheduleIds.size > 0
+      ? { po_id: po_id, id: { [Op.notIn]: [...retainedScheduleIds] } }
+      : { po_id: po_id };
+    await SProductionOrderSchedule.destroy({
+      where: destroyWhere,
+      transaction: t,
+      force: true,
+    });
+    await SProductionOrderProduct.update(
+      { scheduled_qty: 0 },
+      { where: { po_id: po_id }, transaction: t }
+    );
+
+    // Baca retained schedules untuk kurangi kapasitas slot
+    if (retainedScheduleIds.size > 0) {
+      const retainedScheds = await SProductionOrderSchedule.findAll({
+        where: { id: [...retainedScheduleIds] },
+        attributes: ['production_date', 'shift_id', 'planned_qty_per_day'],
+        include: [{
+          model:      SShifts,
+          as:         'shift',
+          attributes: ['shift_number'],
+          required:   false,
+        }],
+        transaction: t,
+      });
+
+      for (const sched of retainedScheds) {
+        const shiftNum = sched.shift?.shift_number;
+        if (!shiftNum) continue;
+        const dateStr = typeof sched.production_date === 'string'
+          ? sched.production_date.split('T')[0]
+          : new Date(sched.production_date).toISOString().split('T')[0];
+        const key = `${dateStr}_${shiftNum}`;
+        occupiedSlotMap.set(key, (occupiedSlotMap.get(key) ?? 0) + (sched.planned_qty_per_day ?? 0));
+      }
+    }
+  
+    // ── 8. Generate schedule (EDF dengan delivery date slot filter) ─────────
+    const { scheduleRows, errors, stageCompletionDate } = buildSchedule({
+      products,
+      workingDaysByLine,
+      dayShiftsMapByLine,
+      initialSlotMapByLine,
+      lineByIdMap,
+      po_id: po_id,
+      poEndDate: po_end_date,
+      occupiedSlotMap,
+    });
+  
+    const partialErrors = errors.filter((e) => e.includes('PARTIAL_CAPACITY'));
+    const fatalErrors   = errors.filter((e) => e.includes('missing slot config'));
+  
+    if (fatalErrors.length > 0) {
+      return {
+        ok: false,
+        code: 400,
+        error: 'Scheduling failed: slot configuration not found for one or more lines.',
+        errors: fatalErrors,
+      };
+    }
+  
+    // ── 9. Persist schedule rows ────────────────────────────────────────────
+    const overtimeSummary = scheduleRows
+      .filter((r) => r._has_overtime)
+      .map((r) => ({
+        date:         r.production_date,
+        shift_id:     r.shift_id,
+        overtime_cap: r._overtime_cap,
+      }));
+  
+    const rowsToInsert = scheduleRows.map(({ _has_overtime, _overtime_cap, ...rest }) => rest);
+    await SProductionOrderSchedule.bulkCreate(rowsToInsert, { transaction: t });
+  
+    // ── 10. Update scheduled_qty per product ──────────────────────────────────
+    const scheduledByProduct = new Map();
+
+    // Mulai dari retained qty (WO yang tidak dihapus)
+    for (const [productId, qty] of retainedQtyByProduct.entries()) {
+      scheduledByProduct.set(productId, qty);
+    }
+
+    // Tambah dari schedule baru
+    for (const row of scheduleRows) {
+      scheduledByProduct.set(
+        row.po_product_id,
+        (scheduledByProduct.get(row.po_product_id) ?? 0) + row.planned_qty_per_day,
+      );
+    }
+
+    for (const [productId, qty] of scheduledByProduct.entries()) {
+      await SProductionOrderProduct.update(
+        { scheduled_qty: qty },
+        { where: { id: productId }, transaction: t }
+      );
+    }
+  
+    // ── 11. Return summary ──────────────────────────────────────────────────
+    const completionSummary = Object.fromEntries(stageCompletionDate.entries());
+  
+    const capacitySummary = Object.fromEntries(
+      [...capacityInfoByLine.entries()].map(([lid, info]) => [lid, {
+        cap_per_shift:           info.capPerShift,
+        cap_per_day:             info.capPerDay,
+        total_cap_units:         info.totalCapUnits,
+        shifts_per_day:          info.shiftsPerDay,
+        working_days_effective:  info.workingDays,
+        effective_min_per_shift: parseFloat((info.effectiveMinPerShift ?? 0).toFixed(4)),
+      }])
+    );
+  
+    return {
+      ok: true,
+      data: {
+        schedule_count:       rowsToInsert.length,
+        lines_used:           lineIds.length,
+        plan_type:            plan?.plan_type ?? 'ORIGINAL',
+        production_end_date:  po_end_date,
+        product_completion:   completionSummary,
+        working_days_by_line: Object.fromEntries(
+          [...workingDaysByLine.entries()].map(([lid, days]) => [lid, days.length])
+        ),
+        capacity_by_line:     capacitySummary,
+        overtime_slots:       overtimeSummary.length > 0 ? overtimeSummary : undefined,
+        occupied_slots_count: occupiedSlotMap.size > 0 ? occupiedSlotMap.size : undefined,
+        warnings:             partialErrors.length > 0 ? partialErrors : undefined,
+      },
+    };
   }
 }
 

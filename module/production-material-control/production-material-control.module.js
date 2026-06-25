@@ -315,13 +315,18 @@ async createProductionResult(req) {
     }
 
     const validMaterials = await db.sequelize.query(`
-      SELECT material_part_id
-      FROM s_work_order_materials
-      WHERE wo_id = :production_wo_id
-        AND deleted_at IS NULL
+      SELECT
+        wom.material_part_id
+      FROM s_work_order_materials wom
+      JOIN s_work_order_stations wost
+        ON wost.id = wom.wo_station_id
+      WHERE wost.wo_id = :production_wo_id
+        AND wost.station_id = :station_id
+        AND wom.deleted_at IS NULL
     `, {
       replacements: {
-        production_wo_id: data.production_wo_id
+        production_wo_id: data.production_wo_id,
+        station_id: data.station_id
       },
       type: QueryTypes.SELECT,
       transaction
@@ -1849,15 +1854,15 @@ async getProductionWos(req) {
 }
 async getProductionWoMaterialLabels(req) {
   try {
-    const { production_wo_id } = req.params
+    const { production_wo_id, station_id } = req.params
 
     const rows = await db.sequelize.query(`
       SELECT
         wom.material_part_id,
         part.part_number,
         part.part_name,
-        wom.planned_quantity,
-        wom.actual_quantity,
+        COALESCE(wom.planned_quantity, 0) AS planned_quantity,
+        COALESCE(wom.actual_quantity, 0) AS actual_quantity,
         wom.uom,
 
         wil.id AS wo_item_label_id,
@@ -1866,22 +1871,26 @@ async getProductionWoMaterialLabels(req) {
 
         wos.id AS wo_storing_id,
         wos.wo_number AS wo_storing_number,
-        wos.station_id,
+        wost.station_id,
         st.name AS station_name
 
       FROM s_work_order_materials wom
+
+      JOIN s_work_order_stations wost
+        ON wost.id = wom.wo_station_id
+
+      JOIN s_stations st
+        ON st.id = wost.station_id
 
       JOIN s_parts part
         ON part.id = wom.material_part_id
         AND part.deleted_at IS NULL
 
       LEFT JOIN t_work_order_storing wos
-        ON wos.production_wo_id = wom.wo_id
+        ON wos.production_wo_id = wost.wo_id
+        AND wos.station_id = wost.station_id
         AND wos.take_out_purpose = 'production'
         AND wos.deleted_at IS NULL
-
-      LEFT JOIN s_stations st
-        ON st.id = wos.station_id
 
       LEFT JOIN t_work_order_storing_item item
         ON item.wo_id = wos.id
@@ -1897,12 +1906,16 @@ async getProductionWoMaterialLabels(req) {
         ON lbl.id = wil.label_id
         AND lbl.deleted_at IS NULL
 
-      WHERE wom.wo_id = :production_wo_id
+      WHERE wost.wo_id = :production_wo_id
+        AND wost.station_id = :station_id
         AND wom.deleted_at IS NULL
 
       ORDER BY part.part_number ASC, lbl.label_number ASC
     `, {
-      replacements: { production_wo_id },
+      replacements: {
+        production_wo_id,
+        station_id
+      },
       type: QueryTypes.SELECT
     })
 

@@ -66,7 +66,7 @@ router.get('/production-wos', auth.sessionChecker, async (req, res) => {
   return res.status(result.code || 200).json(result)
 })
 
-router.get('/production-wos/:production_wo_id/material-labels', auth.sessionChecker, async (req, res) => {
+router.get('/production-wos/:production_wo_id/stations/:station_id/material-labels', auth.sessionChecker, async (req, res) => {
   const result = await productionMaterialControlModule.getProductionWoMaterialLabels(req)
   return res.status(result.code || 200).json(result)
 })

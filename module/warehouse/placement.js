@@ -50,10 +50,10 @@ async list(req) {
     }
 
     if (search) {
-  where.wo_number = {
-    [Op.iLike]: `%${search}%`
-  };
-}
+      where.wo_number = {
+        [Op.iLike]: `%${search}%`
+      };
+    }
 
     if (wo_date_start && wo_date_end) {
       where[Op.and] = [

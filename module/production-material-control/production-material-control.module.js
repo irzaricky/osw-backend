@@ -11,7 +11,8 @@ async listProductionResult(req) {
       date_from,
       date_to,
       station_id,
-      has_ng
+      has_ng,
+      has_pending_scrap
     } = req.query
 
     const offset = (Number(page) - 1) * Number(limit)
@@ -48,7 +49,38 @@ async listProductionResult(req) {
     }
 
     if (has_ng === 'true' || has_ng === true) {
-      where.push(`pmr.total_ng > 0`)
+      where.push(`
+        EXISTS (
+          SELECT 1
+          FROM t_production_material_result_ng_details ng
+          WHERE ng.production_result_id = pmr.id
+            AND ng.deleted_at IS NULL
+            AND ng.qty_ng > 0
+            AND NOT EXISTS (
+              SELECT 1
+              FROM t_production_material_replacement r
+              WHERE r.ng_detail_id = ng.id
+                AND r.deleted_at IS NULL
+            )
+        )
+      `)
+    }
+
+    if (has_pending_scrap === 'true' || has_pending_scrap === true) {
+      where.push(`
+        EXISTS (
+          SELECT 1
+          FROM t_production_material_replacement r
+          WHERE r.production_result_id = pmr.id
+            AND r.deleted_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM t_production_material_scrap scrap
+              WHERE scrap.replacement_id = r.id
+                AND scrap.deleted_at IS NULL
+            )
+        )
+      `)
     }
 
     const whereClause = `WHERE ${where.join(' AND ')}`
@@ -781,6 +813,28 @@ async createScrap(req) {
       }
     }
 
+    const [existingScrap] = await db.sequelize.query(`
+      SELECT id
+      FROM t_production_material_scrap
+      WHERE replacement_id = :replacement_id
+        AND deleted_at IS NULL
+      LIMIT 1
+    `, {
+      replacements: {
+        replacement_id: data.replacement_id
+      },
+      type: QueryTypes.SELECT
+    })
+
+    if (existingScrap) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Scrap for this replacement already exists',
+        code: 400
+      }
+    }
+
     const qtyScrap = Number(data.qty_scrap || 0)
     const weightPerPcs = Number(replacement.weight_per_pcs || 0)
 
@@ -1064,6 +1118,29 @@ async createReplacement(req) {
       }
     }
 
+    const [existingReplacement] = await db.sequelize.query(`
+      SELECT id
+      FROM t_production_material_replacement
+      WHERE ng_detail_id = :ng_detail_id
+        AND deleted_at IS NULL
+      LIMIT 1
+    `, {
+      replacements: {
+        ng_detail_id: data.ng_detail_id
+      },
+      type: QueryTypes.SELECT,
+      transaction
+    })
+
+    if (existingReplacement) {
+      await transaction.rollback()
+      return {
+        status: false,
+        message: 'Replacement for this NG material already exists',
+        code: 400
+      }
+    }
+
     if (Number(ngDetail.production_result_id) !== Number(data.production_result_id)) {
       await transaction.rollback()
       return {
@@ -1090,6 +1167,8 @@ async createReplacement(req) {
         code: 400
       }
     }
+
+
 
     const bufferStock = await db.TStationBufferStock.findOne({
       where: {
@@ -1785,6 +1864,12 @@ async getReplacementByProductionResult(req) {
         AND pmr.deleted_at IS NULL
         AND p.deleted_at IS NULL
         AND ng.qty_ng > 0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM t_production_material_replacement r
+          WHERE r.ng_detail_id = ng.id
+            AND r.deleted_at IS NULL
+        )
 
       ORDER BY p.part_number ASC, ng.source_label_number ASC
     `, {
@@ -1834,6 +1919,12 @@ async getReplacementForScrap(req) {
       WHERE r.production_result_id = :production_result_id
         AND r.deleted_at IS NULL
         AND p.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM t_production_material_scrap scrap
+          WHERE scrap.replacement_id = r.id
+            AND scrap.deleted_at IS NULL
+        )
 
       ORDER BY r.id DESC
     `, {

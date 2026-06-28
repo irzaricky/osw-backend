@@ -1,28 +1,3 @@
-/**
- * module/material/mdo.js
- *
- * Business logic untuk Material Delivery Order (MDO).
- *
- * PERUBAHAN UTAMA v2:
- * ─────────────────────────────────────────────────────────────────────────────
- * • 1 MPO kini bisa memiliki BANYAK MDO.
- * • Setiap MDO terikat pada 1 kendaraan dengan kapasitas tertentu
- *   (ref_vehicle_types.load_capacity, dalam kg).
- * • Endpoint `GET /preview-split` menghitung otomatis pembagian qty
- *   ke dalam satu MDO berdasarkan vehicle yang dipilih.
- *   - Berat muatan = SUM(detail.qty × part.weight)
- *   - Jika total berat MPO melebihi kapasitas, qty tiap part dibagi rata
- *     hingga pas memenuhi kapasitas kendaraan tersebut (proporsional).
- *   - Part yang belum punya weight = 0 (dianggap ringan), dicatat sebagai
- *     warning agar tim master-data segera mengisi.
- * • Validasi create/update kini memeriksa:
- *   - Apakah vehicle sudah dipakai MDO lain pada tanggal yang sama.
- *   - Apakah total berat detail melebihi load_capacity kendaraan.
- *   - Apakah qty tiap detail tidak melebihi sisa qty MPO yang belum
- *     ter-cover oleh MDO lain (remaining_qty per part).
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
 import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/index.js';
 
@@ -38,6 +13,8 @@ const {
   SWarehouseAreas,
   SParts,
   SUom,
+  TMaterialReceiving,
+  TGoodReceipt,
   sequelize,
 } = db;
 
@@ -419,7 +396,9 @@ async function getDropdownDocks(req) {
   const bookedRecords = await SMaterialDeliveryOrder.findAll({
     where: {
       target_date: date,
-      status: { [Op.notIn]: ['cancelled', 'rejected'] },
+      // FIX: 'arrived' dikeluarkan dari daftar status yang mengunci slot.
+      // Begitu MDO sampai (arrived), dock dianggap sudah kosong/selesai dipakai.
+      status: { [Op.notIn]: ['cancelled', 'rejected', 'arrived'] },
       dock_id: { [Op.ne]: null },
       target_time: { [Op.ne]: null },
       ...(exclude_id ? { id: { [Op.ne]: exclude_id } } : {}),
@@ -497,7 +476,9 @@ async function getDropdownVehicles(req) {
     await SMaterialDeliveryOrder.findAll({
       where: {
         target_date: date,
-        status: { [Op.notIn]: ['cancelled', 'rejected'] },
+        // FIX: 'arrived' dikeluarkan — kendaraan yang sudah sampai dianggap
+        // selesai tugas pada MDO ini dan boleh dipakai MDO lain di hari yang sama.
+        status: { [Op.notIn]: ['cancelled', 'rejected', 'arrived'] },
         ...(exclude_id ? { id: { [Op.ne]: exclude_id } } : {}),
       },
       attributes: ['vehicle_id'],
@@ -769,13 +750,42 @@ async function previewSplit(req) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function list(req) {
-  const { page = 1, limit = 10, status, search, mpo_id } = req.query;
+  const { page = 1, limit = 10, status, search, mpo_id, include_completed } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   const where = {};
   if (status) where.status = status;
   if (search) where.number = { [Op.like]: `%${search}%` };
   if (mpo_id) where.mpo_id = mpo_id;
+
+  // ── FIX: sembunyikan MDO yang sudah selesai siklusnya (Good Receipt) ────────
+  // "Selesai" didefinisikan oleh keberadaan record TGoodReceipt, BUKAN oleh
+  // status_id di TMaterialReceiving — karena TGoodReceipt adalah tabel approval
+  // final yang terpisah (lihat asosiasi: SMaterialDeliveryOrder hasOne
+  // TMaterialReceiving hasOne TGoodReceipt). Status MDO sendiri tetap mentok
+  // di 'arrived'; data tidak dihapus (soft-delete), hanya disembunyikan dari
+  // list default agar halaman tidak penuh. Kirim ?include_completed=true
+  // untuk menampilkan kembali (misal kebutuhan riwayat/laporan).
+  if (!include_completed || include_completed === 'false') {
+    const completedMdoIds = (
+      await TMaterialReceiving.findAll({
+        attributes: ['mdo_id'],
+        include: [
+          {
+            model: TGoodReceipt,
+            as: 'good_receipt',
+            required: true, // INNER JOIN → hanya receiving yang sudah ada Good Receipt-nya
+            attributes: [],
+          },
+        ],
+        raw: true,
+      })
+    ).map((r) => r.mdo_id);
+
+    if (completedMdoIds.length) {
+      where.id = { [Op.notIn]: completedMdoIds };
+    }
+  }
 
   const { count, rows } = await SMaterialDeliveryOrder.findAndCountAll({
     where,
@@ -934,7 +944,9 @@ async function create(req) {
       where: {
         vehicle_id,
         target_date,
-        status: { [Op.notIn]: ['cancelled', 'rejected'] },
+        // FIX: 'arrived' dikeluarkan — kendaraan yang sudah sampai (selesai
+        // tugas untuk MDO ini) tidak boleh dianggap masih "dibooking".
+        status: { [Op.notIn]: ['cancelled', 'rejected', 'arrived'] },
       },
     });
     if (vehicleConflict)
@@ -950,7 +962,8 @@ async function create(req) {
         dock_id,
         target_date,
         target_time,
-        status: { [Op.notIn]: ['cancelled', 'rejected'] },
+        // FIX: 'arrived' dikeluarkan — dock dianggap kosong begitu MDO sampai.
+        status: { [Op.notIn]: ['cancelled', 'rejected', 'arrived'] },
       },
     });
     if (dockConflict)
@@ -1064,7 +1077,9 @@ async function update(req) {
       where: {
         vehicle_id: finalVehicleId,
         target_date: finalDate,
-        status: { [Op.notIn]: ['cancelled', 'rejected'] },
+        // FIX: 'arrived' dikeluarkan — kendaraan yang sudah sampai (selesai
+        // tugas untuk MDO ini) tidak boleh dianggap masih "dibooking".
+        status: { [Op.notIn]: ['cancelled', 'rejected', 'arrived'] },
         id: { [Op.ne]: id },
       },
     });
@@ -1085,7 +1100,8 @@ async function update(req) {
         dock_id: finalDockId,
         target_date: finalDate,
         target_time: finalTime,
-        status: { [Op.notIn]: ['cancelled', 'rejected'] },
+        // FIX: 'arrived' dikeluarkan — dock dianggap kosong begitu MDO sampai.
+        status: { [Op.notIn]: ['cancelled', 'rejected', 'arrived'] },
         id: { [Op.ne]: id },
       },
     });

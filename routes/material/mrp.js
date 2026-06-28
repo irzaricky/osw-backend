@@ -42,7 +42,7 @@ router.get('/sales-plan/:spr_id/load', session.sessionChecker, session.permissio
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.get('/dashboard/critical-parts',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
-  return helper.sendResponse(res, await module.list(req));
+  return helper.sendResponse(res, await module.getDashboardCriticalParts(req));
 });
 
 router.get('/',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
@@ -52,6 +52,24 @@ router.get('/',    session.sessionChecker, session.permissionChecker(ALL),   asy
 router.post('/',   session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
   return helper.sendResponse(res, await module.createDraft(req));
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BULK ACTIONS — must be before /:id to avoid route collision
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Bulk submit (Draft → Submitted)
+router.put('/bulk-submit', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await module.bulkSubmit(req));
+});
+
+// Bulk approve / reject
+router.put('/bulk-review', session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await module.bulkReview(req));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLE RESOURCE ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
 
 router.get('/:id', session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
   return helper.sendResponse(res, await module.detail(req));
@@ -73,11 +91,6 @@ router.put('/:id/submit', session.sessionChecker, session.permissionChecker(MAKE
 // Update detail items only
 router.put('/:id/detail', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
   return helper.sendResponse(res, await module.updateDetails(req));
-});
-
-// Approve / Reject bulk — HARUS sebelum /:id/review
-router.put('/bulk-review', session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
-  return helper.sendResponse(res, await module.bulkReview(req));
 });
 
 // Approve / Reject single

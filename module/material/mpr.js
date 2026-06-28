@@ -145,7 +145,7 @@ const getDropdownParts = async (req) => {
     };
   } catch (error) {
     console.error('getDropdownParts error:', error);
-    return { status: false, error: 'Gagal mengambil data parts', code: 500 };
+    return { status: false, error: 'Failed to retrieve parts data', code: 500 };
   }
 };
 
@@ -189,7 +189,7 @@ const list = async (req) => {
     };
   } catch (error) {
     console.error('list PR error:', error);
-    return { status: false, error: 'Gagal mengambil data PR', code: 500 };
+    return { status: false, error: 'Failed to retrieve PR data', code: 500 };
   }
 };
 
@@ -205,13 +205,13 @@ const detail = async (req) => {
     });
 
     if (!pr) {
-      return { status: false, error: 'Purchase Request tidak ditemukan', code: 404 };
+      return { status: false, error: 'Purchase Request not found', code: 404 };
     }
 
     return { status: true, data: pr };
   } catch (error) {
     console.error('detail PR error:', error);
-    return { status: false, error: 'Gagal mengambil detail PR', code: 500 };
+    return { status: false, error: 'Failed to retrieve PR detail', code: 500 };
   }
 };
 
@@ -235,18 +235,18 @@ const createEmergency = async (req) => {
 
     if (!details || !Array.isArray(details) || details.length === 0) {
       await transaction.rollback();
-      return { status: false, error: 'Detail items wajib diisi minimal 1', code: 400 };
+      return { status: false, error: 'At least 1 detail item is required', code: 400 };
     }
 
     // Validasi tiap item detail
     for (const [i, d] of details.entries()) {
       if (!d.part_id) {
         await transaction.rollback();
-        return { status: false, error: `Part wajib dipilih pada item ke-${i + 1}`, code: 400 };
+        return { status: false, error: `Part must be selected for item ${i + 1}`, code: 400 };
       }
       if (!d.qty || Number(d.qty) <= 0) {
         await transaction.rollback();
-        return { status: false, error: `Quantity harus lebih dari 0 pada item ke-${i + 1}`, code: 400 };
+        return { status: false, error: `Quantity must be greater than 0 for item ${i + 1}`, code: 400 };
       }
     }
 
@@ -280,7 +280,7 @@ const createEmergency = async (req) => {
       await transaction.rollback();
       return { 
         status: false, 
-        error: `Duplikasi FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] sudah diajukan pada dokumen MPR lain yang masih aktif di periode ini.`, 
+        error: `Duplicate FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] has already been submitted in another active MPR document for this period.`, 
         code: 400 
       };
     }
@@ -312,12 +312,12 @@ const createEmergency = async (req) => {
     return {
       status: true,
       data: { id: pr.id, number: pr.number, status: pr.status },
-      message: `Purchase Request berhasil dibuat dengan status ${status}`
+      message: `Purchase Request successfully created with status ${status}`
     };
   } catch (error) {
     await transaction.rollback();
     console.error('createEmergency PR error:', error);
-    return { status: false, error: 'Gagal membuat Purchase Request', code: 500 };
+    return { status: false, error: 'Failed to create Purchase Request', code: 500 };
   }
 };
 
@@ -336,7 +336,7 @@ const update = async (req) => {
     const pr = await SMaterialPurchaseRequest.findByPk(id, { transaction });
     if (!pr) {
       await transaction.rollback();
-      return { status: false, error: 'Purchase Request tidak ditemukan', code: 404 };
+      return { status: false, error: 'Purchase Request not found', code: 404 };
     }
 
     // Hanya bisa edit kalau draft atau submitted
@@ -344,7 +344,7 @@ const update = async (req) => {
       await transaction.rollback();
       return {
         status: false,
-        error: `Purchase Request dengan status ${pr.status} tidak dapat diedit`,
+        error: `Purchase Request with status ${pr.status} cannot be edited`,
         code: 422
       };
     }
@@ -352,7 +352,7 @@ const update = async (req) => {
     // Kalau sudah approved, lock (double check)
     if (pr.status === 'approved') {
       await transaction.rollback();
-      return { status: false, error: 'Purchase Request yang sudah disetujui tidak dapat diedit', code: 422 };
+      return { status: false, error: 'Purchase Request that has already been approved cannot be edited', code: 422 };
     }
 
     const newStatus = save_as_draft ? 'draft' : 'submitted';
@@ -366,11 +366,11 @@ const update = async (req) => {
       for (const [i, d] of details.entries()) {
         if (!d.part_id) {
           await transaction.rollback();
-          return { status: false, error: `Part wajib dipilih pada item ke-${i + 1}`, code: 400 };
+          return { status: false, error: `Part must be selected for item ${i + 1}`, code: 400 };
         }
         if (!d.qty || Number(d.qty) <= 0) {
           await transaction.rollback();
-          return { status: false, error: `Quantity harus lebih dari 0 pada item ke-${i + 1}`, code: 400 };
+          return { status: false, error: `Quantity must be greater than 0 for item ${i + 1}`, code: 400 };
         }
       }
 
@@ -402,7 +402,7 @@ const update = async (req) => {
         await transaction.rollback();
         return { 
           status: false, 
-          error: `Duplikasi FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] sudah ada di dokumen MPR aktif lain pada periode ini.`, 
+          error: `Duplicate FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] already exists in another active MPR document for this period.`, 
           code: 400 
         };
       }
@@ -419,12 +419,12 @@ const update = async (req) => {
     return {
       status: true,
       data: { id: pr.id, number: pr.number, status: newStatus },
-      message: `Purchase Request berhasil diperbarui dengan status ${newStatus}`
+      message: `Purchase Request successfully updated with status ${newStatus}`
     };
   } catch (error) {
     await transaction.rollback();
     console.error('update PR error:', error);
-    return { status: false, error: 'Gagal memperbarui Purchase Request', code: 500 };
+    return { status: false, error: 'Failed to update Purchase Request', code: 500 };
   }
 };
 
@@ -444,21 +444,21 @@ const submit = async (req) => {
 
     if (!pr) {
       await transaction.rollback();
-      return { status: false, error: 'Purchase Request tidak ditemukan', code: 404 };
+      return { status: false, error: 'Purchase Request not found', code: 404 };
     }
 
     if (pr.status !== 'draft') {
       await transaction.rollback();
       return {
         status: false,
-        error: `Hanya PR berstatus draft yang dapat disubmit`,
+        error: `Only PR with draft status can be submitted`,
         code: 422
       };
     }
 
     if (!pr.details || pr.details.length === 0) {
       await transaction.rollback();
-      return { status: false, error: 'PR harus memiliki minimal 1 item sebelum disubmit', code: 422 };
+      return { status: false, error: 'PR must have at least 1 item before being submitted', code: 422 };
     }
 
     await pr.update({ status: 'submitted' }, { transaction });
@@ -469,12 +469,12 @@ const submit = async (req) => {
     return {
       status: true,
       data: { id: pr.id, number: pr.number, status: 'submitted' },
-      message: 'Purchase Request berhasil disubmit'
+      message: 'Purchase Request successfully submitted'
     };
   } catch (error) {
     await transaction.rollback();
     console.error('submit PR error:', error);
-    return { status: false, error: 'Gagal submit Purchase Request', code: 500 };
+    return { status: false, error: 'Failed to submit Purchase Request', code: 500 };
   }
 };
 
@@ -492,25 +492,25 @@ const review = async (req) => {
 
     if (!['approve', 'reject'].includes(action)) {
       await transaction.rollback();
-      return { status: false, error: 'Action harus berupa approve atau reject', code: 400 };
+      return { status: false, error: 'Action must be either approve or reject', code: 400 };
     }
 
     if (action === 'reject' && !notes) {
       await transaction.rollback();
-      return { status: false, error: 'Catatan wajib diisi saat menolak PR', code: 400 };
+      return { status: false, error: 'Notes are required when rejecting PR', code: 400 };
     }
 
     const pr = await SMaterialPurchaseRequest.findByPk(id, { transaction });
     if (!pr) {
       await transaction.rollback();
-      return { status: false, error: 'Purchase Request tidak ditemukan', code: 404 };
+      return { status: false, error: 'Purchase Request not found', code: 404 };
     }
 
     if (pr.status !== 'submitted') {
       await transaction.rollback();
       return {
         status: false,
-        error: `Hanya PR berstatus submitted yang dapat di-review`,
+        error: `Only PR with submitted status can be reviewed`,
         code: 422
       };
     }
@@ -532,12 +532,12 @@ const review = async (req) => {
     return {
       status: true,
       data: { id: pr.id, number: pr.number, status: newStatus },
-      message: `Purchase Request berhasil di-${newStatus}`
+      message: `Purchase Request successfully ${newStatus}`
     };
   } catch (error) {
     await transaction.rollback();
     console.error('review PR error:', error);
-    return { status: false, error: 'Gagal melakukan review Purchase Request', code: 500 };
+    return { status: false, error: 'Failed to review Purchase Request', code: 500 };
   }
 };
 
@@ -553,17 +553,17 @@ const bulkReview = async (req) => {
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       await transaction.rollback();
-      return { status: false, error: 'IDs wajib diisi', code: 400 };
+      return { status: false, error: 'IDs are required', code: 400 };
     }
 
     if (!['approve', 'reject'].includes(action)) {
       await transaction.rollback();
-      return { status: false, error: 'Action harus berupa approve atau reject', code: 400 };
+      return { status: false, error: 'Action must be either approve or reject', code: 400 };
     }
 
     if (action === 'reject' && !notes) {
       await transaction.rollback();
-      return { status: false, error: 'Catatan wajib diisi saat menolak PR', code: 400 };
+      return { status: false, error: 'Notes are required when rejecting PR', code: 400 };
     }
 
     // Ambil PR yang submitted saja
@@ -574,7 +574,7 @@ const bulkReview = async (req) => {
 
     if (prs.length === 0) {
       await transaction.rollback();
-      return { status: false, error: 'Tidak ada PR berstatus submitted yang dapat di-review', code: 422 };
+      return { status: false, error: 'No PR with submitted status available to review', code: 422 };
     }
 
     const newStatus = action === 'approve' ? 'approved' : 'rejected';
@@ -594,12 +594,12 @@ const bulkReview = async (req) => {
     return {
       status: true,
       data: { processed: processedIds.length, skipped },
-      message: `${processedIds.length} PR berhasil di-${newStatus}${skipped > 0 ? `, ${skipped} dilewati (bukan status submitted)` : ''}`
+      message: `${processedIds.length} PR successfully ${newStatus}${skipped > 0 ? `, ${skipped} skipped (not submitted status)` : ''}`
     };
   } catch (error) {
     await transaction.rollback();
     console.error('bulkReview PR error:', error);
-    return { status: false, error: 'Gagal melakukan bulk review', code: 500 };
+    return { status: false, error: 'Failed to perform bulk review', code: 500 };
   }
 };
 
@@ -614,14 +614,14 @@ const deleteDraft = async (req) => {
     const pr = await SMaterialPurchaseRequest.findByPk(id, { transaction });
     if (!pr) {
       await transaction.rollback();
-      return { status: false, error: 'Purchase Request tidak ditemukan', code: 404 };
+      return { status: false, error: 'Purchase Request not found', code: 404 };
     }
 
     if (pr.status !== 'draft') {
       await transaction.rollback();
       return {
         status: false,
-        error: `Hanya PR berstatus draft yang dapat dihapus`,
+        error: `Only PR with draft status can be deleted`,
         code: 422
       };
     }
@@ -633,11 +633,11 @@ const deleteDraft = async (req) => {
 
     await transaction.commit();
 
-    return { status: true, message: 'Purchase Request berhasil dihapus' };
+    return { status: true, message: 'Purchase Request successfully deleted' };
   } catch (error) {
     await transaction.rollback();
     console.error('deleteDraft PR error:', error);
-    return { status: false, error: 'Gagal menghapus Purchase Request', code: 500 };
+    return { status: false, error: 'Failed to delete Purchase Request', code: 500 };
   }
 };
 

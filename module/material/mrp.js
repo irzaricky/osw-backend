@@ -566,18 +566,18 @@ class MRPModule extends BaseModule {
       const user_id = req.user?.id;
 
       // Validasi wajib
-      const mandatory = helper.checkMandatory(req.body, ['description', 'details']);
+      const mandatory = helper.checkMandatory(req.body, ['details']);
       if (!mandatory.status) { await transaction.rollback(); return mandatory; }
 
       if (!details || !Array.isArray(details) || details.length === 0) {
         await transaction.rollback();
-        return { status: false, message: 'Details material wajib diisi', code: 400 };
+        return { status: false, message: 'Material details are required', code: 400 };
       }
 
       // Validasi priority
       if (priority && !PRIORITY_VALUES.includes(priority)) {
         await transaction.rollback();
-        return { status: false, message: `Priority harus salah satu dari: ${PRIORITY_VALUES.join(', ')}`, code: 400 };
+        return { status: false, message: `Priority must be one of: ${PRIORITY_VALUES.join(', ')}`, code: 400 };
       }
 
       // Validasi Sales Plan jika dilampirkan
@@ -586,7 +586,7 @@ class MRPModule extends BaseModule {
         if (!spr) { await transaction.rollback(); return { status: false, message: 'Sales Plan not found', code: 404 }; }
         if (!['Approved', 'Waiting PPIC'].includes(spr.status)) {
           await transaction.rollback();
-          return { status: false, message: `Sales Plan harus berstatus Approved/Waiting PPIC. Status saat ini: ${spr.status}`, code: 400 };
+          return { status: false, message: `Sales Plan must have status Approved/Waiting PPIC. Current status: ${spr.status}`, code: 400 };
         }
       }
 
@@ -596,14 +596,14 @@ class MRPModule extends BaseModule {
         if (!plan) { await transaction.rollback(); return { status: false, message: 'Production Plan not found', code: 404 }; }
         if (plan.status !== 'Approved') {
           await transaction.rollback();
-          return { status: false, message: `Production Plan harus Approved. Status saat ini: ${plan.status}`, code: 400 };
+          return { status: false, message: `Production Plan must be Approved. Current status: ${plan.status}`, code: 400 };
         }
       }
 
       // Validasi tiap detail
       for (const d of details) {
-        if (!d.part_id) { await transaction.rollback(); return { status: false, message: 'Setiap detail harus memiliki part_id', code: 400 }; }
-        if (!d.qty || parseFloat(d.qty) <= 0) { await transaction.rollback(); return { status: false, message: 'Setiap detail harus memiliki qty > 0', code: 400 }; }
+        if (!d.part_id) { await transaction.rollback(); return { status: false, message: 'Each detail must have a part_id', code: 400 }; }
+        if (!d.qty || parseFloat(d.qty) <= 0) { await transaction.rollback(); return { status: false, message: 'Each detail must have qty > 0', code: 400 }; }
       }
 
       const targetStatus = save_as_draft ? MRP_STATUS.DRAFT : MRP_STATUS.SUBMITTED;
@@ -636,7 +636,7 @@ class MRPModule extends BaseModule {
 
       return {
         status: true,
-        message: save_as_draft ? 'MRP berhasil disimpan sebagai Draft' : 'MRP berhasil disubmit ke Supervisor Material',
+        message: save_as_draft ? 'MRP saved as Draft successfully' : 'MRP submitted to Supervisor Material successfully',
         data: { id: mrp.id, number: mrp.number, status: mrp.status },
       };
     } catch (error) {
@@ -660,14 +660,14 @@ class MRPModule extends BaseModule {
       const mrp = await SMrp.findByPk(id, { transaction });
       if (!mrp) { await transaction.rollback(); return { status: false, message: 'MRP not found', code: 404 }; }
 
-      if (![MRP_STATUS.DRAFT, MRP_STATUS.SUBMITTED].includes(mrp.status)) {
+      if (![MRP_STATUS.DRAFT, MRP_STATUS.REJECTED].includes(mrp.status)) {
         await transaction.rollback();
-        return { status: false, message: `MRP tidak bisa diedit. Status: ${mrp.status}`, code: 400 };
+        return { status: false, message: `MRP cannot be edited. Status: ${mrp.status}`, code: 400 };
       }
 
       if (priority && !PRIORITY_VALUES.includes(priority)) {
         await transaction.rollback();
-        return { status: false, message: `Priority harus salah satu dari: ${PRIORITY_VALUES.join(', ')}`, code: 400 };
+        return { status: false, message: `Priority must be one of: ${PRIORITY_VALUES.join(', ')}`, code: 400 };
       }
 
       const targetStatus = save_as_draft ? MRP_STATUS.DRAFT : MRP_STATUS.SUBMITTED;
@@ -677,7 +677,7 @@ class MRPModule extends BaseModule {
 
       return {
         status: true,
-        message: save_as_draft ? 'MRP berhasil disimpan sebagai Draft' : 'MRP berhasil disubmit ke Supervisor Material',
+        message: save_as_draft ? 'MRP saved as Draft successfully' : 'MRP submitted to Supervisor Material successfully',
       };
     } catch (error) {
       await transaction.rollback();
@@ -700,19 +700,19 @@ class MRPModule extends BaseModule {
       const mrp = await SMrp.findByPk(id, { transaction });
       if (!mrp) { await transaction.rollback(); return { status: false, message: 'MRP not found', code: 404 }; }
 
-      if (![MRP_STATUS.DRAFT, MRP_STATUS.SUBMITTED].includes(mrp.status)) {
+      if (![MRP_STATUS.DRAFT, MRP_STATUS.REJECTED].includes(mrp.status)) {
         await transaction.rollback();
-        return { status: false, message: `Detail MRP tidak bisa diedit. Status: ${mrp.status}`, code: 400 };
+        return { status: false, message: `MRP details cannot be edited. Status: ${mrp.status}`, code: 400 };
       }
 
       if (!details || !Array.isArray(details) || details.length === 0) {
         await transaction.rollback();
-        return { status: false, message: 'Details wajib diisi dan tidak boleh kosong', code: 400 };
+        return { status: false, message: 'Details are required and cannot be empty', code: 400 };
       }
 
       for (const d of details) {
-        if (!d.part_id) { await transaction.rollback(); return { status: false, message: 'Setiap detail harus memiliki part_id', code: 400 }; }
-        if (!d.qty || parseFloat(d.qty) <= 0) { await transaction.rollback(); return { status: false, message: 'Setiap detail harus memiliki qty > 0', code: 400 }; }
+        if (!d.part_id) { await transaction.rollback(); return { status: false, message: 'Each detail must have a part_id', code: 400 }; }
+        if (!d.qty || parseFloat(d.qty) <= 0) { await transaction.rollback(); return { status: false, message: 'Each detail must have qty > 0', code: 400 }; }
       }
 
       await SMrpDetail.destroy({ where: { mrp_id: id }, transaction });
@@ -728,7 +728,7 @@ class MRPModule extends BaseModule {
       await SMrpDetail.bulkCreate(detailData, { transaction });
       await transaction.commit();
 
-      return { status: true, message: 'Detail MRP berhasil diupdate', data: { total_items: detailData.length } };
+      return { status: true, message: 'MRP details updated successfully', data: { total_items: detailData.length } };
     } catch (error) {
       await transaction.rollback();
       if (config.debug) return { status: false, error: error.message, code: 500 };
@@ -753,14 +753,14 @@ class MRPModule extends BaseModule {
 
       if (!mrp) { await transaction.rollback(); return { status: false, message: 'MRP not found', code: 404 }; }
 
-      if (mrp.status !== MRP_STATUS.DRAFT) {
+      if (![MRP_STATUS.DRAFT, MRP_STATUS.REJECTED].includes(mrp.status)) {
         await transaction.rollback();
-        return { status: false, message: `Hanya MRP Draft yang bisa disubmit. Status: ${mrp.status}`, code: 400 };
+        return { status: false, message: `Only Draft or Rejected MRPs can be submitted. Status: ${mrp.status}`, code: 400 };
       }
 
       if (!mrp.details || mrp.details.length === 0) {
         await transaction.rollback();
-        return { status: false, message: 'MRP harus memiliki minimal 1 detail material sebelum disubmit', code: 400 };
+        return { status: false, message: 'MRP must have at least 1 material detail before it can be submitted', code: 400 };
       }
 
       await mrp.update({ status: MRP_STATUS.SUBMITTED }, { transaction });
@@ -768,8 +768,68 @@ class MRPModule extends BaseModule {
 
       return {
         status: true,
-        message: 'MRP berhasil disubmit dan menunggu approval Supervisor Material',
+        message: 'MRP submitted successfully and is awaiting Supervisor Material approval',
         data: { id: mrp.id, number: mrp.number, status: MRP_STATUS.SUBMITTED },
+      };
+    } catch (error) {
+      await transaction.rollback();
+      if (config.debug) return { status: false, error: error.message, code: 500 };
+      return { status: false, message: 'Internal server error', code: 500 };
+    }
+  }
+
+  // ============================================================
+  // [PUT] /mrp/bulk-submit
+  // Staff submit BANYAK MRP Draft sekaligus (via checkbox)
+  // Body: { ids: [1,2,3] }
+  // Aktor: Staff Material / Admin Material
+  // ============================================================
+  async bulkSubmit(req) {
+    const transaction = await sequelize.transaction();
+    try {
+      const { ids } = req.body;
+
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        await transaction.rollback();
+        return { status: false, message: 'IDs are required and cannot be empty', code: 400 };
+      }
+
+      const parsedIds = ids.map(Number).filter((id) => !isNaN(id));
+      if (parsedIds.length === 0) {
+        await transaction.rollback();
+        return { status: false, message: 'Invalid IDs', code: 400 };
+      }
+
+      // Ambil semua MRP yang diminta, pastikan statusnya Draft
+      const mrps = await SMrp.findAll({
+        where: { id: { [Op.in]: parsedIds }, status: MRP_STATUS.DRAFT },
+        transaction,
+      });
+
+      if (mrps.length === 0) {
+        await transaction.rollback();
+        return { status: false, message: 'No MRP with Draft status was found among the given IDs', code: 404 };
+      }
+
+      const foundIds = mrps.map((m) => m.id);
+
+      await SMrp.update(
+        { status: MRP_STATUS.SUBMITTED },
+        { where: { id: { [Op.in]: foundIds } }, transaction }
+      );
+
+      await transaction.commit();
+
+      const notProcessed = parsedIds.filter((id) => !foundIds.includes(id));
+
+      return {
+        status: true,
+        message: `${foundIds.length} MRP(s) submitted successfully`,
+        data: {
+          processed: foundIds,
+          not_processed: notProcessed,
+          reason_not_processed: notProcessed.length > 0 ? 'MRP not found or status is not Draft' : null,
+        },
       };
     } catch (error) {
       await transaction.rollback();
@@ -792,17 +852,20 @@ class MRPModule extends BaseModule {
 
       if (!ids || !Array.isArray(ids) || ids.length === 0) {
         await transaction.rollback();
-        return { status: false, message: 'IDs wajib diisi dan tidak boleh kosong', code: 400 };
+        return { status: false, message: 'IDs are required and cannot be empty', code: 400 };
       }
 
-      if (!action || !['Approve', 'Reject'].includes(action)) {
+      // Normalize action to lowercase for consistency
+      const normalizedAction = action?.toLowerCase();
+
+      if (!normalizedAction || !['approve', 'reject'].includes(normalizedAction)) {
         await transaction.rollback();
-        return { status: false, message: "Action harus 'Approve' atau 'Reject'", code: 400 };
+        return { status: false, message: "Action must be 'approve' or 'reject'", code: 400 };
       }
 
-      if (action === 'Reject' && !notes) {
+      if (normalizedAction === 'reject' && !notes) {
         await transaction.rollback();
-        return { status: false, message: 'Alasan penolakan (notes) wajib diisi saat Reject', code: 400 };
+        return { status: false, message: 'A rejection reason (notes) is required when rejecting', code: 400 };
       }
 
       // Ambil semua MRP yang diminta, pastikan statusnya Submitted
@@ -813,17 +876,17 @@ class MRPModule extends BaseModule {
 
       if (mrps.length === 0) {
         await transaction.rollback();
-        return { status: false, message: 'Tidak ada MRP Submitted yang ditemukan dari IDs yang diberikan', code: 404 };
+        return { status: false, message: 'No Submitted MRP was found among the given IDs', code: 404 };
       }
 
-      const newStatus = action === 'Approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
+      const newStatus = normalizedAction === 'approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
       const foundIds = mrps.map((m) => m.id);
 
       await SMrp.update(
         {
           status: newStatus,
           approved_by: user_id,
-          ...(action === 'Reject' ? { rejected_notes: notes } : {}),
+          ...(normalizedAction === 'reject' ? { rejected_notes: notes } : {}),
         },
         { where: { id: { [Op.in]: foundIds } }, transaction }
       );
@@ -835,11 +898,11 @@ class MRPModule extends BaseModule {
 
       return {
         status: true,
-        message: `${foundIds.length} MRP berhasil di-${newStatus}`,
+        message: `${foundIds.length} MRP(s) ${newStatus.toLowerCase()} successfully`,
         data: {
           processed: foundIds,
           not_processed: notProcessed,
-          reason_not_processed: notProcessed.length > 0 ? 'MRP tidak ditemukan atau statusnya bukan Submitted' : null,
+          reason_not_processed: notProcessed.length > 0 ? 'MRP not found or status is not Submitted' : null,
         },
       };
     } catch (error) {
@@ -864,12 +927,12 @@ class MRPModule extends BaseModule {
 
       if (!action || !['Approve', 'Reject'].includes(action)) {
         await transaction.rollback();
-        return { status: false, message: "Action harus 'Approve' atau 'Reject'", code: 400 };
+        return { status: false, message: "Action must be 'Approve' or 'Reject'", code: 400 };
       }
 
       if (action === 'Reject' && !notes) {
         await transaction.rollback();
-        return { status: false, message: 'Alasan penolakan (notes) wajib diisi saat Reject', code: 400 };
+        return { status: false, message: 'A rejection reason (notes) is required when rejecting', code: 400 };
       }
 
       const mrp = await SMrp.findByPk(id, { transaction });
@@ -877,7 +940,7 @@ class MRPModule extends BaseModule {
 
       if (mrp.status !== MRP_STATUS.SUBMITTED) {
         await transaction.rollback();
-        return { status: false, message: `Hanya MRP Submitted yang bisa di-review. Status: ${mrp.status}`, code: 400 };
+        return { status: false, message: `Only Submitted MRPs can be reviewed. Status: ${mrp.status}`, code: 400 };
       }
 
       const newStatus = action === 'Approve' ? MRP_STATUS.APPROVED : MRP_STATUS.REJECTED;
@@ -895,7 +958,7 @@ class MRPModule extends BaseModule {
 
       return {
         status: true,
-        message: `MRP berhasil di-${newStatus}`,
+        message: `MRP ${newStatus.toLowerCase()} successfully`,
         data: { id: mrp.id, number: mrp.number, status: newStatus },
       };
     } catch (error) {
@@ -918,16 +981,16 @@ class MRPModule extends BaseModule {
       const mrp = await SMrp.findByPk(id, { transaction });
       if (!mrp) { await transaction.rollback(); return { status: false, message: 'MRP not found', code: 404 }; }
 
-      if (mrp.status !== MRP_STATUS.DRAFT) {
+      if (![MRP_STATUS.DRAFT, MRP_STATUS.REJECTED].includes(mrp.status)) {
         await transaction.rollback();
-        return { status: false, message: `Hanya MRP Draft yang bisa dihapus. Status: ${mrp.status}`, code: 400 };
+        return { status: false, message: `Only Draft or Rejected MRPs can be deleted. Status: ${mrp.status}`, code: 400 };
       }
 
       await SMrpDetail.destroy({ where: { mrp_id: id }, transaction });
       await mrp.destroy({ transaction });
 
       await transaction.commit();
-      return { status: true, message: 'MRP berhasil dihapus' };
+      return { status: true, message: 'MRP deleted successfully' };
     } catch (error) {
       await transaction.rollback();
       if (config.debug) return { status: false, error: error.message, code: 500 };
@@ -947,7 +1010,8 @@ class MRPModule extends BaseModule {
       const usedMrps = await SMrp.findAll({
         attributes: ['spr_id'],
         where: {
-          spr_id: { [Op.not]: null }
+          spr_id: { [Op.not]: null },
+          status: { [Op.in]: [MRP_STATUS.DRAFT, MRP_STATUS.SUBMITTED, MRP_STATUS.APPROVED] }
         }
       });
 

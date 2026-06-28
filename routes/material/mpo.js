@@ -9,9 +9,14 @@ const ALL      = ['Superadmin', 'Admin Material', 'Staff Material', 'Supervisor 
 const MAKER    = ['Superadmin', 'Admin Material', 'Staff Material'];
 const APPROVER = ['Superadmin', 'Admin Material', 'Supervisor Material'];
 
-// ─────────────────────────────────────────────────────────────────────────────
+
+// AUTO-GENERATE MPO
+router.post('/auto-generate', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.autoGenerate(req));
+});
+
+
 // DROPDOWN
-// ─────────────────────────────────────────────────────────────────────────────
 
 router.get('/dd-status',   session.sessionChecker, session.permissionChecker(ALL), async (req, res) => {
   return helper.sendResponse(res, await mpo.getDropdownStatuses(req));
@@ -30,9 +35,21 @@ router.get('/source-data/:source_type/:source_id', session.sessionChecker, sessi
   return helper.sendResponse(res, await mpo.getSourceData(req));
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// BULK ACTIONS — HARUS didefinisikan SEBELUM route dinamis (/:id, /:id/status)
+// agar Express tidak salah mencocokkan 'bulk-submit'/'bulk-review' sebagai :id.
+// (Ini adalah penyebab bug serupa di modul MRP — jangan diulang di sini.)
+
+// Bulk Submit: Draft -> Submitted (Maker)
+router.put('/bulk-submit', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.bulkSubmit(req));
+});
+
+// Bulk Review: Submitted -> Approved/Rejected (Supervisor)
+router.put('/bulk-review', session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.bulkReview(req));
+});
+
 // CRUD
-// ─────────────────────────────────────────────────────────────────────────────
 
 router.get('/',    session.sessionChecker, session.permissionChecker(ALL),   async (req, res) => {
   return helper.sendResponse(res, await mpo.list(req));
@@ -54,7 +71,11 @@ router.delete('/:id', session.sessionChecker, session.permissionChecker(MAKER), 
   return helper.sendResponse(res, await mpo.delete(req));
 });
 
-// Approve / Reject (Supervisor)
+router.put('/:id/split-update', session.sessionChecker, session.permissionChecker(MAKER), async (req, res) => {
+  return helper.sendResponse(res, await mpo.splitUpdate(req));
+});
+
+// Approve / Reject single (Supervisor)
 router.put('/:id/status', session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
   return helper.sendResponse(res, await mpo.updateStatus(req));
 });

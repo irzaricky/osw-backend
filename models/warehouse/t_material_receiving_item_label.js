@@ -17,16 +17,6 @@ export default (sequelize) => {
         foreignKey: 'mr_item_label_id',
         as: 'ng_ticket'
       });
-
-      TMaterialReceivingItemLabel.belongsTo(models.SUsers, {
-        foreignKey: 'quantity_checked_by',
-        as: 'quantity_checker'
-      });
-
-      TMaterialReceivingItemLabel.belongsTo(models.SUsers, {
-        foreignKey: 'quality_checked_by',
-        as: 'quality_checker'
-      });
     }
   }
 
@@ -46,22 +36,6 @@ export default (sequelize) => {
     },
     is_quality: {
       type: DataTypes.BOOLEAN,
-      allowNull: true
-    },
-    quantity_checked_at: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    quantity_checked_by: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    },
-    quality_checked_at: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    quality_checked_by: {
-      type: DataTypes.INTEGER,
       allowNull: true
     }
   }, {

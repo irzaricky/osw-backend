@@ -23,7 +23,7 @@ class ShiftCalendarModule extends BaseModule {
     try {
       const data = await RefTypeCalendars.findAll({
         where: { deleted_at: null },
-        attributes: ["id", "name"],
+        attributes: ["id", "name", "is_holiday"],
         order: [["name", "ASC"]],
       });
       tmp = { status: true, code: 200, data };
@@ -94,7 +94,9 @@ class ShiftCalendarModule extends BaseModule {
     const t = await sequelize.transaction();
     try {
       const schema = Joi.object({
-        shift_id: Joi.number().integer().required(),
+        // shift_id sekarang opsional & boleh null (di-cek manual di bawah
+        // berdasarkan is_holiday dari ref_type_calendar yang dipilih)
+        shift_id: Joi.number().integer().allow(null).optional().default(null),
         line_id: Joi.number().integer().required(),
         ref_type_calendar_id: Joi.number().integer().required(),
         start_date: Joi.date().iso().required(),
@@ -119,21 +121,7 @@ class ShiftCalendarModule extends BaseModule {
         active,
       } = validation.value;
 
-      // validasi FK
-      const shift = await SShifts.findByPk(shift_id, { transaction: t });
-      if (!shift) {
-        await t.rollback();
-        tmp = { status: false, code: 404, error: "Shift not found" };
-        return helper.sendResponse(res, tmp);
-      }
-
-      const line = await SLines.findByPk(line_id, { transaction: t });
-      if (!line) {
-        await t.rollback();
-        tmp = { status: false, code: 404, error: "Line not found" };
-        return helper.sendResponse(res, tmp);
-      }
-
+      // 1. Cek calendar type DULU, karena ini menentukan apakah shift_id wajib
       const calendarType = await RefTypeCalendars.findOne({
         where: { id: ref_type_calendar_id, deleted_at: null },
         transaction: t,
@@ -144,7 +132,36 @@ class ShiftCalendarModule extends BaseModule {
         return helper.sendResponse(res, tmp);
       }
 
-      // cek ghost record
+      // 2. shift_id wajib diisi HANYA jika calendar type bukan holiday
+      if (!calendarType.is_holiday && !shift_id) {
+        await t.rollback();
+        tmp = {
+          status: false,
+          code: 400,
+          error: `Shift is required for calendar type "${calendarType.name}" (non-holiday)`,
+        };
+        return helper.sendResponse(res, tmp);
+      }
+
+      // 3. Validasi FK shift HANYA jika shift_id dikirim
+      let shift = null;
+      if (shift_id) {
+        shift = await SShifts.findByPk(shift_id, { transaction: t });
+        if (!shift) {
+          await t.rollback();
+          tmp = { status: false, code: 404, error: "Shift not found" };
+          return helper.sendResponse(res, tmp);
+        }
+      }
+
+      const line = await SLines.findByPk(line_id, { transaction: t });
+      if (!line) {
+        await t.rollback();
+        tmp = { status: false, code: 404, error: "Line not found" };
+        return helper.sendResponse(res, tmp);
+      }
+
+      // cek ghost record (shift_id null akan otomatis match "IS NULL" di Sequelize)
       const ghost = await SShiftCalendars.findOne({
         where: {
           shift_id,
@@ -162,6 +179,7 @@ class ShiftCalendarModule extends BaseModule {
       if (ghost) {
         const oldData = ghost.toJSON();
         await ghost.restore({ transaction: t });
+        ghost.shift_id = shift_id;
         ghost.ref_type_calendar_id = ref_type_calendar_id;
         ghost.date_event = date_event;
         ghost.active = active;
@@ -228,7 +246,7 @@ class ShiftCalendarModule extends BaseModule {
       const { id } = req.params;
 
       const schema = Joi.object({
-        shift_id: Joi.number().integer().required(),
+        shift_id: Joi.number().integer().allow(null).optional().default(null),
         line_id: Joi.number().integer().required(),
         ref_type_calendar_id: Joi.number().integer().required(),
         start_date: Joi.date().iso().required(),
@@ -260,21 +278,7 @@ class ShiftCalendarModule extends BaseModule {
         return helper.sendResponse(res, tmp);
       }
 
-      // validasi FK
-      const shift = await SShifts.findByPk(shift_id, { transaction: t });
-      if (!shift) {
-        await t.rollback();
-        tmp = { status: false, code: 404, error: "Shift not found" };
-        return helper.sendResponse(res, tmp);
-      }
-
-      const line = await SLines.findByPk(line_id, { transaction: t });
-      if (!line) {
-        await t.rollback();
-        tmp = { status: false, code: 404, error: "Line not found" };
-        return helper.sendResponse(res, tmp);
-      }
-
+      // 1. Cek calendar type DULU
       const calendarType = await RefTypeCalendars.findOne({
         where: { id: ref_type_calendar_id, deleted_at: null },
         transaction: t,
@@ -282,6 +286,35 @@ class ShiftCalendarModule extends BaseModule {
       if (!calendarType) {
         await t.rollback();
         tmp = { status: false, code: 404, error: "Calendar type not found" };
+        return helper.sendResponse(res, tmp);
+      }
+
+      // 2. shift_id wajib HANYA jika bukan holiday
+      if (!calendarType.is_holiday && !shift_id) {
+        await t.rollback();
+        tmp = {
+          status: false,
+          code: 400,
+          error: `Shift is required for calendar type "${calendarType.name}" (non-holiday)`,
+        };
+        return helper.sendResponse(res, tmp);
+      }
+
+      // 3. Validasi FK shift HANYA jika dikirim
+      let shift = null;
+      if (shift_id) {
+        shift = await SShifts.findByPk(shift_id, { transaction: t });
+        if (!shift) {
+          await t.rollback();
+          tmp = { status: false, code: 404, error: "Shift not found" };
+          return helper.sendResponse(res, tmp);
+        }
+      }
+
+      const line = await SLines.findByPk(line_id, { transaction: t });
+      if (!line) {
+        await t.rollback();
+        tmp = { status: false, code: 404, error: "Line not found" };
         return helper.sendResponse(res, tmp);
       }
 
@@ -503,7 +536,8 @@ class ShiftCalendarModule extends BaseModule {
         const row = worksheet.getRow(i);
 
         // kolom 1: "shift_number – shift_name" atau nama shift saja
-        const shift_raw = row.getCell(1).value?.toString().trim();
+        // BOLEH KOSONG jika calendar type pada baris ini adalah holiday
+        const shift_raw = row.getCell(1).value?.toString().trim() || null;
         const line_name = row.getCell(2).value?.toString().trim();
         const cal_type_name = row.getCell(3).value?.toString().trim();
         const date_event = row.getCell(4).value?.toString().trim();
@@ -512,11 +546,8 @@ class ShiftCalendarModule extends BaseModule {
         const active =
           row.getCell(7).value?.toString().trim().toLowerCase() !== "inactive";
 
-        if (!shift_raw) {
-          results.errors.push(`Row ${i}: Shift is required`);
-          results.skipped++;
-          continue;
-        }
+        // shift_raw TIDAK dicek "required" di sini lagi -> dipindah ke bawah,
+        // setelah calendar type diketahui is_holiday-nya
         if (!line_name) {
           results.errors.push(`Row ${i}: Line is required`);
           results.skipped++;
@@ -553,32 +584,7 @@ class ShiftCalendarModule extends BaseModule {
           continue;
         }
 
-        // resolve shift — support "shift_number – name" atau nama saja
-        const shiftNumberMatch = shift_raw.match(/^(\d+)\s*[–-]/);
-        const shiftWhere = shiftNumberMatch
-          ? { shift_number: parseInt(shiftNumberMatch[1]), deleted_at: null }
-          : { name: { [Op.iLike]: shift_raw }, deleted_at: null };
-
-        const shift = await SShifts.findOne({
-          where: shiftWhere,
-          transaction: t,
-        });
-        if (!shift) {
-          results.errors.push(`Row ${i}: Shift "${shift_raw}" not found`);
-          results.skipped++;
-          continue;
-        }
-
-        const line = await SLines.findOne({
-          where: { name: line_name, deleted_at: null },
-          transaction: t,
-        });
-        if (!line) {
-          results.errors.push(`Row ${i}: Line "${line_name}" not found`);
-          results.skipped++;
-          continue;
-        }
-
+        // resolve calendar type LEBIH DULU -> dipakai untuk tentukan wajib/tidaknya shift
         const calendarType = await RefTypeCalendars.findOne({
           where: { name: cal_type_name, deleted_at: null },
           transaction: t,
@@ -591,9 +597,48 @@ class ShiftCalendarModule extends BaseModule {
           continue;
         }
 
+        if (!calendarType.is_holiday && !shift_raw) {
+          results.errors.push(
+            `Row ${i}: Shift is required for calendar type "${cal_type_name}" (non-holiday)`
+          );
+          results.skipped++;
+          continue;
+        }
+
+        // resolve shift — support "shift_number – name" atau nama saja, HANYA jika diisi
+        let shift = null;
+        if (shift_raw) {
+          const shiftNumberMatch = shift_raw.match(/^(\d+)\s*[–-]/);
+          const shiftWhere = shiftNumberMatch
+            ? { shift_number: parseInt(shiftNumberMatch[1]), deleted_at: null }
+            : { name: { [Op.iLike]: shift_raw }, deleted_at: null };
+
+          shift = await SShifts.findOne({
+            where: shiftWhere,
+            transaction: t,
+          });
+          if (!shift) {
+            results.errors.push(`Row ${i}: Shift "${shift_raw}" not found`);
+            results.skipped++;
+            continue;
+          }
+        }
+
+        const line = await SLines.findOne({
+          where: { name: line_name, deleted_at: null },
+          transaction: t,
+        });
+        if (!line) {
+          results.errors.push(`Row ${i}: Line "${line_name}" not found`);
+          results.skipped++;
+          continue;
+        }
+
+        const shift_id = shift ? shift.id : null;
+
         const ghost = await SShiftCalendars.findOne({
           where: {
-            shift_id: shift.id,
+            shift_id,
             line_id: line.id,
             start_date,
             end_date,
@@ -606,6 +651,7 @@ class ShiftCalendarModule extends BaseModule {
         if (ghost) {
           const oldData = ghost.toJSON();
           await ghost.restore({ transaction: t });
+          ghost.shift_id = shift_id;
           ghost.ref_type_calendar_id = calendarType.id;
           ghost.date_event = date_event;
           ghost.active = active;
@@ -625,7 +671,7 @@ class ShiftCalendarModule extends BaseModule {
           // cek duplikat aktif
           const duplicate = await SShiftCalendars.findOne({
             where: {
-              shift_id: shift.id,
+              shift_id,
               line_id: line.id,
               start_date,
               end_date,
@@ -640,7 +686,7 @@ class ShiftCalendarModule extends BaseModule {
 
           const calendar = await SShiftCalendars.create(
             {
-              shift_id: shift.id,
+              shift_id,
               line_id: line.id,
               ref_type_calendar_id: calendarType.id,
               start_date,

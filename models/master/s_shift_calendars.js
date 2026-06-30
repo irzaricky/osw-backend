@@ -16,7 +16,7 @@ export default (sequelize) => {
     },
     shift_id: {
       type: DataTypes.INTEGER,
-      allowNull: false
+      allowNull: true
     },
     start_date: {
       type: DataTypes.DATEONLY,
@@ -28,7 +28,7 @@ export default (sequelize) => {
     },
     ref_type_calendar_id: {
       type: DataTypes.INTEGER,
-      allowNull: false
+      allowNull: true
     },
     date_event: {
       type: DataTypes.STRING,

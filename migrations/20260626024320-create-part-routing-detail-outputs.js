@@ -46,18 +46,6 @@ export default {
         defaultValue: Sequelize.literal('CURRENT_TIMESTAMP')
       }
     });
-
-    // alter table s_shift_calendars to shift_id can be null
-    await queryInterface.changeColumn('s_shift_calendars', 'shift_id', {
-      type: Sequelize.INTEGER,
-      allowNull: true,
-      references: {
-        model: 's_shifts',
-        key: 'id',
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'SET NULL',
-    });
   },
 
   async down (queryInterface, Sequelize) {
@@ -67,16 +55,6 @@ export default {
      * Example:
      * await queryInterface.dropTable('users');
      */
-    await queryInterface.changeColumn('s_shift_calendars', 'shift_id', {
-      type: Sequelize.INTEGER,
-      allowNull: false,
-      references: {
-        model: 's_shifts',
-        key: 'id',
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'RESTRICT',
-    });
     await queryInterface.dropTable('s_part_routing_detail_outputs');
   }
 };

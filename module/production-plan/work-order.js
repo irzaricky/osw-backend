@@ -165,7 +165,6 @@ class WorkOrderModule extends BaseModule {
           { model: SProductionOrder, as: 'production_order', attributes: ['id', 'po_number'] },
           { model: SParts,           as: 'part',             attributes: ['id', 'part_number', 'part_name'] },
           { model: SLines,           as: 'line',             attributes: ['id', 'line_code', 'name'] },
-          // { model: SShifts,          as: 'shift',            attributes: ['id', 'name', 'shift_number', 'start_time', 'end_time'] },
         ],
         order:    [['sequence', 'ASC'], ['work_date', 'ASC'], ['line_id', 'ASC'], ['wo_number', 'ASC']],
         distinct: true,
@@ -276,7 +275,6 @@ class WorkOrderModule extends BaseModule {
   }
 
   // ── WO Line: Detail ───────────────────────────────────────────────────────
-
   async detail(req, res) {
     try {
       const { id } = req.params;
@@ -289,7 +287,16 @@ class WorkOrderModule extends BaseModule {
             model:    SWorkOrderStation,
             as:       'stations',
             required: false,
-            include:  [{ model: SStations, as: 'station', attributes: ['id', 'station_code', 'name', 'sequence'] }],
+            include:  [
+              { model: SStations, as: 'station', attributes: ['id', 'station_code', 'name', 'sequence'] },
+              {
+                model:      SWorkOrderIssue,
+                as:         'issues',
+                where:      { deleted_at: null, resolved_time: null },
+                required:   false,
+                attributes: ['id'],
+              },
+            ],
             order:    [['sequence', 'ASC']],
           },
         ],
@@ -297,44 +304,44 @@ class WorkOrderModule extends BaseModule {
   
       if (!wo) return helper.sendResponse(res, { status: false, code: 404, error: 'Work Order not found' });
   
-      // Get final station dengan aggregate progress-nya
-      const [finalStation] = await sequelize.query(
+      // Ambil semua station dengan cumulative dari record progress terakhir per station
+      // qty_reject dan qty_scrap tetap SUM karena tidak ada kolom cumulative-nya
+      const stationQuality = await sequelize.query(
         `SELECT
            s.id,
            s.sequence,
            s.actual_quantity,
-           COALESCE(SUM(wop.qty_good),   0) AS qty_good,
-           COALESCE(SUM(wop.qty_reject), 0) AS qty_reject,
-           COALESCE(SUM(wop.qty_scrap),  0) AS qty_scrap
+           s.status,
+           COALESCE(last_p.cumulative_qty_good, 0) AS qty_good,
+           COALESCE(SUM(wop.qty_reject), 0)        AS qty_reject,
+           COALESCE(SUM(wop.qty_scrap),  0)        AS qty_scrap
          FROM s_work_order_stations s
          LEFT JOIN s_work_order_progresses wop ON wop.wo_station_id = s.id
+         LEFT JOIN LATERAL (
+           SELECT cumulative_qty_good
+           FROM s_work_order_progresses
+           WHERE wo_station_id = s.id
+           ORDER BY reported_at DESC
+           LIMIT 1
+         ) last_p ON true
          WHERE s.wo_id = :woId
-         GROUP BY s.id, s.sequence
-         ORDER BY s.sequence DESC
-         LIMIT 1`,
+         GROUP BY s.id, s.sequence, s.actual_quantity, s.status, last_p.cumulative_qty_good
+         ORDER BY s.sequence DESC`,
         { replacements: { woId: id }, type: sequelize.QueryTypes.SELECT },
       );
   
-      // ✅ Get upstream quality summary (aggregate stations 1 to N-1)
-      const upstreamQuality = await sequelize.query(
-        `SELECT
-           COALESCE(SUM(wop.qty_reject), 0) AS total_reject,
-           COALESCE(SUM(wop.qty_scrap),  0) AS total_scrap
-         FROM s_work_order_stations s
-         LEFT JOIN s_work_order_progresses wop ON wop.wo_station_id = s.id
-         WHERE s.wo_id = :woId
-           AND s.sequence < (SELECT MAX(sequence) FROM s_work_order_stations WHERE wo_id = :woId)`,
-        { replacements: { woId: id }, type: sequelize.QueryTypes.SELECT },
-      );
+      const finalStation   = stationQuality[0] ?? null;
+      const upstreamStations = stationQuality.slice(1);
   
       const data = wo.toJSON();
-      
+  
       if (finalStation) {
-        // Final output metrics (dari station terakhir saja)
         data.cumulative_qty_good   = parseInt(finalStation.qty_good   ?? 0, 10);
         data.cumulative_qty_reject = parseInt(finalStation.qty_reject ?? 0, 10);
         data.cumulative_qty_scrap  = parseInt(finalStation.qty_scrap  ?? 0, 10);
-        
+        data.final_station_id      = finalStation.id;
+        data.final_station_seq     = finalStation.sequence;
+  
         if (!data.actual_quantity || data.actual_quantity === 0) {
           data.actual_quantity = parseInt(finalStation.actual_quantity ?? 0, 10);
         }
@@ -342,21 +349,35 @@ class WorkOrderModule extends BaseModule {
         data.cumulative_qty_good   = 0;
         data.cumulative_qty_reject = 0;
         data.cumulative_qty_scrap  = 0;
+        data.final_station_id      = null;
+        data.final_station_seq     = null;
       }
   
-      // ✅ NEW: Upstream quality metrics (untuk visibility)
-      if (upstreamQuality?.[0]) {
-        data.upstream_total_reject = parseInt(upstreamQuality[0].total_reject ?? 0, 10);
-        data.upstream_total_scrap  = parseInt(upstreamQuality[0].total_scrap  ?? 0, 10);
-      } else {
-        data.upstream_total_reject = 0;
-        data.upstream_total_scrap  = 0;
-      }
+      // Upstream losses per station — tidak dijumlahkan lintas station untuk hindari double count
+      // Disajikan sebagai array agar konsumen API bisa memilih cara agregasi
+      data.upstream_station_quality = upstreamStations.map((s) => ({
+        station_id:  s.id,
+        sequence:    s.sequence,
+        status:      s.status,
+        qty_good:    parseInt(s.qty_good   ?? 0, 10),
+        qty_reject:  parseInt(s.qty_reject ?? 0, 10),
+        qty_scrap:   parseInt(s.qty_scrap  ?? 0, 10),
+      }));
+  
+      // Total loss hanya dari final station — yang paling representatif untuk output WO
+      data.total_quality_loss = data.cumulative_qty_reject + data.cumulative_qty_scrap;
   
       data.completion_pct = data.planned_quantity > 0
         ? Math.min(Math.round((data.cumulative_qty_good / data.planned_quantity) * 100), 100)
         : 0;
   
+      if (data.stations) {
+        data.stations = data.stations.map((s) => ({
+          ...s,
+          open_issue_count: s.issues?.length ?? 0,
+        }))
+      }
+
       return helper.sendResponse(res, { status: true, code: 200, data });
     } catch (error) {
       console.log('[WorkOrderModule][detail]:', error);
@@ -683,22 +704,23 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
+  // ── WO Station: Complete ──────────────────────────────────────────────────
   async completeStation(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id, station_id } = req.params;
-
+  
       const schema = Joi.object({
         actual_quantity:         Joi.number().integer().min(0).required(),
         under_production_reason: Joi.string().optional().allow('', null),
       });
-
+  
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
         await t.rollback();
         return helper.sendResponse(res, validation);
       }
-
+  
       const wo = await SWorkOrder.findOne({ where: { id, deleted_at: null }, transaction: t });
       if (!wo) {
         await t.rollback();
@@ -708,7 +730,7 @@ class WorkOrderModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Work Order is not In_Progress' });
       }
-
+  
       const station = await SWorkOrderStation.findOne({
         where: { id: station_id, wo_id: id },
         transaction: t,
@@ -721,29 +743,27 @@ class WorkOrderModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Station is not In_Progress' });
       }
-
-      // ── Sequential gate: stasiun upstream harus sudah selesai ─────────────
-      // Cari stasiun dengan sequence tepat satu di bawah stasiun ini
-      const upstreamStation = await SWorkOrderStation.findOne({
-        where: {
-          wo_id:    id,
-          sequence: station.sequence - 1,
-        },
-        transaction: t,
-      });
-
+  
+      // Fix: find upstream by nearest lower sequence, not sequence - 1
+      const [upstreamStation] = await sequelize.query(
+        `SELECT id, sequence, status, actual_quantity
+         FROM s_work_order_stations
+         WHERE wo_id = :woId AND sequence < :currentSeq
+         ORDER BY sequence DESC LIMIT 1`,
+        { replacements: { woId: id, currentSeq: station.sequence }, type: sequelize.QueryTypes.SELECT, transaction: t },
+      );
+  
       if (upstreamStation && upstreamStation.status !== 'Completed') {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `Station sequence ${station.sequence - 1} (upstream) must be completed first`,
+          error:  `Upstream station (sequence ${upstreamStation.sequence}) must be completed first`,
           data:   { upstream_station_id: upstreamStation.id, upstream_status: upstreamStation.status },
         });
       }
-
-      // ── Batasi actual_quantity: tidak boleh melebihi output upstream ───────
+  
       const { actual_quantity, under_production_reason } = validation.value;
-
+  
       if (upstreamStation) {
         const upstreamActual = upstreamStation.actual_quantity ?? 0;
         if (actual_quantity > upstreamActual) {
@@ -751,20 +771,20 @@ class WorkOrderModule extends BaseModule {
           return helper.sendResponse(res, {
             status: false, code: 400,
             error:  `actual_quantity (${actual_quantity}) cannot exceed upstream station output (${upstreamActual})`,
+            data:   { requested_qty: actual_quantity, upstream_station_id: upstreamStation.id, upstream_max_qty: upstreamActual },
           });
         }
       } else {
-        // Stasiun pertama — batasnya adalah 110% planned WO (toleransi produksi)
         const maxAllowed = Math.ceil(wo.planned_quantity * 1.1);
         if (actual_quantity > maxAllowed) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `actual_quantity (${actual_quantity}) exceeds 110% of planned (${wo.planned_quantity})`,
+            error:  `actual_quantity (${actual_quantity}) exceeds 110% of planned (${maxAllowed})`,
           });
         }
       }
-
+  
       if (actual_quantity < wo.planned_quantity && !under_production_reason) {
         await t.rollback();
         return helper.sendResponse(res, {
@@ -772,8 +792,7 @@ class WorkOrderModule extends BaseModule {
           error:  `under_production_reason is required when actual_quantity is below planned (${wo.planned_quantity})`,
         });
       }
-
-      // ── Cek unresolved issues ──────────────────────────────────────────────
+  
       const unresolvedCount = await SWorkOrderIssue.count({
         where: { wo_station_id: station_id, resolved_time: null, deleted_at: null },
         transaction: t,
@@ -785,62 +804,84 @@ class WorkOrderModule extends BaseModule {
           error:  `Cannot complete station: ${unresolvedCount} unresolved issue(s) must be resolved first`,
         });
       }
-
+  
+      const [lastProgressResult] = await sequelize.query(
+        `SELECT COALESCE(SUM(qty_good), 0) AS total_good
+         FROM s_work_order_progresses
+         WHERE wo_station_id = :stationId`,
+        { replacements: { stationId: station_id }, type: sequelize.QueryTypes.SELECT, transaction: t },
+      );
+  
+      const totalProgressedGood = parseInt(lastProgressResult?.total_good ?? 0, 10);
+      const delta = actual_quantity - totalProgressedGood;
+  
+      // Reject if there's unreported qty — user must report via addStationProgress first
+      if (delta > 0) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  `${delta} qty not yet reported. Use addStationProgress to report remaining qty before completing.`,
+          data:   { actual_quantity_requested: actual_quantity, total_progressed_good: totalProgressedGood, remaining_delta: delta },
+        });
+      }
+  
+      // Reject if progressed qty exceeds requested actual_quantity
+      if (delta < 0) {
+        await t.rollback();
+        return helper.sendResponse(res, {
+          status: false, code: 400,
+          error:  `Total progressed good (${totalProgressedGood}) exceeds requested actual_quantity (${actual_quantity})`,
+          data:   { actual_quantity_requested: actual_quantity, total_progressed_good: totalProgressedGood },
+        });
+      }
+  
       const now = new Date();
       await station.update({ status: 'Completed', actual_quantity, completed_at: now }, { transaction: t });
 
-      // Record final progress delta untuk stasiun ini
-      const prevCumulative = (await SWorkOrderProgress.sum('qty_good', {
-        where:       { wo_station_id: station_id },
-        transaction: t,
-      })) || 0;
+      const [downstreamStation] = await sequelize.query(
+        `SELECT id, sequence, actual_quantity
+        FROM s_work_order_stations
+        WHERE wo_id = :woId AND sequence > :currentSeq
+        ORDER BY sequence ASC LIMIT 1`,
+        { replacements: { woId: id, currentSeq: station.sequence }, type: sequelize.QueryTypes.SELECT, transaction: t },
+      );
 
-      const delta = actual_quantity - prevCumulative;
-      if (delta > 0) {
-        await SWorkOrderProgress.create(
-          buildProgressPayload({
-            woStationId:   station.id,
-            qtyGood:       delta,
-            qtyReject:     0,
-            qtyScrap:      0,
-            cumulativeQty: actual_quantity,
-            plannedQty:    wo.planned_quantity,
-            reportedBy:    req.user?.id ?? null,
-            now,
-          }),
-          { transaction: t },
-        );
+      if (downstreamStation && (downstreamStation.actual_quantity ?? 0) > actual_quantity) {
+        await SWorkOrderIssue.create({
+          wo_station_id:     downstreamStation.id,
+          issue_type:        'OTHER',
+          issue_description: `Upstream station (seq ${station.sequence}) completed with qty ${actual_quantity}, but this station already reported ${downstreamStation.actual_quantity} units. Progress correction required before completing.`,
+          reported_by:       req.user?.id ?? null,
+          reported_time:     now,
+        }, { transaction: t });
       }
-
-      // ── Auto-complete WO Line jika semua stasiun sudah Completed ──────────
+  
       const pendingStationCount = await SWorkOrderStation.count({
         where: { wo_id: id, status: { [Op.ne]: 'Completed' } },
         transaction: t,
       });
-
+  
       let woCompleted = false;
       if (pendingStationCount === 0) {
         const [minResult] = await sequelize.query(
-          `SELECT MIN(actual_quantity) AS min_actual
-           FROM s_work_order_stations
-           WHERE wo_id = :woId`,
+          `SELECT MIN(actual_quantity) AS min_actual FROM s_work_order_stations WHERE wo_id = :woId`,
           { replacements: { woId: id }, type: sequelize.QueryTypes.SELECT, transaction: t },
         );
         const finalActual = parseInt(minResult?.min_actual ?? 0, 10);
-
+  
         await wo.update({ status: 'Completed', actual_quantity: finalActual, actual_end_time: now }, { transaction: t });
         woCompleted = true;
-
+  
         await this.logActivity(req, {
-          moduleCode:  'work_order', activityCode: 'COMPLETE',
-          resourceId:  wo.id, newData: wo,
+          moduleCode: 'work_order', activityCode: 'COMPLETE',
+          resourceId: wo.id, newData: wo,
           description: `Auto-completed WO ${wo.wo_number} — all stations done, final_actual=${finalActual}`,
           transaction: t,
         });
-
+  
         await this._syncScheduleAndPO(wo, finalActual, now, t);
       }
-
+  
       await t.commit();
       return helper.sendResponse(res, {
         status: true, code: 200, message: 'Station completed',
@@ -861,31 +902,35 @@ class WorkOrderModule extends BaseModule {
   }
 
   // ── WO Station: Progress ──────────────────────────────────────────────────
-
   async addStationProgress(req, res) {
     const t = await sequelize.transaction();
     try {
       const { id, station_id } = req.params;
-   
+  
       const schema = Joi.object({
-        qty_good:    Joi.number().integer().min(0).required(),
+        qty_good:    Joi.number().integer().required(),
         qty_reject:  Joi.number().integer().min(0).default(0),
         qty_scrap:   Joi.number().integer().min(0).default(0),
         reported_by: Joi.number().integer().min(1).required(),
+        reason:      Joi.string().when('qty_good', {
+          is:        Joi.number().negative(),
+          then:      Joi.required(),
+          otherwise: Joi.optional().allow('', null),
+        }),
       });
-   
+  
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
         await t.rollback();
         return helper.sendResponse(res, validation);
       }
-   
+  
       const wo = await SWorkOrder.findOne({ where: { id, deleted_at: null }, transaction: t });
       if (!wo) {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'Work Order not found' });
       }
-   
+  
       const station = await SWorkOrderStation.findOne({ where: { id: station_id, wo_id: id }, transaction: t });
       if (!station) {
         await t.rollback();
@@ -895,77 +940,101 @@ class WorkOrderModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Progress can only be reported on In_Progress stations' });
       }
-   
-      const { qty_good, qty_reject, qty_scrap, reported_by } = validation.value;
-   
-      // ── Fetch cumulative dari progress sebelumnya (per station ini) ────────────
+  
+      const { qty_good, qty_reject, qty_scrap, reported_by, reason } = validation.value;
+      const isCorrection = qty_good < 0;
+  
       const lastProgress = await SWorkOrderProgress.findOne({
-        where:   { wo_station_id: station_id },
-        order:   [['reported_at', 'DESC']],
-        attributes: ['cumulative_qty', 'cumulative_qty_good'],
+        where:       { wo_station_id: station_id },
+        order:       [['reported_at', 'DESC']],
+        attributes:  ['cumulative_qty', 'cumulative_qty_good'],
         transaction: t,
       });
-   
-      const prevCumulativeTotal = lastProgress ? (lastProgress.cumulative_qty      ?? 0) : 0;
-      const prevCumulativeGood  = lastProgress ? (lastProgress.cumulative_qty_good ?? 0) : 0;
-   
+  
+      const prevCumulativeTotal = lastProgress?.cumulative_qty      ?? 0;
+      const prevCumulativeGood  = lastProgress?.cumulative_qty_good ?? 0;
+  
       const newCumulativeTotal = prevCumulativeTotal + qty_good + qty_reject + qty_scrap;
       const newCumulativeGood  = prevCumulativeGood  + qty_good;
-   
-      // ── VALIDASI 1: Total processed (good+reject+scrap) tidak boleh > 110% planned ───
-      const maxAllowed = Math.ceil(wo.planned_quantity * 1.1);
-      if (newCumulativeTotal > maxAllowed) {
+  
+      if (newCumulativeGood < 0) {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  `Cumulative processed qty (${newCumulativeTotal}) exceeds 110% of planned (${wo.planned_quantity})`,
+          error:  `Correction would result in negative cumulative good qty (${newCumulativeGood})`,
+          data:   { current_cumulative_good: prevCumulativeGood, adjustment: qty_good },
         });
       }
-   
-      // ── VALIDASI 2: Qty_good tidak boleh melebihi output upstream ──────────────
-      // Cari station dengan sequence 1 di bawah station ini (upstream)
-      const upstreamStation = await SWorkOrderStation.findOne({
-        where: {
-          wo_id:    id,
-          sequence: station.sequence - 1,
-        },
-        transaction: t,
-      });
-   
-      if (upstreamStation) {
-        // Ada upstream station → batasi berdasarkan output upstream
-        const upstreamActual = upstreamStation.actual_quantity ?? 0;
-        
-        if (newCumulativeGood > upstreamActual) {
-          await t.rollback();
-          return helper.sendResponse(res, {
-            status: false, code: 400,
-            error:  `Qty good (${newCumulativeGood}) cannot exceed upstream station output (${upstreamActual})`,
-            data: {
-              current_cumulative_good: prevCumulativeGood,
-              requested_qty_good:      qty_good,
-              new_cumulative:          newCumulativeGood,
-              upstream_station_id:     upstreamStation.id,
-              upstream_actual_qty:     upstreamActual,
-            },
-          });
+  
+      // Find upstream by nearest lower sequence
+      const [upstreamStation] = await sequelize.query(
+        `SELECT id, sequence, status, actual_quantity
+         FROM s_work_order_stations
+         WHERE wo_id = :woId AND sequence < :currentSeq
+         ORDER BY sequence DESC LIMIT 1`,
+        { replacements: { woId: id, currentSeq: station.sequence }, type: sequelize.QueryTypes.SELECT, transaction: t },
+      );
+  
+      const maxAllowed = Math.ceil(wo.planned_quantity * 1.1);
+  
+      if (!isCorrection) {
+        if (upstreamStation) {
+          if (!['In_Progress', 'Completed'].includes(upstreamStation.status)) {
+            await t.rollback();
+            return helper.sendResponse(res, {
+              status: false, code: 400,
+              error:  `Upstream station (sequence ${upstreamStation.sequence}) must be started before reporting progress`,
+              data:   { upstream_station_id: upstreamStation.id, upstream_status: upstreamStation.status },
+            });
+          }
+  
+          // Total unit dikonsumsi (good + reject + scrap) tidak boleh melebihi output upstream
+          // karena dalam assembly, reject/scrap pun berasal dari unit yang keluar upstream
+          const upstreamActual = upstreamStation.actual_quantity ?? 0;
+          if (newCumulativeTotal > upstreamActual) {
+            await t.rollback();
+            return helper.sendResponse(res, {
+              status: false, code: 400,
+              error:  `Total units consumed at this station (${newCumulativeTotal}) cannot exceed upstream output (${upstreamActual})`,
+              data:   {
+                prev_cumulative_total: prevCumulativeTotal,
+                new_cumulative_total:  newCumulativeTotal,
+                upstream_station_id:   upstreamStation.id,
+                upstream_actual_qty:   upstreamActual,
+                upstream_status:       upstreamStation.status,
+              },
+            });
+          }
+        } else {
+          // First station — batasi total konsumsi ke 110% planned
+          if (newCumulativeTotal > maxAllowed) {
+            await t.rollback();
+            return helper.sendResponse(res, {
+              status: false, code: 400,
+              error:  `Total units processed (${newCumulativeTotal}) exceeds 110% of planned (${maxAllowed})`,
+              data:   { new_cumulative_total: newCumulativeTotal, max_allowed: maxAllowed },
+            });
+          }
         }
-      } else {
-        // Station pertama → batasi berdasarkan 110% planned
-        if (newCumulativeGood > maxAllowed) {
+      }
+  
+      // Koreksi: validasi hasil tidak melebihi upstream final jika sudah Completed
+      if (isCorrection && upstreamStation?.status === 'Completed') {
+        const upstreamActual = upstreamStation.actual_quantity ?? 0;
+        if (newCumulativeTotal > upstreamActual) {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  `Qty good (${newCumulativeGood}) exceeds 110% of planned (${maxAllowed})`,
+            error:  `Corrected total consumed (${newCumulativeTotal}) still exceeds upstream final output (${upstreamActual})`,
+            data:   { new_cumulative_total: newCumulativeTotal, upstream_actual: upstreamActual },
           });
         }
       }
-   
-      // ── Create progress record ─────────────────────────────────────────────────
+  
       const progressPct = wo.planned_quantity > 0
         ? Math.round((newCumulativeGood / wo.planned_quantity) * 10000) / 100
         : 0;
-   
+  
       const now = new Date();
       const progress = await SWorkOrderProgress.create({
         wo_station_id:       station.id,
@@ -979,23 +1048,162 @@ class WorkOrderModule extends BaseModule {
         progress_time:       now,
         reported_at:         now,
       }, { transaction: t });
-   
-      // ── Update station actual_quantity ────────────────────────────────────────
+  
       await station.update({ actual_quantity: newCumulativeGood }, { transaction: t });
-   
+  
       await t.commit();
-      return helper.sendResponse(res, { 
-        status: true, code: 201, message: 'Progress recorded', 
+      return helper.sendResponse(res, {
+        status: true, code: isCorrection ? 200 : 201,
+        message: isCorrection ? 'Progress correction recorded' : 'Progress recorded',
         data: {
           ...progress.toJSON(),
-          // Return context untuk UI
-          new_cumulative_good: newCumulativeGood,
-          upstream_constraint: upstreamStation ? `Max ${upstreamStation.actual_quantity ?? 0} from upstream` : 'First station - max 110% planned',
+          is_correction:        isCorrection,
+          reason:               reason ?? null,
+          new_cumulative_good:  newCumulativeGood,
+          new_cumulative_total: newCumulativeTotal,
+          upstream_constraint:  upstreamStation
+            ? `Max ${upstreamStation.actual_quantity ?? 0} total units from upstream (seq ${upstreamStation.sequence})`
+            : `First station — max 110% planned (${maxAllowed})`,
         },
       });
     } catch (error) {
       await t.rollback();
       console.log('[WorkOrderModule][addStationProgress]:', error);
+      return helper.sendResponse(res, { status: false, code: 500, error: error.message });
+    }
+  }
+
+  async editLastProgress(req, res) {
+    const t = await sequelize.transaction();
+    try {
+      const { id, station_id } = req.params;
+  
+      const schema = Joi.object({
+        qty_good:    Joi.number().integer().min(0).required(),
+        qty_reject:  Joi.number().integer().min(0).default(0),
+        qty_scrap:   Joi.number().integer().min(0).default(0),
+        reported_by: Joi.number().integer().min(1).required(),
+      });
+  
+      const validation = helper.validate(req.body, schema);
+      if (!validation.status) {
+        await t.rollback();
+        return helper.sendResponse(res, validation);
+      }
+  
+      const wo = await SWorkOrder.findOne({ where: { id, deleted_at: null }, transaction: t });
+      if (!wo) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Work Order not found' });
+      }
+  
+      const station = await SWorkOrderStation.findOne({ where: { id: station_id, wo_id: id }, transaction: t });
+      if (!station) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'Station not found for this Work Order' });
+      }
+      if (station.status !== 'In_Progress') {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 400, error: 'Edit only allowed on In_Progress stations' });
+      }
+  
+      // Ambil record terakhir
+      const lastProgress = await SWorkOrderProgress.findOne({
+        where:   { wo_station_id: station_id },
+        order:   [['reported_at', 'DESC']],
+        transaction: t,
+      });
+      if (!lastProgress) {
+        await t.rollback();
+        return helper.sendResponse(res, { status: false, code: 404, error: 'No progress record found to edit' });
+      }
+  
+      const { qty_good, qty_reject, qty_scrap, reported_by } = validation.value;
+  
+      // Hitung cumulative sebelum record terakhir
+      const [prevState] = await sequelize.query(
+        `SELECT
+           COALESCE(SUM(qty_good),   0) AS total_good,
+           COALESCE(SUM(qty_reject), 0) AS total_reject,
+           COALESCE(SUM(qty_scrap),  0) AS total_scrap
+         FROM s_work_order_progresses
+         WHERE wo_station_id = :stationId AND id != :lastId`,
+        { replacements: { stationId: station_id, lastId: lastProgress.id }, type: sequelize.QueryTypes.SELECT, transaction: t },
+      );
+  
+      const prevGood   = parseInt(prevState?.total_good   ?? 0, 10);
+      const prevReject = parseInt(prevState?.total_reject ?? 0, 10);
+      const prevScrap  = parseInt(prevState?.total_scrap  ?? 0, 10);
+  
+      const newCumulativeGood  = prevGood   + qty_good;
+      const newCumulativeTotal = newCumulativeGood + prevReject + qty_reject + prevScrap + qty_scrap;
+  
+      // Validasi upstream
+      const [upstreamStation] = await sequelize.query(
+        `SELECT id, sequence, status, actual_quantity
+         FROM s_work_order_stations
+         WHERE wo_id = :woId AND sequence < :currentSeq
+         ORDER BY sequence DESC LIMIT 1`,
+        { replacements: { woId: id, currentSeq: station.sequence }, type: sequelize.QueryTypes.SELECT, transaction: t },
+      );
+  
+      const maxAllowed = Math.ceil(wo.planned_quantity * 1.1);
+  
+      if (upstreamStation) {
+        const upstreamActual = upstreamStation.actual_quantity ?? 0;
+        if (newCumulativeTotal > upstreamActual) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `Total units consumed (${newCumulativeTotal}) cannot exceed upstream output (${upstreamActual})`,
+            data:   { new_cumulative_total: newCumulativeTotal, upstream_actual: upstreamActual },
+          });
+        }
+      } else {
+        if (newCumulativeTotal > maxAllowed) {
+          await t.rollback();
+          return helper.sendResponse(res, {
+            status: false, code: 400,
+            error:  `Total units processed (${newCumulativeTotal}) exceeds 110% of planned (${maxAllowed})`,
+          });
+        }
+      }
+  
+      const progressPct = wo.planned_quantity > 0
+        ? Math.round((newCumulativeGood / wo.planned_quantity) * 10000) / 100
+        : 0;
+  
+      // Hapus record terakhir lalu buat yang baru
+      await lastProgress.destroy({ transaction: t });
+  
+      const now = new Date();
+      const newProgress = await SWorkOrderProgress.create({
+        wo_station_id:       station.id,
+        qty_good,
+        qty_reject,
+        qty_scrap,
+        cumulative_qty:      newCumulativeTotal,
+        cumulative_qty_good: newCumulativeGood,
+        progress_pct:        progressPct,
+        reported_by,
+        progress_time:       now,
+        reported_at:         now,
+      }, { transaction: t });
+  
+      await station.update({ actual_quantity: newCumulativeGood }, { transaction: t });
+  
+      await t.commit();
+      return helper.sendResponse(res, {
+        status: true, code: 200, message: 'Last progress record updated',
+        data: {
+          ...newProgress.toJSON(),
+          new_cumulative_good:  newCumulativeGood,
+          new_cumulative_total: newCumulativeTotal,
+        },
+      });
+    } catch (error) {
+      await t.rollback();
+      console.log('[WorkOrderModule][editLastProgress]:', error);
       return helper.sendResponse(res, { status: false, code: 500, error: error.message });
     }
   }
@@ -1237,7 +1445,7 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Keep: updateStationStatus (manual override) ───────────────────────────
+  // ── WO Station: Status ────────────────────────────────────────────────────
 
   async updateStationStatus(req, res) {
     const t = await sequelize.transaction();
@@ -1277,15 +1485,28 @@ class WorkOrderModule extends BaseModule {
     }
   }
 
-  // ── Internal: Sync schedule and PO after WO Line completion ──────────────
+  // ── Internal: Sync schedule and PO ────────────────────────────────────────
+  // ✅ FIXED: Add upper-bound validation
 
   async _syncScheduleAndPO(wo, actualQty, now, t) {
     if (!wo.po_schedule_id) return;
 
-    const accumulatedActualQty = await SWorkOrder.sum('actual_quantity', {
-      where: { po_schedule_id: wo.po_schedule_id, deleted_at: null },
-      transaction: t,
-    });
+    // ✅ FIXED: Get both actual and planned to prevent over-production
+    const [scheduleData] = await sequelize.query(
+      `SELECT
+         COALESCE(SUM(wo.actual_quantity), 0) AS accumulated_actual,
+         COALESCE(SUM(wo.planned_quantity), 0) AS total_planned
+       FROM s_work_orders wo
+       WHERE wo.po_schedule_id = :scheduleId
+         AND wo.deleted_at IS NULL`,
+      { replacements: { scheduleId: wo.po_schedule_id }, type: sequelize.QueryTypes.SELECT, transaction: t },
+    );
+
+    const accumulatedActualQty = parseInt(scheduleData?.accumulated_actual ?? 0, 10);
+    const totalPlannedQty = parseInt(scheduleData?.total_planned ?? 0, 10);
+
+    // ✅ Cap actual_qty to planned_qty (prevent over-production)
+    const cappedActualQty = Math.min(accumulatedActualQty, totalPlannedQty);
 
     const pendingInSchedule = await SWorkOrder.count({
       where: { po_schedule_id: wo.po_schedule_id, status: { [Op.ne]: 'Completed' }, deleted_at: null },
@@ -1293,7 +1514,7 @@ class WorkOrderModule extends BaseModule {
     });
 
     await SProductionOrderSchedule.update(
-      { actual_qty_per_day: accumulatedActualQty || 0, status: pendingInSchedule === 0 ? 'Completed' : 'In_Progress' },
+      { actual_qty_per_day: cappedActualQty, status: pendingInSchedule === 0 ? 'Completed' : 'In_Progress' },
       { where: { id: wo.po_schedule_id }, transaction: t },
     );
 
@@ -1331,6 +1552,9 @@ class WorkOrderModule extends BaseModule {
       );
     }
   }
+
+  // ── WO Live Monitor ────────────────────────────────────────────────────────
+  // ✅ FIXED: Ambil reject/scrap dari final station saja
 
   async liveMonitor(req, res) {
     try {
@@ -1381,7 +1605,7 @@ class WorkOrderModule extends BaseModule {
         });
       }
 
-      // All aggregates join via s_work_order_stations (no direct wo_id FK on issues/progresses)
+      // ✅ FIXED: Ambil progress dari final station saja (not SUM all stations)
       const [progressAgg, downtimeAgg, openIssuesAgg] = await Promise.all([
         sequelize.query(
           `SELECT
@@ -1392,6 +1616,11 @@ class WorkOrderModule extends BaseModule {
            FROM s_work_order_stations wos
            LEFT JOIN s_work_order_progresses wop ON wop.wo_station_id = wos.id
            WHERE wos.wo_id IN (:woIds)
+             AND wos.sequence = (
+               SELECT MAX(sequence) 
+               FROM s_work_order_stations 
+               WHERE wo_id = wos.wo_id
+             )
            GROUP BY wos.wo_id`,
           { replacements: { woIds }, type: sequelize.QueryTypes.SELECT },
         ),
@@ -1417,12 +1646,18 @@ class WorkOrderModule extends BaseModule {
              woi.severity,
              woi.reported_time,
              woi.issue_description,
-             wos.id AS wo_station_id
+             woi.paused_at,
+             wos.id                 AS wo_station_id,
+             wos.wo_station_number,
+             st.station_code,
+             st.name                 AS station_name
            FROM s_work_order_stations wos
            INNER JOIN s_work_order_issues woi
              ON woi.wo_station_id = wos.id
              AND woi.resolved_time IS NULL
              AND woi.deleted_at IS NULL
+           LEFT JOIN s_stations st
+             ON st.id = wos.station_id
            WHERE wos.wo_id IN (:woIds)`,
           { replacements: { woIds }, type: sequelize.QueryTypes.SELECT },
         ),
@@ -1437,10 +1672,14 @@ class WorkOrderModule extends BaseModule {
         openIssuesMap[row.wo_id].push({
           id:                row.id,
           wo_station_id:     row.wo_station_id,
+          station_name:      row.station_name ?? null,
+          station_code:      row.station_code ?? null,
+          wo_station_number: row.wo_station_number ?? null,
           issue_type:        row.issue_type,
           severity:          row.severity,
           reported_time:     row.reported_time,
           issue_description: row.issue_description,
+          paused_at:         row.paused_at ?? null,
         });
       }
 

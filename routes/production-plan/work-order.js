@@ -55,6 +55,10 @@ router.post('/:id/stations/:station_id/progresses', auth.sessionChecker, async (
   await workOrderModule.addStationProgress(req, res);
 });
 
+router.patch('/:id/stations/:station_id/progresses/last', auth.sessionChecker, async (req, res) => {
+  await workOrderModule.editLastProgress(req, res);
+});
+
 // ── Station Issues ────────────────────────────────────────────────────────────
 
 router.get('/:id/stations/:station_id/issues', auth.sessionChecker, async (req, res) => {

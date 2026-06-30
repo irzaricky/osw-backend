@@ -566,7 +566,7 @@ function buildDetailRows({ dos, plan_id, startSeq = 1 }) {
 
 async function fetchDosWithDetails(doIds, t) {
   return SDeliveryOrders.findAll({
-    where:       { id: doIds, delivery_status: "Scheduled" },
+    where:       { id: doIds, delivery_status: "Created" },
     attributes:  ["id", "shipment_date", "customer_id"],
     include: [{
       model:      SDeliveryOrderDetails,
@@ -751,7 +751,7 @@ class PlanModule extends BaseModule {
 
       const dos = await SDeliveryOrders.findAll({
         where: {
-          delivery_status: "Scheduled",
+          delivery_status: "Created",
           // shipment_date:   { [Op.between]: [startStr, endStr] },
           ...(allocatedDoIds.length ? { id: { [Op.notIn]: allocatedDoIds } } : {}),
         },
@@ -887,7 +887,7 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  "One or more Delivery Orders are invalid or not in Scheduled status",
+          error:  "One or more Delivery Orders are invalid or not in Created status",
         });
       }
 
@@ -1132,7 +1132,7 @@ class PlanModule extends BaseModule {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  "One or more Delivery Orders are invalid or not in Scheduled status",
+            error:  "One or more Delivery Orders are invalid or not in Created status",
           });
         }
 

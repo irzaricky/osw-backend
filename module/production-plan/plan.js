@@ -51,8 +51,6 @@ function toDateStr(val) {
 }
 
 // ─── CAPACITY CALCULATION ────────────────────────────────────────────────────
-// Capacity is computed day-by-day: each day resolves its active shifts from the master
-// calendar plus ADD_SHIFT adjustments, then overtime per (date, shift) is applied.(baseParam, plan_month, planId, t) {
 async function buildEffectiveParams(baseParam, plan_month, planId, t) {
   const { startStr, endStr } = getPlanMonthRange(plan_month);
 
@@ -318,9 +316,6 @@ async function _calcLineCapacity({ plan_id, line_id, plan_month, plan, param, pl
     );
   }
 
-  // ── Amendment: kurangi kapasitas dengan yang sudah dikonsumsi parent plan ──
-  // Consumed capacity = total scheduled_qty dari PO Released milik parent plan
-  // pada line yang sama.
   let consumed_units = 0;
   if (plan?.plan_type === 'AMENDMENT' && plan?.parent_plan_id) {
     const releasedPOs = await SProductionOrder.findAll({
@@ -571,7 +566,7 @@ function buildDetailRows({ dos, plan_id, startSeq = 1 }) {
 
 async function fetchDosWithDetails(doIds, t) {
   return SDeliveryOrders.findAll({
-    where:       { id: doIds, delivery_status: "Scheduled" },
+    where:       { id: doIds, delivery_status: "Created" },
     attributes:  ["id", "shipment_date", "customer_id"],
     include: [{
       model:      SDeliveryOrderDetails,
@@ -756,7 +751,7 @@ class PlanModule extends BaseModule {
 
       const dos = await SDeliveryOrders.findAll({
         where: {
-          delivery_status: "Scheduled",
+          delivery_status: "Created",
           // shipment_date:   { [Op.between]: [startStr, endStr] },
           ...(allocatedDoIds.length ? { id: { [Op.notIn]: allocatedDoIds } } : {}),
         },
@@ -892,7 +887,7 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, {
           status: false, code: 400,
-          error:  "One or more Delivery Orders are invalid or not in Scheduled status",
+          error:  "One or more Delivery Orders are invalid or not in Created status",
         });
       }
 
@@ -1137,7 +1132,7 @@ class PlanModule extends BaseModule {
           await t.rollback();
           return helper.sendResponse(res, {
             status: false, code: 400,
-            error:  "One or more Delivery Orders are invalid or not in Scheduled status",
+            error:  "One or more Delivery Orders are invalid or not in Created status",
           });
         }
 
@@ -1362,7 +1357,6 @@ class PlanModule extends BaseModule {
       const schema = Joi.object({
         date:   Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
         shifts: Joi.array().items(shiftSchema).min(1).max(3).required(),
-        reason: Joi.string().trim().min(1).required(),
       });
   
       const validation = helper.validate(req.body, schema);
@@ -1371,7 +1365,7 @@ class PlanModule extends BaseModule {
         return helper.sendResponse(res, validation);
       }
   
-      const { date, shifts: shiftInputs, reason } = validation.value;
+      const { date, shifts: shiftInputs } = validation.value;
   
       // Validate duplicate shift_number within payload
       const inputShiftNumbers = shiftInputs.map(s => s.shift_number);
@@ -1509,7 +1503,6 @@ class PlanModule extends BaseModule {
             adjustment_type:     'ADD_SHIFT',
             shift_id:            shiftId,
             overtime_minutes:    null,
-            reason:              reason.trim(),
             inherited_from_plan: null,
           });
         }
@@ -1531,7 +1524,6 @@ class PlanModule extends BaseModule {
             adjustment_type:     'ADD_OVERTIME',
             shift_id:            shiftId,
             overtime_minutes,
-            reason:              reason.trim(),
             inherited_from_plan: null,
           });
         }

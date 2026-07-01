@@ -651,7 +651,7 @@ class WorkOrderStoringModule extends BaseModule {
               };
             }
 
-            if (!['Released', 'In Progress'].includes(productionWO.status)) {
+            if (!['Released', 'In_Progress'].includes(productionWO.status)) {
               await t.rollback();
               return {
                 status: false,
@@ -1264,7 +1264,7 @@ class WorkOrderStoringModule extends BaseModule {
               };
             }
 
-            if (!['Released', 'In Progress'].includes(productionWO.status)) {
+            if (!['Released', 'In_Progress'].includes(productionWO.status)) {
               await t.rollback();
               return {
                 status: false,
@@ -2101,7 +2101,7 @@ class WorkOrderStoringModule extends BaseModule {
       const workOrders = await SWorkOrder.findAll({
         where: {
           status: {
-            [Op.in]: ['Released', 'In Progress']
+            [Op.in]: ['Released', 'In_Progress']
           }
         },
         attributes: ['id', 'wo_number', 'planned_quantity'],

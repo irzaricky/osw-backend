@@ -23,6 +23,11 @@ export default (sequelize) => {
         as: 'items'
       });
 
+      TMaterialReceiving.hasMany(models.TWorkOrderStoring, {
+        foreignKey: 'ref_doc_id',
+        as: 'work_orders'
+      });
+
       TMaterialReceiving.hasOne(models.TGoodReceipt, {
         foreignKey: 'mr_id',
         as: 'good_receipt'

@@ -393,7 +393,16 @@ class WorkOrderModule extends BaseModule {
  
       const wo = await SWorkOrder.findOne({
         where:   { id, deleted_at: null },
-        include: [{ model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name'] }],
+        include: [
+          { model: SParts, as: 'part', attributes: ['id', 'part_number', 'part_name'] },
+          {
+            model:    SWorkOrderStation,
+            as:       'stations',
+            required: false,
+            attributes: ['id', 'sequence', 'status', 'actual_quantity'],
+            order:    [['sequence', 'ASC']],
+          },
+        ],
       });
       if (!wo) return helper.sendResponse(res, { status: false, code: 404, error: 'Work Order not found' });
  
@@ -463,6 +472,7 @@ class WorkOrderModule extends BaseModule {
             planned_quantity: wo.planned_quantity,
             status:           wo.status,
             part:             wo.part ?? null,
+            stations:         wo.stations ?? [],
           },
           station,
           output_parts: outputParts,
@@ -1325,21 +1335,22 @@ class WorkOrderModule extends BaseModule {
     const t = await sequelize.transaction();
     try {
       const { id, station_id, issue_id } = req.params;
-
+  
       const schema = Joi.object({
         resolution:             Joi.string().required(),
         resolved_by:            Joi.number().integer().min(1).required(),
         resumed_by:             Joi.number().integer().min(1).optional().allow(null),
         resumed_at:             Joi.date().iso().optional().allow(null),
         pause_duration_minutes: Joi.number().integer().min(0).optional().allow(null),
+        downtime_end:           Joi.date().iso().optional().allow(null),
       });
-
+  
       const validation = helper.validate(req.body, schema);
       if (!validation.status) {
         await t.rollback();
         return helper.sendResponse(res, validation);
       }
-
+  
       const issue = await SWorkOrderIssue.findOne({
         where: { id: issue_id, wo_station_id: station_id, deleted_at: null },
         transaction: t,
@@ -1352,18 +1363,42 @@ class WorkOrderModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 400, error: 'Issue is already resolved' });
       }
+  
+      const { resolution, resolved_by, resumed_by, resumed_at, pause_duration_minutes, downtime_end } = validation.value;
+  
+      const resolvedTime   = new Date()
+      const effectiveDowntimeEnd = issue.issue_type === 'DOWNTIME'
+        ? (downtime_end ? new Date(downtime_end) : resolvedTime)
+        : null
+  
+      let downtimeMinutes = null
+      if (issue.issue_type === 'DOWNTIME' && issue.downtime_start) {
+        const diffMs = effectiveDowntimeEnd.getTime() - new Date(issue.downtime_start).getTime()
+        downtimeMinutes = Math.max(0, Math.round(diffMs / 60000))
+      }
 
-      const { resolution, resolved_by, resumed_by, resumed_at, pause_duration_minutes } = validation.value;
-
+      if (issue.issue_type === 'DOWNTIME' && downtime_end && issue.downtime_start) {
+        if (new Date(downtime_end) <= new Date(issue.downtime_start)) {
+          await t.rollback()
+          return helper.sendResponse(res, {
+            status: false,
+            code:   400,
+            error:  'downtime_end must be after downtime_start',
+          })
+        }
+      }
+  
       await issue.update({
         resolution,
         resolved_by,
-        resolved_time:          new Date(),
-        resumed_by:             resumed_by             ?? null,
-        resumed_at:             resumed_at             ?? null,
+        resolved_time:          resolvedTime,
+        resumed_by:             resumed_by  ?? null,
+        resumed_at:             resumed_at  ?? null,
         pause_duration_minutes: pause_duration_minutes ?? null,
+        downtime_end:           effectiveDowntimeEnd,
+        downtime_minutes:       downtimeMinutes,
       }, { transaction: t });
-
+  
       await t.commit();
       return helper.sendResponse(res, { status: true, code: 200, message: 'Issue resolved', data: issue });
     } catch (error) {
@@ -1647,6 +1682,7 @@ class WorkOrderModule extends BaseModule {
              woi.reported_time,
              woi.issue_description,
              woi.paused_at,
+             woi.downtime_start,
              wos.id                 AS wo_station_id,
              wos.wo_station_number,
              st.station_code,
@@ -1672,14 +1708,15 @@ class WorkOrderModule extends BaseModule {
         openIssuesMap[row.wo_id].push({
           id:                row.id,
           wo_station_id:     row.wo_station_id,
-          station_name:      row.station_name ?? null,
-          station_code:      row.station_code ?? null,
+          station_name:      row.station_name      ?? null,
+          station_code:      row.station_code      ?? null,
           wo_station_number: row.wo_station_number ?? null,
           issue_type:        row.issue_type,
           severity:          row.severity,
           reported_time:     row.reported_time,
           issue_description: row.issue_description,
-          paused_at:         row.paused_at ?? null,
+          paused_at:         row.paused_at         ?? null,
+          downtime_start:    row.downtime_start     ?? null,
         });
       }
 

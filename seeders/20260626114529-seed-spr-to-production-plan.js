@@ -3,448 +3,678 @@
 /**
  * SEEDER: SPR → SPO → SDP → SDO → Production Plan (Jan-Sep 2026)
  *
- * Alur: Sales Purchase Request → Sales Purchase Order → Sales Delivery Plan → Sales Delivery Order → Production Plan
- *
- * SCENARIO:
- * - Jan-May: SPR → SPO → SDP → SDO → Production Plan (dengan adjustments) → Production Order Schedule (draft)
- * - Jun: SPR → SPO → SDP → SDO → Production Plan (status Draft, no adjustments)
- * - Jul-Sep: SPR → SPO → SDP → SDO only (tanpa Production Plan)
- *
- * Delivery dates: 3rd & 4th week setiap bulan
- * Products: Semua PRODUCT part dari s_parts
+ * FLOW LENGKAP:
+ *   SPR  → s_sales_purchase_requests + s_sales_purchase_request_details
+ *   SPO  → s_sales_purchase_orders + s_sales_purchase_order_details
+ *   SDP  → s_delivery_plans + s_delivery_plan_details
+ *   SDO  → s_delivery_orders + s_delivery_order_details
+ *   PP   → s_production_plans                          (Jan–Jun)
+ *        → s_production_plan_capacity_params           (Jan–Jun)
+ *        → s_production_plan_capacity_results          (Jan–Jun)  ← FIX: sebelumnya tidak ada
+ *        → s_production_plan_details (do_id+do_detail_id+part_id) ← FIX: sebelumnya tidak ada
+ *        → s_production_plan_calendar_adjustments      (Jan–May)
  */
+
 export default {
   async up(queryInterface, Sequelize) {
     const now = new Date();
-
-    // ── Helper functions ────────────────────────────────────────────────────
-    
     const formatDate = (date) => date.toISOString().split('T')[0];
 
-    // Get delivery dates (3rd & 4th week of month)
+    /** Senin pekan ke-3 dan ke-4 dari bulan yang diberikan */
     function getDeliveryDates(year, month) {
-      const firstDay = new Date(year, month - 1, 1);
+      const firstDay  = new Date(year, month - 1, 1);
       const dayOfWeek = firstDay.getDay();
-      
-      // Hitung hari pertama minggu ke-3 (hari Senin minggu ke-3)
-      let daysUntilMonday = (8 - dayOfWeek) % 7;
-      let thirdWeekMonday = new Date(firstDay);
-      thirdWeekMonday.setDate(firstDay.getDate() + daysUntilMonday + 14); // +14 untuk minggu ke-3
-      
-      let fourthWeekMonday = new Date(thirdWeekMonday);
-      fourthWeekMonday.setDate(fourthWeekMonday.getDate() + 7);
-      
-      return [
-        formatDate(thirdWeekMonday),
-        formatDate(fourthWeekMonday),
-      ];
+      const toMonday  = (8 - dayOfWeek) % 7;
+
+      const week3Monday = new Date(firstDay);
+      week3Monday.setDate(firstDay.getDate() + toMonday + 14);
+
+      const week4Monday = new Date(week3Monday);
+      week4Monday.setDate(week3Monday.getDate() + 7);
+
+      return [formatDate(week3Monday), formatDate(week4Monday)];
     }
 
     console.log('[SEEDER] Initializing SPR → SPO → SDP → SDO → Production Plan seeder...\n');
 
-    // ── 1. Fetch data master ────────────────────────────────────────────────
+    // ── 1. Master data ──────────────────────────────────────────────────────────
     console.log('[SEEDER] Loading master data...');
-    
-    // Products (PRODUCT type only)
-    const [products] = await queryInterface.sequelize.query(
-      `SELECT id, part_number FROM s_parts 
+
+    const products = await queryInterface.sequelize.query(
+      `SELECT id, part_number FROM s_parts
        WHERE part_type_code = 'PRODUCT' AND deleted_at IS NULL
-       ORDER BY part_number ASC;`,
+       ORDER BY part_number ASC LIMIT 10;`,
       { type: Sequelize.QueryTypes.SELECT }
     );
 
-    // Customers (untuk delivery order)
-    const [customers] = await queryInterface.sequelize.query(
+    const customers = await queryInterface.sequelize.query(
       `SELECT id FROM s_customers WHERE deleted_at IS NULL ORDER BY id LIMIT 6;`,
       { type: Sequelize.QueryTypes.SELECT }
     );
 
-    // Lines
-    const [lines] = await queryInterface.sequelize.query(
+    const lines = await queryInterface.sequelize.query(
       `SELECT id FROM s_lines WHERE deleted_at IS NULL ORDER BY id LIMIT 1;`,
       { type: Sequelize.QueryTypes.SELECT }
     );
 
-    // Shifts (untuk calendar adjustment)
-    const [shifts] = await queryInterface.sequelize.query(
-      `SELECT id, shift_number FROM s_shifts 
+    const shifts = await queryInterface.sequelize.query(
+      `SELECT id, shift_number FROM s_shifts
        WHERE type = 'REGULAR' AND active = true AND deleted_at IS NULL
        ORDER BY shift_number ASC;`,
       { type: Sequelize.QueryTypes.SELECT }
     );
 
-    if (products.length === 0 || customers.length === 0 || lines.length === 0) {
-      console.warn('⚠️ Missing master data (products, customers, lines). Seeder stopped.');
+    const users = await queryInterface.sequelize.query(
+      `SELECT id FROM s_users WHERE deleted_at IS NULL ORDER BY id LIMIT 1;`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+
+    const warehouses = await queryInterface.sequelize.query(
+      `SELECT id FROM s_warehouses WHERE deleted_at IS NULL ORDER BY id LIMIT 1;`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+
+    const docks = await queryInterface.sequelize.query(
+      `SELECT id FROM s_docks WHERE deleted_at IS NULL ORDER BY id LIMIT 1;`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+
+    // routing_id nullable di plan_details — fetch kalau ada, skip kalau tidak
+    const routings = await queryInterface.sequelize.query(
+      `SELECT id, part_id FROM s_part_routings
+       WHERE active = true AND deleted_at IS NULL
+       ORDER BY id ASC;`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+
+    if (
+      products.length   === 0 ||
+      customers.length  === 0 ||
+      lines.length      === 0 ||
+      users.length      === 0 ||
+      warehouses.length === 0 ||
+      docks.length      === 0
+    ) {
+      console.warn('⚠️  Missing required master data (products/customers/lines/users/warehouses/docks). Seeder stopped.');
       return;
     }
 
-    console.log(`✅ Loaded: ${products.length} products, ${customers.length} customers, ${lines.length} line(s), ${shifts.length} shift(s)\n`);
+    const lineId      = lines[0].id;
+    const userId      = users[0].id;
+    const warehouseId = warehouses[0].id;
+    const dockId      = docks[0].id;
 
-    const lineId = lines[0].id;
-    const productMap = Object.fromEntries(products.map(p => [p.part_number, p.id]));
+    // Map part_id → routing_id (pakai routing pertama yang ditemukan per part)
+    const routingByPartId = {};
+    for (const r of routings) {
+      if (!routingByPartId[r.part_id]) routingByPartId[r.part_id] = r.id;
+    }
 
-    // ── 2. Generate data untuk setiap bulan (Jan-Sep) ──────────────────────
+    console.log(
+      `✅ Loaded: ${products.length} products, ${customers.length} customers, ` +
+      `${lines.length} line(s), ${shifts.length} shift(s), ` +
+      `${routings.length} routing(s), warehouse #${warehouseId}, dock #${dockId}\n`
+    );
+
     const stats = {};
 
+    // ── 2. Loop Jan–Sep 2026 ───────────────────────────────────────────────────
     for (let month = 1; month <= 9; month++) {
       console.log(`\n${'='.repeat(60)}`);
-      console.log(`📋 MONTH ${month}/2026`);
+      console.log(`📋  MONTH ${month}/2026`);
       console.log(`${'='.repeat(60)}`);
 
       const [deliveryDate1, deliveryDate2] = getDeliveryDates(2026, month);
-      
       stats[month] = { spr: 0, spo: 0, sdp: 0, sdo: 0, plan: 0, adj: 0 };
 
-      // ── STEP 1: Create SPR (Sales Purchase Requests) ─────────────────────
-      console.log(`\n▶ Creating Sales Purchase Requests...`);
-      const sprData = [];
-      let sprSeq = 1;
+      // ── STEP 1: SPR ──────────────────────────────────────────────────────────
+      console.log('\n▶ [1] Creating Sales Purchase Requests...');
+      const sprData        = [];
+      const sprDetailsData = [];
+      let   sprSeq         = 1;
+      const productLimit   = Math.min(products.length, 4);
 
-      for (let p = 0; p < products.length; p++) {
-        const product = products[p];
-        const deliveryDate = p % 2 === 0 ? deliveryDate1 : deliveryDate2;
-        
+      for (let p = 0; p < productLimit; p++) {
+        const product      = products[p];
+        const requiredDate = p % 2 === 0 ? deliveryDate1 : deliveryDate2;
+
         sprData.push({
           spr_number:     `SPR-2026-${String(month).padStart(2, '0')}-${String(sprSeq).padStart(4, '0')}`,
-          spr_date:       formatDate(now),
-          delivery_date:  deliveryDate,
+          spr_name:       `SPR ${product.part_number} Month ${month}`,
+          source:         'Sales Forecast',
+          request_date:   formatDate(now),
+          required_date:  requiredDate,
           status:         'Confirmed',
-          notes:          `SPR for ${product.part_number} - Month ${month}`,
-          created_by:     1,
-          approved_by:    1,
-          approved_at:    now,
+          remarks:        `SPR for ${product.part_number}`,
+          created_by:     userId,
+          approved_by:    userId,
+          confirmed_date: formatDate(now),
           created_at:     now,
           updated_at:     now,
+        });
+        sprDetailsData.push({
+          part_id:    product.id,
+          qty:        Math.floor(Math.random() * 100) + 50,
+          created_at: now,
+          updated_at: now,
         });
         sprSeq++;
       }
 
       await queryInterface.bulkInsert('s_sales_purchase_requests', sprData);
       stats[month].spr = sprData.length;
-      console.log(`  ✓ ${sprData.length} SPR created`);
 
-      // Fetch inserted SPRs
-      const [insertedSPRs] = await queryInterface.sequelize.query(
-        `SELECT id, spr_number, delivery_date FROM s_sales_purchase_requests 
-         WHERE spr_date = $1 AND status = 'Confirmed'
+      const insertedSPRs = await queryInterface.sequelize.query(
+        `SELECT id, required_date FROM s_sales_purchase_requests
+         WHERE request_date = $1 AND status = 'Confirmed'
          ORDER BY id DESC LIMIT ${sprData.length};`,
-        { 
-          bind: [formatDate(now)],
-          type: Sequelize.QueryTypes.SELECT 
-        }
+        { bind: [formatDate(now)], type: Sequelize.QueryTypes.SELECT }
       );
 
-      // ── STEP 2: Create SPO (Sales Purchase Orders) from SPR ──────────────
-      console.log(`\n▶ Creating Sales Purchase Orders...`);
-      const spoData = [];
-      let spoSeq = 1;
+      for (let i = 0; i < insertedSPRs.length; i++) {
+        if (i < sprDetailsData.length) sprDetailsData[i].spr_id = insertedSPRs[i].id;
+      }
+      const validSPRDetails = sprDetailsData.filter(d => d.spr_id);
+      if (validSPRDetails.length > 0) {
+        await queryInterface.bulkInsert('s_sales_purchase_request_details', validSPRDetails);
+      }
+      console.log(`  ✓ ${sprData.length} SPR + ${validSPRDetails.length} detail(s)`);
+
+      // ── STEP 2: SPO ──────────────────────────────────────────────────────────
+      console.log('\n▶ [2] Creating Sales Purchase Orders...');
+      const spoData        = [];
+      const spoDetailsData = [];
+      let   spoSeq         = 1;
 
       for (let i = 0; i < insertedSPRs.length; i++) {
-        const spr = insertedSPRs[i];
-        const product = products[i % products.length];
-        const qty = Math.floor(Math.random() * 100) + 50; // 50-150 units
+        const spr      = insertedSPRs[i];
+        const customer = customers[i % customers.length];
+        const product  = products[i % products.length];
 
         spoData.push({
-          spr_id:         spr.id,
-          po_number:      `SPO-2026-${String(month).padStart(2, '0')}-${String(spoSeq).padStart(4, '0')}`,
-          po_date:        formatDate(now),
-          delivery_date:  spr.delivery_date,
-          status:         'Confirmed',
-          notes:          `SPO for ${product.part_number}`,
-          created_by:     1,
-          approved_by:    1,
-          approved_at:    now,
-          created_at:     now,
-          updated_at:     now,
+          spo_number:        `SPO-2026-${String(month).padStart(2, '0')}-${String(spoSeq).padStart(4, '0')}`,
+          customer_id:       customer.id,
+          spr_id:            spr.id,
+          spo_date:          formatDate(now),
+          delivery_due_date: spr.required_date,
+          status:            'Confirmed',
+          shipping_address:  `Address for customer ${customer.id}`,
+          remarks:           `SPO for month ${month}`,
+          created_by:        userId,
+          created_at:        now,
+          updated_at:        now,
+        });
+        spoDetailsData.push({
+          part_id:     product.id,
+          ordered_qty: Math.floor(Math.random() * 100) + 50,
+          sent_qty:    0,
+          status:      'Open',
+          created_at:  now,
+          updated_at:  now,
         });
         spoSeq++;
       }
 
       await queryInterface.bulkInsert('s_sales_purchase_orders', spoData);
       stats[month].spo = spoData.length;
-      console.log(`  ✓ ${spoData.length} SPO created`);
 
-      // Fetch inserted SPOs
-      const [insertedSPOs] = await queryInterface.sequelize.query(
-        `SELECT id, delivery_date FROM s_sales_purchase_orders 
-         WHERE po_date = $1 AND status = 'Confirmed'
+      const insertedSPOs = await queryInterface.sequelize.query(
+        `SELECT id, delivery_due_date FROM s_sales_purchase_orders
+         WHERE spo_date = $1 AND status = 'Confirmed'
          ORDER BY id DESC LIMIT ${spoData.length};`,
-        { 
-          bind: [formatDate(now)],
-          type: Sequelize.QueryTypes.SELECT 
-        }
+        { bind: [formatDate(now)], type: Sequelize.QueryTypes.SELECT }
       );
 
-      // ── STEP 3: Create SDP (Sales Delivery Plans) from SPO ───────────────
-      console.log(`\n▶ Creating Sales Delivery Plans...`);
+      for (let i = 0; i < insertedSPOs.length; i++) {
+        if (i < spoDetailsData.length) spoDetailsData[i].spo_id = insertedSPOs[i].id;
+      }
+      const validSPODetails = spoDetailsData.filter(d => d.spo_id);
+      if (validSPODetails.length > 0) {
+        await queryInterface.bulkInsert('s_sales_purchase_order_details', validSPODetails);
+      }
+      console.log(`  ✓ ${spoData.length} SPO + ${validSPODetails.length} detail(s)`);
+
+      // ── STEP 3: SDP (Delivery Plans) ─────────────────────────────────────────
+      console.log('\n▶ [3] Creating Delivery Plans...');
       const sdpData = [];
+      let   sdpSeq  = 1;
 
       for (let i = 0; i < Math.min(insertedSPOs.length, 2); i++) {
         const spo = insertedSPOs[i];
-        
         sdpData.push({
-          spo_id:            spo.id,
-          delivery_plan_num: `SDP-2026-${String(month).padStart(2, '0')}-${String(i + 1).padStart(3, '0')}`,
-          plan_date:         formatDate(now),
-          earliest_delivery: spo.delivery_date,
-          latest_delivery:   spo.delivery_date,
-          status:            'Confirmed',
-          notes:             `SDP for month ${month}`,
-          created_by:        1,
-          created_at:        now,
-          updated_at:        now,
+          dp_number:      `DP-2026-${String(month).padStart(2, '0')}-${String(sdpSeq).padStart(4, '0')}`,
+          scheduled_date: spo.delivery_due_date,
+          time_start:     '08:00:00',
+          time_end:       '17:00:00',
+          warehouse_id:   warehouseId,
+          dock_id:        dockId,
+          destination:    `Destination batch ${i + 1} month ${month}`,
+          status:         'Confirmed',
+          created_by:     userId,
+          created_at:     now,
+          updated_at:     now,
         });
+        sdpSeq++;
       }
 
-      if (sdpData.length > 0) {
-        await queryInterface.bulkInsert('s_sales_delivery_plans', sdpData);
-        stats[month].sdp = sdpData.length;
-        console.log(`  ✓ ${sdpData.length} SDP created`);
-      }
+      await queryInterface.bulkInsert('s_delivery_plans', sdpData);
+      stats[month].sdp = sdpData.length;
 
-      // Fetch inserted SDPs
-      const [insertedSDPs] = await queryInterface.sequelize.query(
-        `SELECT id, earliest_delivery, latest_delivery FROM s_sales_delivery_plans 
-         WHERE plan_date = $1 AND status = 'Confirmed'
+      const insertedSDPs = await queryInterface.sequelize.query(
+        `SELECT id FROM s_delivery_plans
+         WHERE scheduled_date >= $1 AND status = 'Confirmed'
          ORDER BY id DESC LIMIT ${sdpData.length};`,
-        { 
-          bind: [formatDate(now)],
-          type: Sequelize.QueryTypes.SELECT 
+        {
+          bind: [formatDate(new Date(2026, month - 1, 1))],
+          type: Sequelize.QueryTypes.SELECT,
         }
       );
 
-      // ── STEP 4: Create SDO (Sales Delivery Orders) from SDP ──────────────
-      console.log(`\n▶ Creating Sales Delivery Orders...`);
+      // ── STEP 4: SDP Details ───────────────────────────────────────────────────
+      console.log('\n▶ [4] Creating Delivery Plan Details...');
+      const spoIdsThisMonth  = insertedSPOs.map(s => s.id);
+      const spoDetailsForSDP = await queryInterface.sequelize.query(
+        `SELECT id FROM s_sales_purchase_order_details
+         WHERE spo_id IN (${spoIdsThisMonth.join(',')})
+         ORDER BY id ASC LIMIT ${insertedSDPs.length * 3};`,
+        { type: Sequelize.QueryTypes.SELECT }
+      );
+
+      const sdpDetailsData  = [];
+      let   spoDetailCursor = 0;
+
+      for (const sdp of insertedSDPs) {
+        for (let j = 0; j < Math.min(3, spoDetailsForSDP.length - spoDetailCursor); j++) {
+          sdpDetailsData.push({
+            delivery_plan_id: sdp.id,
+            spo_detail_id:    spoDetailsForSDP[spoDetailCursor].id,
+            planned_qty:      Math.floor(Math.random() * 50) + 30,
+            created_at:       now,
+            updated_at:       now,
+          });
+          spoDetailCursor++;
+        }
+      }
+
+      if (sdpDetailsData.length > 0) {
+        await queryInterface.bulkInsert('s_delivery_plan_details', sdpDetailsData);
+      }
+      console.log(`  ✓ ${sdpDetailsData.length} SDP detail(s)`);
+
+      const sdpIds             = insertedSDPs.map(s => s.id);
+      const insertedSDPDetails = await queryInterface.sequelize.query(
+        `SELECT id FROM s_delivery_plan_details
+         WHERE delivery_plan_id IN (${sdpIds.join(',')})
+         ORDER BY id ASC;`,
+        { type: Sequelize.QueryTypes.SELECT }
+      );
+
+      // ── STEP 5: SDO (Delivery Orders + Details) ───────────────────────────────
+      console.log('\n▶ [5] Creating Delivery Orders...');
       const sdoData = [];
-      const sdoDetailsData = [];
-      let sdoSeq = 1;
+      let   sdoSeq  = 1;
 
       for (let i = 0; i < insertedSDPs.length; i++) {
-        const sdp = insertedSDPs[i];
-        const customerId = customers[i % customers.length].id;
-        
+        const sdp      = insertedSDPs[i];
+        const spo      = insertedSPOs[i] ?? insertedSPOs[0];
+        const customer = customers[i % customers.length];
+
         sdoData.push({
-          do_number:       `DO-2026-${String(month).padStart(2, '0')}-${String(sdoSeq).padStart(4, '0')}`,
-          delivery_plan_id: sdp.id,
-          customer_id:     customerId,
-          vehicle_id:      (i % 3) + 1,
-          driver_id:       (i % 3) + 1,
-          shipment_date:   sdp.latest_delivery,
-          delivery_status: 'Scheduled',
-          notes:           `SDO shipment batch ${String.fromCharCode(65 + i)}-${i + 1}`,
-          created_by:      1,
-          dispatch_approved_by: 1,
+          do_number:            `DO-2026-${String(month).padStart(2, '0')}-${String(sdoSeq).padStart(4, '0')}`,
+          delivery_plan_id:     sdp.id,
+          customer_id:          customer.id,
+          vehicle_id:           (i % 3) + 1,
+          driver_id:            (i % 3) + 1,
+          shipment_date:        spo.delivery_due_date,
+          delivery_status:      'Created',
+          notes:                `SDO shipment batch ${String.fromCharCode(65 + i)}-${i + 1}`,
+          created_by:           userId,
+          dispatch_approved_by: userId,
           dispatch_approved_at: now,
-          created_at:      now,
-          updated_at:      now,
+          created_at:           now,
+          updated_at:           now,
         });
-        
-        // SDO Details
-        for (let p = 0; p < Math.min(3, products.length); p++) {
-          const qty = Math.floor(Math.random() * 50) + 30;
-          sdoDetailsData.push({
-            sent_qty:    qty,
-            notes:       `Detail shipment ${String.fromCharCode(65 + i)}-${p + 1}`,
-            created_at:  now,
-            updated_at:  now,
-          });
-        }
-        
         sdoSeq++;
       }
 
-      if (sdoData.length > 0) {
-        await queryInterface.bulkInsert('s_delivery_orders', sdoData);
-        stats[month].sdo = sdoData.length;
-        console.log(`  ✓ ${sdoData.length} SDO created`);
+      await queryInterface.bulkInsert('s_delivery_orders', sdoData);
+      stats[month].sdo = sdoData.length;
 
-        // Link SDO details
-        const [insertedSDOs] = await queryInterface.sequelize.query(
-          `SELECT id FROM s_delivery_orders 
-           WHERE delivery_plan_id IN (
-             SELECT id FROM s_sales_delivery_plans WHERE plan_date = $1
-           )
-           ORDER BY id DESC LIMIT ${sdoData.length};`,
-          { 
-            bind: [formatDate(now)],
-            type: Sequelize.QueryTypes.SELECT 
-          }
-        );
+      const insertedSDOs = await queryInterface.sequelize.query(
+        `SELECT id, customer_id, shipment_date FROM s_delivery_orders
+         WHERE delivery_plan_id IN (${sdpIds.join(',')})
+         ORDER BY id ASC;`,
+        { type: Sequelize.QueryTypes.SELECT }
+      );
 
-        let detailIdx = 0;
-        for (let i = 0; i < insertedSDOs.length && detailIdx < sdoDetailsData.length; i++) {
-          for (let j = 0; j < 3 && detailIdx < sdoDetailsData.length; j++) {
-            sdoDetailsData[detailIdx].delivery_order_id = insertedSDOs[i].id;
-            detailIdx++;
-          }
+      const sdoDetailsData  = [];
+      let   sdpDetailCursor = 0;
+
+      for (const sdo of insertedSDOs) {
+        for (let j = 0; j < Math.min(3, insertedSDPDetails.length - sdpDetailCursor); j++) {
+          sdoDetailsData.push({
+            delivery_order_id:       sdo.id,
+            delivery_plan_detail_id: insertedSDPDetails[sdpDetailCursor].id,
+            sent_qty:                Math.floor(Math.random() * 50) + 30,
+            notes:                   `Detail shipment ${j + 1}`,
+            created_at:              now,
+            updated_at:              now,
+          });
+          sdpDetailCursor++;
         }
-
-        await queryInterface.bulkInsert('s_delivery_order_details', 
-          sdoDetailsData.filter(d => d.delivery_order_id)
-        );
       }
 
-      // ── STEP 5: Create Production Plans (Jan-Jun only) ───────────────────
-      if (month <= 6) {
-        console.log(`\n▶ Creating Production Plans...`);
-        
-        const planData = [];
-        let planSeq = 1;
+      if (sdoDetailsData.length > 0) {
+        await queryInterface.bulkInsert('s_delivery_order_details', sdoDetailsData);
+      }
+      console.log(`  ✓ ${sdoData.length} SDO + ${sdoDetailsData.length} detail(s)`);
 
-        // Create 1-2 production plans per month
-        for (let i = 0; i < Math.min(insertedSDPs.length, 2); i++) {
-          const sdp = insertedSDPs[i];
-          
-          planData.push({
-            plan_number:            `PP-2026-${String(month).padStart(2, '0')}-${String(planSeq).padStart(5, '0')}`,
-            earliest_delivery_date: sdp.earliest_delivery,
-            latest_delivery_date:   sdp.latest_delivery,
-            status:                 month <= 5 ? 'Approved' : 'Draft',
-            overall_status:         month <= 5 ? 'POSSIBLE' : 'Not_Calculated',
-            plan_month:             `2026-${String(month).padStart(2, '0')}`,
-            plan_type:              'ORIGINAL',
-            notes:                  `Production plan for month ${month}`,
-            created_by:             1,
-            approved_by:            month <= 5 ? 1 : null,
-            approved_at:            month <= 5 ? now : null,
-            created_at:             now,
-            updated_at:             now,
+      // ── STEP 6–9: Production Plan dan turunannya (Jan–Jun saja) ──────────────
+      if (month <= 6) {
+        const [earliest, latest] = getDeliveryDates(2026, month);
+
+        // STEP 6: Production Plan
+        console.log('\n▶ [6] Creating Production Plan...');
+        const planData = [{
+          plan_number:            `PP-2026-${String(month).padStart(2, '0')}-00001`,
+          plan_description:       `Production plan for month ${month}/2026`,
+          earliest_delivery_date: earliest,
+          latest_delivery_date:   latest,
+          total_qty_capacity:     0,           // akan di-update di bawah setelah capacity dihitung
+          status:                 month <= 5 ? 'Approved' : 'Draft',
+          overall_status:         month <= 5 ? 'POSSIBLE' : 'Not_Calculated',
+          plan_month:             `2026-${String(month).padStart(2, '0')}`,
+          plan_type:              'ORIGINAL',
+          notes:                  `Auto-seeded production plan month ${month}`,
+          created_by:             userId,
+          approved_by:            month <= 5 ? userId : null,
+          approved_at:            month <= 5 ? now    : null,
+          created_at:             now,
+          updated_at:             now,
+        }];
+
+        await queryInterface.bulkInsert('s_production_plans', planData);
+        stats[month].plan = 1;
+
+        const [insertedPlan] = await queryInterface.sequelize.query(
+          `SELECT id FROM s_production_plans
+           WHERE plan_month = $1 AND plan_type = 'ORIGINAL'
+           ORDER BY id DESC LIMIT 1;`,
+          {
+            bind: [`2026-${String(month).padStart(2, '0')}`],
+            type: Sequelize.QueryTypes.SELECT,
+          }
+        );
+        const planId = insertedPlan.id;
+
+        // STEP 7: Capacity Params
+        console.log('\n▶ [7] Adding Capacity Params...');
+        const workingDays    = 20 + Math.floor(Math.random() * 3);
+        const shiftsPerDay   = 3;
+        const hoursPerShift  = 7.0;
+        const efficiency     = 0.85;
+        const maxTaktTime    = 2460;   // detik per unit
+
+        await queryInterface.bulkInsert('s_production_plan_capacity_params', [{
+          plan_id:                 planId,
+          line_id:                 lineId,
+          param_type:              'base',
+          working_days:            workingDays,
+          shifts_per_day:          shiftsPerDay,
+          working_hours_per_shift: hoursPerShift,
+          manpower:                15 + Math.floor(Math.random() * 10),
+          efficiency_factor:       efficiency,
+          overtime_hours:          0,
+          max_takt_time:           maxTaktTime,
+          created_at:              now,
+          updated_at:              now,
+        }]);
+        console.log(`  ✓ Capacity params inserted`);
+
+        // STEP 8: Capacity Results ← SEBELUMNYA TIDAK ADA
+        console.log('\n▶ [8] Adding Capacity Results...');
+
+        // Hitung kapasitas:
+        //   total_available_seconds = working_days × shifts_per_day × hours_per_shift × 3600
+        //   total_capacity_units    = floor(total_available_seconds / max_takt_time × efficiency)
+        const totalAvailSec      = workingDays * shiftsPerDay * hoursPerShift * 3600;
+        const totalCapacityUnits = Math.floor((totalAvailSec / maxTaktTime) * efficiency);
+        const capacityPerHour    = Math.round((3600 / maxTaktTime) * efficiency * 100) / 100;
+
+        // Hitung total demand dari SDO details bulan ini sebagai proxy qty_request
+        const totalQtyDemand = sdoDetailsData.reduce((acc, d) => acc + d.sent_qty, 0);
+        const capacityGap    = totalCapacityUnits - totalQtyDemand;
+        const utilizationPct = totalCapacityUnits > 0
+          ? Math.round((totalQtyDemand / totalCapacityUnits) * 10000) / 100
+          : 0;
+        const resultStatus   = utilizationPct >= 100 ? 'OVERLOAD'
+                             : utilizationPct >= 80  ? 'TIGHT'
+                             : 'POSSIBLE';
+
+        await queryInterface.bulkInsert('s_production_plan_capacity_results', [{
+          plan_id:              planId,
+          line_id:              lineId,
+          max_takt_time:        maxTaktTime,
+          capacity_per_hour:    capacityPerHour,
+          total_capacity_units: totalCapacityUnits,
+          capacity_gap_units:   capacityGap,
+          utilization_pct:      utilizationPct,
+          status:               resultStatus,
+          calculated_at:        now,
+        }]);
+
+        // Update total_qty_capacity di production plan
+        await queryInterface.sequelize.query(
+          `UPDATE s_production_plans SET total_qty_capacity = $1 WHERE id = $2;`,
+          { bind: [totalCapacityUnits, planId] }
+        );
+
+        console.log(
+          `  ✓ Capacity results: total_units=${totalCapacityUnits}, ` +
+          `demand=${totalQtyDemand}, gap=${capacityGap}, ` +
+          `utilization=${utilizationPct}%, status=${resultStatus}`
+        );
+
+        // STEP 9: Production Plan Details ← SEBELUMNYA TIDAK ADA
+        console.log('\n▶ [9] Creating Production Plan Details...');
+
+        // Ambil data lengkap SDO details: do_id, do_detail_id, customer_id, part_id, tanggal, qty
+        // Join melalui: s_delivery_order_details → s_delivery_plan_details → s_spo_details
+        const sdoIds = insertedSDOs.map(s => s.id);
+        const sdoDetailsFull = await queryInterface.sequelize.query(
+          `SELECT
+             sdo.id            AS do_id,
+             sdo.customer_id   AS customer_id,
+             sdo.shipment_date AS delivery_date,
+             sdod.id           AS do_detail_id,
+             sdod.sent_qty     AS qty,
+             spod.part_id      AS part_id
+           FROM s_delivery_order_details sdod
+           JOIN s_delivery_orders sdo
+             ON sdo.id = sdod.delivery_order_id
+           JOIN s_delivery_plan_details sdpd
+             ON sdpd.id = sdod.delivery_plan_detail_id
+           JOIN s_sales_purchase_order_details spod
+             ON spod.id = sdpd.spo_detail_id
+           WHERE sdod.delivery_order_id IN (${sdoIds.join(',')})
+           ORDER BY sdod.id ASC;`,
+          { type: Sequelize.QueryTypes.SELECT }
+        );
+
+        const planDetailsData = [];
+        let   seq             = 1;
+
+        for (const row of sdoDetailsFull) {
+          const routingId    = routingByPartId[row.part_id] ?? null;
+          const qtyRequest   = row.qty;
+          const qtyCapacity  = Math.min(qtyRequest, totalCapacityUnits);
+          const detailGap    = qtyCapacity - qtyRequest;
+          const reqMinutes   = Math.ceil((qtyRequest * maxTaktTime) / 60);
+
+          planDetailsData.push({
+            plan_id:          planId,
+            sequence:         seq,
+            do_id:            row.do_id,
+            do_detail_id:     row.do_detail_id,
+            customer_id:      row.customer_id,
+            part_id:          row.part_id,
+            delivery_date:    row.delivery_date,
+            qty_request:      qtyRequest,
+            qty_capacity:     qtyCapacity,
+            capacity_gap:     detailGap,
+            status:           month <= 5 ? 'POSSIBLE' : 'Not_Calculated',
+            routing_id:       routingId,
+            assigned_line_id: lineId,
+            required_minutes: reqMinutes,
+            priority_level:   seq <= 3 ? 'HIGH' : 'NORMAL',
+            notes:            `Auto-seeded from DO #${row.do_id}, part #${row.part_id}`,
+            created_at:       now,
+            updated_at:       now,
           });
-          planSeq++;
+          seq++;
         }
 
-        if (planData.length > 0) {
-          await queryInterface.bulkInsert('s_production_plans', planData);
-          stats[month].plan = planData.length;
-          console.log(`  ✓ ${planData.length} Production Plan(s) created`);
+        if (planDetailsData.length > 0) {
+          await queryInterface.bulkInsert('s_production_plan_details', planDetailsData);
+        }
+        console.log(`  ✓ ${planDetailsData.length} plan detail(s) (linked: do_id, do_detail_id, part_id)`);
 
-          // Fetch inserted plans
-          const [insertedPlans] = await queryInterface.sequelize.query(
-            `SELECT id FROM s_production_plans 
-             WHERE plan_month = $1 AND plan_type = 'ORIGINAL'
-             ORDER BY id DESC LIMIT ${planData.length};`,
-            { 
-              bind: [`2026-${String(month).padStart(2, '0')}`],
-              type: Sequelize.QueryTypes.SELECT 
-            }
-          );
+        // STEP 10: Calendar Adjustments (Jan–May saja)
+        if (month <= 5 && shifts.length >= 2) {
+          console.log('\n▶ [10] Adding Calendar Adjustments...');
+          const adjData = [];
 
-          // ── STEP 6: Add Capacity Params untuk Production Plans ────────────
-          console.log(`\n▶ Adding Capacity Parameters...`);
-          const capacityParamData = [];
-
-          for (const plan of insertedPlans) {
-            capacityParamData.push({
-              plan_id:                  plan.id,
-              line_id:                  lineId,
-              param_type:               'base',
-              working_days:             20 + Math.floor(Math.random() * 3),
-              shifts_per_day:           3,
-              working_hours_per_shift:  7.00,
-              manpower:                 15 + Math.floor(Math.random() * 10),
-              efficiency_factor:        0.85,
-              overtime_hours:           0,
-              max_takt_time:            2460,
-              created_at:               now,
-              updated_at:               now,
+          for (let d = 0; d < 2; d++) {
+            adjData.push({
+              plan_id:         planId,
+              date:            formatDate(new Date(2026, month - 1, 10 + d * 5)),
+              adjustment_type: 'ADD_SHIFT',
+              shift_id:        shifts[0].id,
+              reason:          'Production acceleration needed',
+              created_at:      now,
+              updated_at:      now,
             });
           }
+          adjData.push({
+            plan_id:          planId,
+            date:             formatDate(new Date(2026, month - 1, 15)),
+            adjustment_type:  'ADD_OVERTIME',
+            shift_id:         (shifts[1] ?? shifts[0]).id,
+            overtime_minutes: 120,
+            reason:           'Extra capacity needed',
+            created_at:       now,
+            updated_at:       now,
+          });
 
-          await queryInterface.bulkInsert('s_production_plan_capacity_params', capacityParamData);
-          console.log(`  ✓ ${capacityParamData.length} capacity param(s) added`);
-
-          // ── STEP 7: Add Calendar Adjustments (Jan-May only) ──────────────
-          if (month <= 5) {
-            console.log(`\n▶ Adding Calendar Adjustments...`);
-            const adjData = [];
-
-            for (const plan of insertedPlans) {
-              // ADD_SHIFT untuk 1-2 hari
-              for (let d = 0; d < 2; d++) {
-                const adjDate = new Date(2026, month - 1, 10 + d * 5);
-                adjData.push({
-                  plan_id:          plan.id,
-                  date:             formatDate(adjDate),
-                  adjustment_type:  'ADD_SHIFT',
-                  shift_id:         shifts[0].id,
-                  reason:           'Production acceleration needed',
-                  created_at:       now,
-                  updated_at:       now,
-                });
-              }
-
-              // ADD_OVERTIME untuk 1 entry
-              const otDate = new Date(2026, month - 1, 15);
-              adjData.push({
-                plan_id:          plan.id,
-                date:             formatDate(otDate),
-                adjustment_type:  'ADD_OVERTIME',
-                shift_id:         shifts[1].id,
-                overtime_minutes: 120,
-                reason:           'Extra capacity needed',
-                created_at:       now,
-                updated_at:       now,
-              });
-            }
-
-            await queryInterface.bulkInsert('s_production_plan_calendar_adjustments', adjData);
-            stats[month].adj = adjData.length;
-            console.log(`  ✓ ${adjData.length} calendar adjustment(s) added`);
-          }
+          await queryInterface.bulkInsert('s_production_plan_calendar_adjustments', adjData);
+          stats[month].adj = adjData.length;
+          console.log(`  ✓ ${adjData.length} calendar adjustment(s)`);
         }
-      }
+      } // end if month <= 6
 
-      // ── Log summary untuk bulan ini ──────────────────────────────────
+      // Summary per bulan
       console.log(`\n✅ Month ${month} Summary:`);
-      console.log(`   SPR: ${stats[month].spr} | SPO: ${stats[month].spo} | SDP: ${stats[month].sdp} | SDO: ${stats[month].sdo}`);
+      console.log(
+        `   SPR: ${stats[month].spr} | SPO: ${stats[month].spo} | ` +
+        `SDP: ${stats[month].sdp} | SDO: ${stats[month].sdo}`
+      );
       if (month <= 6) {
-        console.log(`   Plan: ${stats[month].plan} | Adjustments: ${stats[month].adj}`);
+        console.log(`   Plan: ${stats[month].plan} | Adj: ${stats[month].adj}`);
       }
-    }
+    } // end month loop
 
-    // ── Final Summary ────────────────────────────────────────────────────
+    // ── Final Summary ────────────────────────────────────────────────────────────
     console.log(`\n\n${'='.repeat(60)}`);
-    console.log(`📊 FINAL SEEDER SUMMARY (Jan-Sep 2026)`);
+    console.log('📊 FINAL SEEDER SUMMARY (Jan-Sep 2026)');
     console.log(`${'='.repeat(60)}\n`);
 
     let totalSPR = 0, totalSPO = 0, totalSDP = 0, totalSDO = 0, totalPlan = 0, totalAdj = 0;
-
     for (let m = 1; m <= 9; m++) {
-      totalSPR += stats[m].spr;
-      totalSPO += stats[m].spo;
-      totalSDP += stats[m].sdp;
-      totalSDO += stats[m].sdo;
-      totalPlan += stats[m].plan;
-      totalAdj += stats[m].adj;
+      totalSPR  += stats[m].spr;
+      totalSPO  += stats[m].spo;
+      totalSDP  += stats[m].sdp  ?? 0;
+      totalSDO  += stats[m].sdo;
+      totalPlan += stats[m].plan ?? 0;
+      totalAdj  += stats[m].adj  ?? 0;
     }
 
-    console.log(`Sales Purchase Requests (SPR):      ${totalSPR}`);
-    console.log(`Sales Purchase Orders (SPO):        ${totalSPO}`);
-    console.log(`Sales Delivery Plans (SDP):         ${totalSDP}`);
-    console.log(`Sales Delivery Orders (SDO):        ${totalSDO}`);
-    console.log(`Production Plans (PP):              ${totalPlan} (Jan-Jun only)`);
-    console.log(`Calendar Adjustments:               ${totalAdj} (Jan-May only)\n`);
-
-    console.log(`✅ Seeder completed successfully!`);
+    console.log(`Sales Purchase Requests   (SPR):         ${totalSPR}`);
+    console.log(`Sales Purchase Orders     (SPO):         ${totalSPO}`);
+    console.log(`Delivery Plans            (SDP):         ${totalSDP}`);
+    console.log(`Sales Delivery Orders     (SDO):         ${totalSDO}`);
+    console.log(`Production Plans          (PP) :         ${totalPlan}  (Jan–Jun)`);
+    console.log(`  └ capacity_params             :         ${totalPlan}  each`);
+    console.log(`  └ capacity_results            :         ${totalPlan}  each`);
+    console.log(`  └ plan_details (DO+part link) :         per plan`);
+    console.log(`Calendar Adjustments            :         ${totalAdj}  (Jan–May)\n`);
+    console.log('✅ Seeder completed successfully!');
   },
 
-  async down(queryInterface, Sequelize) {
-    console.log('[DOWN] Rolling back SPR → SPO → SDP → SDO → Plan seeder...');
-    
-    // Delete in reverse order of dependencies
-    await queryInterface.sequelize.query(`DELETE FROM s_production_plan_calendar_adjustments WHERE plan_id IN (SELECT id FROM s_production_plans WHERE plan_month LIKE '2026-%');`);
-    await queryInterface.sequelize.query(`DELETE FROM s_production_plan_capacity_params WHERE plan_id IN (SELECT id FROM s_production_plans WHERE plan_month LIKE '2026-%');`);
-    await queryInterface.sequelize.query(`DELETE FROM s_production_plans WHERE plan_month LIKE '2026-%';`);
-    
-    await queryInterface.sequelize.query(`DELETE FROM s_delivery_order_details WHERE delivery_order_id IN (SELECT id FROM s_delivery_orders WHERE shipment_date >= '2026-01-01');`);
-    await queryInterface.sequelize.query(`DELETE FROM s_delivery_orders WHERE shipment_date >= '2026-01-01';`);
-    
-    await queryInterface.sequelize.query(`DELETE FROM s_sales_delivery_plans WHERE plan_date >= '2026-01-01';`);
-    
-    await queryInterface.sequelize.query(`DELETE FROM s_sales_purchase_orders WHERE po_date >= '2026-01-01';`);
-    
-    await queryInterface.sequelize.query(`DELETE FROM s_sales_purchase_requests WHERE spr_date >= '2026-01-01';`);
-    
-    console.log('🗑️ Rollback completed.');
+  // ── DOWN ──────────────────────────────────────────────────────────────────────
+  async down(queryInterface) {
+    console.log('[DOWN] Rolling back seeder...');
+
+    // Production plan — child dulu baru parent
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_production_plan_calendar_adjustments
+       WHERE plan_id IN (SELECT id FROM s_production_plans WHERE plan_month LIKE '2026-%');`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_production_plan_details
+       WHERE plan_id IN (SELECT id FROM s_production_plans WHERE plan_month LIKE '2026-%');`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_production_plan_capacity_results
+       WHERE plan_id IN (SELECT id FROM s_production_plans WHERE plan_month LIKE '2026-%');`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_production_plan_capacity_params
+       WHERE plan_id IN (SELECT id FROM s_production_plans WHERE plan_month LIKE '2026-%');`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_production_plans WHERE plan_month LIKE '2026-%';`
+    );
+
+    // SDO → SDP
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_delivery_order_details
+       WHERE delivery_order_id IN (
+         SELECT id FROM s_delivery_orders WHERE shipment_date >= '2026-01-01'
+       );`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_delivery_orders WHERE shipment_date >= '2026-01-01';`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_delivery_plan_details
+       WHERE delivery_plan_id IN (
+         SELECT id FROM s_delivery_plans WHERE scheduled_date >= '2026-01-01'
+       );`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_delivery_plans WHERE scheduled_date >= '2026-01-01';`
+    );
+
+    // SPO → SPR
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_sales_purchase_order_details
+       WHERE spo_id IN (
+         SELECT id FROM s_sales_purchase_orders WHERE spo_date >= '2026-01-01'
+       );`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_sales_purchase_orders WHERE spo_date >= '2026-01-01';`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_sales_purchase_request_details
+       WHERE spr_id IN (
+         SELECT id FROM s_sales_purchase_requests WHERE request_date >= '2026-01-01'
+       );`
+    );
+    await queryInterface.sequelize.query(
+      `DELETE FROM s_sales_purchase_requests WHERE request_date >= '2026-01-01';`
+    );
+
+    console.log('🗑️  Rollback completed.');
   },
 };

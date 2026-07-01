@@ -7,7 +7,7 @@
  * STEP 1 — Line ASSY-MAIN
  * STEP 2 — Stations (15 station)
  * STEP 3 — Station Jobs
- * STEP 4 — Shift Calendars (copy dari line_id=1)
+ * STEP 4 — Shift Calendars (generate per tanggal 2026, mengikuti logika calendar seeder)
  * STEP 5 — Line Capacity Params
  */
 
@@ -146,6 +146,42 @@ async function getMaxTaktTime(queryInterface, lineId) {
   );
   return rows.length ? Number(rows[0].takt_time) : 0;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NATIONAL HOLIDAYS 2026 (Indonesia)
+// Sama persis dengan calendar seeder agar shift calendar konsisten
+// ─────────────────────────────────────────────────────────────────────────────
+const NATIONAL_HOLIDAYS_2026 = new Set([
+  '2026-01-01', // Tahun Baru Masehi
+  '2026-02-08', // Isra & Miraj
+  '2026-02-14', // Cuti Bersama
+  '2026-02-15', // Cuti Bersama
+  '2026-02-16', // Cuti Bersama
+  '2026-03-11', // Hari Raya Nyepi
+  '2026-03-28', // Cuti Bersama
+  '2026-03-29', // Cuti Bersama
+  '2026-03-30', // Idul Fitri
+  '2026-03-31', // Idul Fitri
+  '2026-04-01', // Cuti Bersama
+  '2026-04-02', // Cuti Bersama
+  '2026-04-10', // Jumat Agung
+  '2026-04-12', // Pasca Paskah
+  '2026-04-14', // Idul Adha
+  '2026-05-01', // Hari Buruh
+  '2026-05-04', // Tahun Baru Imlek
+  '2026-05-14', // Kenaikan Isa Al-Masih
+  '2026-05-16', // Cuti Bersama
+  '2026-05-17', // Waisak
+  '2026-06-01', // Hari Pancasila
+  '2026-07-07', // Tahun Baru Hijriyah
+  '2026-08-17', // Kemerdekaan RI
+  '2026-09-16', // Mawlid Nabi
+  '2026-09-17', // Cuti Bersama
+  '2026-11-25', // Hari Raya Nyepi Bali
+  '2026-12-25', // Natal
+  '2026-12-26', // Cuti Bersama
+  '2026-12-31', // Cuti Bersama
+]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPORT
@@ -322,59 +358,152 @@ export default {
     await queryInterface.bulkInsert('s_station_jobs', stationJobRows);
     console.log(`[STEP 3] Done. ${stationJobRows.length} rows inserted.`);
 
-    // ── STEP 4: Shift Calendars (copy dari line_id=1) ──────────────────────
-    console.log('[STEP 4] Copying shift calendars...');
-    const [calendarRows] = await queryInterface.sequelize.query(`
-      SELECT sc.shift_id, sc.start_date, sc.end_date, sc.ref_type_calendar_id, sc.date_event
-      FROM   s_shift_calendars sc
-      JOIN   ref_type_calendars rtc ON rtc.id = sc.ref_type_calendar_id
-      WHERE  sc.line_id     = 1
-        AND  rtc.is_holiday = false
-        AND  sc.start_date >= '2026-05-01'
-        AND  sc.start_date <= '2026-07-31'
-        AND  sc.deleted_at  IS NULL
-    `);
+    // ── STEP 4: Shift Calendars ────────────────────────────────────────────
+    // Generate per tanggal 2026, mengikuti logika calendar seeder:
+    //   - WORKING_DAY  → 1 row per unique shift_number (shift_id terisi)
+    //   - WEEKEND      → 1 row, shift_id = NULL
+    //   - NATIONAL_HOLIDAY → 1 row, shift_id = NULL
+    // ──────────────────────────────────────────────────────────────────────
+    console.log('[STEP 4] Generating shift calendars for ASSY-MAIN (full 2026, logika calendar seeder)...');
 
-    if (calendarRows.length > 0) {
-      await queryInterface.bulkInsert('s_shift_calendars',
-        calendarRows.map((row) => ({
+    // Fetch shift data (REGULAR, aktif)
+    const [allShiftSegments] = await queryInterface.sequelize.query(
+      `SELECT id, shift_number, start_time::text, end_time::text, category
+       FROM s_shifts
+       WHERE type = 'REGULAR' AND active = true AND deleted_at IS NULL
+       ORDER BY shift_number ASC, id ASC;`
+    );
+    if (allShiftSegments.length === 0) {
+      throw new Error('Tidak ada s_shifts REGULAR aktif. Pastikan shift seeder sudah dijalankan.');
+    }
+
+    // Fetch calendar type map: code → id
+    const [calendarTypeRows] = await queryInterface.sequelize.query(
+      `SELECT id, code FROM ref_type_calendars WHERE deleted_at IS NULL ORDER BY id;`
+    );
+    const calendarTypeMap = Object.fromEntries(calendarTypeRows.map(ct => [ct.code, ct.id]));
+
+    const requiredTypes = ['WORKING_DAY', 'WEEKEND', 'NATIONAL_HOLIDAY'];
+    for (const t of requiredTypes) {
+      if (!calendarTypeMap[t]) {
+        throw new Error(
+          `ref_type_calendars tidak memiliki entry dengan code='${t}'. ` +
+          `Pastikan ref_type_calendars seeder sudah dijalankan.`
+        );
+      }
+    }
+
+    // Build map: shift_number → shift_id (ambil id pertama per shift_number)
+    const shiftIdByNumber = {};
+    for (const seg of allShiftSegments) {
+      if (!shiftIdByNumber[seg.shift_number]) {
+        shiftIdByNumber[seg.shift_number] = seg.id;
+      }
+    }
+    const sortedShiftNumbers = Object.keys(shiftIdByNumber).sort();
+    console.log(`  ℹ️  Shift numbers found: [${sortedShiftNumbers.join(', ')}]`);
+
+    const shiftCalendars   = [];
+    let   workingDayCount  = 0;
+    let   weekendCount     = 0;
+    let   holidayCount     = 0;
+
+    const startDate = new Date('2026-01-01T00:00:00');
+    const endDate   = new Date('2026-12-31T23:59:59');
+
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const y       = d.getFullYear();
+      const m       = String(d.getMonth() + 1).padStart(2, '0');
+      const dt      = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${dt}`;
+
+      const isWeekend         = d.getDay() === 0 || d.getDay() === 6;
+      const isNationalHoliday = NATIONAL_HOLIDAYS_2026.has(dateStr);
+
+      if (isWeekend) {
+        // 1 row, shift_id = NULL
+        shiftCalendars.push({
           line_id:              lineId,
-          shift_id:             row.shift_id,
-          start_date:           row.start_date,
-          end_date:             row.end_date,
-          ref_type_calendar_id: row.ref_type_calendar_id,
-          date_event:           row.date_event,
+          shift_id:             null,
+          start_date:           dateStr,
+          end_date:             dateStr,
+          ref_type_calendar_id: calendarTypeMap['WEEKEND'],
+          date_event:           dateStr,
           active:               true,
           created_at:           now,
           updated_at:           now,
-        }))
-      );
+        });
+        weekendCount++;
+
+      } else if (isNationalHoliday) {
+        // 1 row, shift_id = NULL
+        shiftCalendars.push({
+          line_id:              lineId,
+          shift_id:             null,
+          start_date:           dateStr,
+          end_date:             dateStr,
+          ref_type_calendar_id: calendarTypeMap['NATIONAL_HOLIDAY'],
+          date_event:           dateStr,
+          active:               true,
+          created_at:           now,
+          updated_at:           now,
+        });
+        holidayCount++;
+
+      } else {
+        // WORKING_DAY → 1 row per unique shift_number
+        for (const shiftNum of sortedShiftNumbers) {
+          shiftCalendars.push({
+            line_id:              lineId,
+            shift_id:             shiftIdByNumber[shiftNum],
+            start_date:           dateStr,
+            end_date:             dateStr,
+            ref_type_calendar_id: calendarTypeMap['WORKING_DAY'],
+            date_event:           dateStr,
+            active:               true,
+            created_at:           now,
+            updated_at:           now,
+          });
+        }
+        workingDayCount++;
+      }
     }
-    console.log(`[STEP 4] Done. ${calendarRows.length} rows copied.`);
+
+    // Insert batch agar tidak timeout
+    const BATCH_SIZE = 1000;
+    for (let i = 0; i < shiftCalendars.length; i += BATCH_SIZE) {
+      await queryInterface.bulkInsert('s_shift_calendars', shiftCalendars.slice(i, i + BATCH_SIZE));
+    }
+
+    console.log(
+      `[STEP 4] Done.\n` +
+      `  Working days : ${workingDayCount} × ${sortedShiftNumbers.length} shifts = ${workingDayCount * sortedShiftNumbers.length} rows\n` +
+      `  Weekends     : ${weekendCount} rows\n` +
+      `  Holidays     : ${holidayCount} rows\n` +
+      `  Total        : ${shiftCalendars.length} rows`
+    );
 
     // ── STEP 5: Line Capacity Params ───────────────────────────────────────
     console.log('[STEP 5] Calculating line capacity params...');
     const DEFAULT_EFFICIENCY_FACTOR = 0.85;
     const DEFAULT_MANPOWER          = 20;
-    const periods = [
-      { year: 2026, month: 5 },
-      { year: 2026, month: 6 },
-      { year: 2026, month: 7 },
-    ];
+
+    // Hitung untuk semua bulan 2026 agar konsisten dengan calendar seeder
+    const periods = Array.from({ length: 12 }, (_, i) => ({ year: 2026, month: i + 1 }));
 
     const maxTaktTime       = await getMaxTaktTime(queryInterface, lineId);
     const capacityParamRows = [];
 
     for (const { year, month } of periods) {
-      const { startDate, endDate } = getMonthRange(year, month);
-      const params = await resolveShiftCalendarParams(queryInterface, lineId, startDate, endDate);
+      const { startDate: pStart, endDate: pEnd } = getMonthRange(year, month);
+      const params = await resolveShiftCalendarParams(queryInterface, lineId, pStart, pEnd);
 
       if (!params) {
-        throw new Error(
-          `Shift calendar tidak ditemukan untuk line ASSY-MAIN periode ` +
-          `${year}-${String(month).padStart(2, '0')}. ` +
-          `Pastikan source line_id=1 punya shift calendar pada periode tersebut.`
+        console.warn(
+          `  ⚠️  Shift calendar kosong untuk ASSY-MAIN bulan ` +
+          `${year}-${String(month).padStart(2, '0')} — skip capacity param.`
         );
+        continue;
       }
 
       capacityParamRows.push({
@@ -393,8 +522,15 @@ export default {
       });
     }
 
-    await queryInterface.bulkInsert('s_line_capacity_params', capacityParamRows);
-    console.log(`[STEP 5] Done. ${capacityParamRows.length} rows inserted.`);
+    if (capacityParamRows.length > 0) {
+      await queryInterface.bulkInsert('s_line_capacity_params', capacityParamRows);
+    }
+    console.log(
+      `[STEP 5] Done. ${capacityParamRows.length} rows inserted ` +
+      `(shifts_per_day=${capacityParamRows[0]?.default_shifts_per_day ?? '-'}, ` +
+      `max_takt=${maxTaktTime}).`
+    );
+
     console.log('[DONE] Seeder 1 completed.');
   },
 

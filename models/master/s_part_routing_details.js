@@ -26,11 +26,6 @@ export default (sequelize) => {
       allowNull: false,
       defaultValue: 0
     },
-
-    output_part_id: {
-      type: DataTypes.INTEGER,
-      allowNull: true
-    },
   }, {
     sequelize,
     modelName: 'SPartRoutingDetails',

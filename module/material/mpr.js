@@ -612,6 +612,5 @@ export default {
   update,
   submit,
   review,
-  bulkReview,
   deleteDraft
 };

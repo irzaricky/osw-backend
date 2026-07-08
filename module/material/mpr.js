@@ -8,6 +8,7 @@ const {
   SMaterialPurchaseRequestLog,
   SParts,
   SUsers,
+  SUserDetail,
   SMrp,
   sequelize
 } = db;
@@ -25,7 +26,8 @@ const generateNumber = async (transaction) => {
     where: { number: { [Op.like]: `${prefix}%` } },
     order: [['number', 'DESC']],
     paranoid: false,
-    transaction
+    transaction,
+    lock: transaction.LOCK.UPDATE
   });
 
   let seq = 1;
@@ -93,7 +95,16 @@ const detailInclude = [
   {
     model: SMaterialPurchaseRequestLog,
     as: 'logs',
-    attributes: ['id', 'action', 'created_at'],
+    attributes: ['id', 'action', 'status', 'remarks', 'user_id', 'created_at'],
+    include: [
+      {
+        model: SUsers,
+        as: 'user',
+        attributes: ['id', 'email'],
+        required: false,
+        include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
+      }
+    ],
     order: [['created_at', 'ASC']]
   }
 ];
@@ -303,8 +314,8 @@ const createEmergency = async (req) => {
     await upsertDetails(pr.id, details, transaction);
 
     // Log
-    const logs = [{ mpr_id: pr.id, action: 'created' }];
-    if (status === 'submitted') logs.push({ mpr_id: pr.id, action: 'submitted' });
+    const logs = [{ mpr_id: pr.id, action: 'created', user_id: userId, status: 'draft' }];
+    if (status === 'submitted') logs.push({ mpr_id: pr.id, action: 'submitted', user_id: userId, status: 'submitted' });
     await SMaterialPurchaseRequestLog.bulkCreate(logs, { transaction });
 
     await transaction.commit();
@@ -382,7 +393,7 @@ const update = async (req) => {
 
       const activeMprs = await SMaterialPurchaseRequest.findAll({
         where: {
-          id: { [Op.ne]: id }, // KECUALIKAN DIRINYA SENDIRI
+          id: { [Op.ne]: id },
           status: { [Op.in]: ['draft', 'submitted'] },
           request_date: { [Op.between]: [startOfMonth, endOfMonth] }
         },
@@ -412,7 +423,12 @@ const update = async (req) => {
 
     // Log action
     const action = newStatus === 'submitted' ? 'submitted' : 'updated';
-    await SMaterialPurchaseRequestLog.create({ mpr_id: id, action }, { transaction });
+    await SMaterialPurchaseRequestLog.create({
+      mpr_id: id,
+      action,
+      user_id: req.user.id,
+      status: newStatus
+    }, { transaction });
 
     await transaction.commit();
 
@@ -462,7 +478,12 @@ const submit = async (req) => {
     }
 
     await pr.update({ status: 'submitted' }, { transaction });
-    await SMaterialPurchaseRequestLog.create({ mpr_id: id, action: 'submitted' }, { transaction });
+    await SMaterialPurchaseRequestLog.create({
+      mpr_id: id,
+      action: 'submitted',
+      user_id: req.user.id,
+      status: 'submitted'
+    }, { transaction });
 
     await transaction.commit();
 
@@ -524,7 +545,10 @@ const review = async (req) => {
 
     await SMaterialPurchaseRequestLog.create({
       mpr_id: id,
-      action: newStatus
+      action: newStatus,
+      user_id: supervisorId,
+      status: newStatus,
+      remarks: notes || null
     }, { transaction });
 
     await transaction.commit();
@@ -538,68 +562,6 @@ const review = async (req) => {
     await transaction.rollback();
     console.error('review PR error:', error);
     return { status: false, error: 'Failed to review Purchase Request', code: 500 };
-  }
-};
-
-// ============================================================
-// BULK REVIEW PR (Supervisor): approve/reject banyak sekaligus
-// Body: { ids: [1,2,3], action: 'approve'|'reject', notes?: '...' }
-// ============================================================
-const bulkReview = async (req) => {
-  const transaction = await sequelize.transaction();
-  try {
-    const { ids, action, notes } = req.body;
-    const supervisorId = req.user.id;
-
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
-      await transaction.rollback();
-      return { status: false, error: 'IDs are required', code: 400 };
-    }
-
-    if (!['approve', 'reject'].includes(action)) {
-      await transaction.rollback();
-      return { status: false, error: 'Action must be either approve or reject', code: 400 };
-    }
-
-    if (action === 'reject' && !notes) {
-      await transaction.rollback();
-      return { status: false, error: 'Notes are required when rejecting PR', code: 400 };
-    }
-
-    // Ambil PR yang submitted saja
-    const prs = await SMaterialPurchaseRequest.findAll({
-      where: { id: { [Op.in]: ids }, status: 'submitted' },
-      transaction
-    });
-
-    if (prs.length === 0) {
-      await transaction.rollback();
-      return { status: false, error: 'No PR with submitted status available to review', code: 422 };
-    }
-
-    const newStatus = action === 'approve' ? 'approved' : 'rejected';
-    const processedIds = prs.map((p) => p.id);
-
-    await SMaterialPurchaseRequest.update(
-      { status: newStatus, approved_by: supervisorId, remarks: notes || null },
-      { where: { id: { [Op.in]: processedIds } }, transaction }
-    );
-
-    const logRows = processedIds.map((mprId) => ({ mpr_id: mprId, action: newStatus }));
-    await SMaterialPurchaseRequestLog.bulkCreate(logRows, { transaction });
-
-    await transaction.commit();
-
-    const skipped = ids.length - processedIds.length;
-    return {
-      status: true,
-      data: { processed: processedIds.length, skipped },
-      message: `${processedIds.length} PR successfully ${newStatus}${skipped > 0 ? `, ${skipped} skipped (not submitted status)` : ''}`
-    };
-  } catch (error) {
-    await transaction.rollback();
-    console.error('bulkReview PR error:', error);
-    return { status: false, error: 'Failed to perform bulk review', code: 500 };
   }
 };
 

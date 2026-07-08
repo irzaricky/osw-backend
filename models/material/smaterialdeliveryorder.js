@@ -9,6 +9,7 @@ export default (sequelize) => {
       SMaterialDeliveryOrder.belongsTo(models.SVehicles, { foreignKey: 'vehicle_id', as: 'vehicle' }); // ← BARU
       SMaterialDeliveryOrder.hasOne(models.TMaterialReceiving, { foreignKey: 'mdo_id', as: 'material_receiving' });
       SMaterialDeliveryOrder.hasMany(models.TMaterialDeliveryOrderDetail, { foreignKey: 'mdo_id', as: 'mdo_details' });
+      SMaterialDeliveryOrder.hasMany(models.SMaterialDeliveryOrderLog, { foreignKey: 'mdo_id', as: 'logs' }); // ← BARU: audit trail
     }
   }
 

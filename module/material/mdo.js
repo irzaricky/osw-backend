@@ -3,6 +3,7 @@ import db from '../../models/index.js';
 
 const {
   SMaterialDeliveryOrder,
+  SMaterialDeliveryOrderLog,
   SMaterialPurchaseOrder,
   TMaterialPurchaseOrderDetail,
   TMaterialDeliveryOrderDetail,
@@ -13,10 +14,35 @@ const {
   SWarehouseAreas,
   SParts,
   SUom,
+  SUsers,
+  SUserDetail,
   TMaterialReceiving,
   TGoodReceipt,
   sequelize,
 } = db;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT TRAIL HELPER (mirror pola _logAction di MPO module)
+// ─────────────────────────────────────────────────────────────────────────────
+async function logMdoAction(mdo_id, action, notes = null, transaction = null, user_id = null, status = null) {
+  await SMaterialDeliveryOrderLog.create({ mdo_id, action, notes, user_id, status }, { transaction });
+}
+
+const includeLogs = {
+  model: SMaterialDeliveryOrderLog,
+  as: 'logs',
+  attributes: ['id', 'action', 'status', 'notes', 'user_id', 'created_at'],
+  include: [
+    {
+      model: SUsers,
+      as: 'user',
+      attributes: ['id', 'email'],
+      required: false,
+      include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }],
+    },
+  ],
+  order: [['created_at', 'ASC']],
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS INTERNAL
@@ -878,6 +904,7 @@ async function detail(req) {
         as: 'mdo_details',
         include: [{ model: SParts, as: 'part', include: [{ model: SUom, as: 'uom' }] }],
       },
+      includeLogs,
     ],
   });
 
@@ -1027,7 +1054,7 @@ async function create(req) {
         transporter,
         status,
         remarks,
-        created_by: req.session?.user?.id ?? null,
+        created_by: req.user?.id ?? null,
       },
       { transaction: t }
     );
@@ -1041,6 +1068,8 @@ async function create(req) {
       })),
       { transaction: t }
     );
+
+    await logMdoAction(mdo.id, 'created', null, t, req.user?.id, status);
 
     await t.commit();
     return { status: true, message: 'MDO berhasil dibuat.', data: { id: mdo.id, number: mdo.number, status } };
@@ -1172,6 +1201,15 @@ async function update(req) {
       );
     }
 
+    await logMdoAction(
+      id,
+      newStatus === 'scheduled' && mdo.status !== 'scheduled' ? 'scheduled' : 'updated',
+      null,
+      t,
+      req.user?.id,
+      newStatus
+    );
+
     await t.commit();
     return { status: true, message: 'MDO berhasil diperbarui.', data: { id, status: newStatus } };
   } catch (err) {
@@ -1190,8 +1228,16 @@ async function deleteMdo(req) {
   if (!mdo) return { status: false, message: 'MDO tidak ditemukan.' };
   if (mdo.status !== 'draft') return { status: false, message: 'Hanya MDO berstatus draft yang bisa dihapus.' };
 
-  await mdo.destroy(); // soft-delete (paranoid: true)
-  return { status: true, message: 'MDO berhasil dihapus.' };
+  const t = await sequelize.transaction();
+  try {
+    await logMdoAction(id, 'deleted', null, t, req.user?.id, mdo.status);
+    await mdo.destroy({ transaction: t }); // soft-delete (paranoid: true)
+    await t.commit();
+    return { status: true, message: 'MDO berhasil dihapus.' };
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1209,8 +1255,16 @@ async function updateStatus(req) {
   if (!next)
     return { status: false, message: `Status '${mdo.status}' tidak dapat dimajukan melalui endpoint ini.` };
 
-  await mdo.update({ status: next });
-  return { status: true, message: `Status MDO berhasil diubah ke '${next}'.`, data: { id, status: next } };
+  const t = await sequelize.transaction();
+  try {
+    await mdo.update({ status: next }, { transaction: t });
+    await logMdoAction(id, next, null, t, req.user?.id, next);
+    await t.commit();
+    return { status: true, message: `Status MDO berhasil diubah ke '${next}'.`, data: { id, status: next } };
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

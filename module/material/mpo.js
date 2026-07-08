@@ -46,9 +46,9 @@ class MPOModule extends BaseModule {
         return `${prefix}-${seq.toString().padStart(3, '0')}`;
     }
 
-    async _logAction(mpo_id, action, notes = null, transaction = null) {
+    async _logAction(mpo_id, action, notes = null, transaction = null, user_id = null, status = null) {
         await SMaterialPurchaseOrderLog.create(
-            { mpo_id, action, notes },
+            { mpo_id, action, notes, user_id, status },
             { transaction }
         );
     }
@@ -217,7 +217,6 @@ class MPOModule extends BaseModule {
             let rows;
 
             if (parsedPartIds.length > 0) {
-                // Coba ambil supplier via junction table s_part_suppliers
                 let filtered = await SSuppliers.findAll({
                     where,
                     attributes: ['id', 'supplier_code', 'name', 'email'],
@@ -226,22 +225,19 @@ class MPOModule extends BaseModule {
                         as: 'part_suppliers',
                         attributes: ['part_id', 'is_primary'],
                         where: { part_id: { [Op.in]: parsedPartIds } },
-                        required: true, // INNER JOIN — hanya supplier yang terdaftar
+                        required: true, // INNER JOIN, hanya supplier yang terdaftar
                     }],
                     order: [['name', 'ASC']],
                     limit: 50,
                 });
 
                 if (filtered.length > 0) {
-                    // Normalisasi: hapus nested part_suppliers dari response
                     rows = filtered.map(s => {
                         const plain = s.toJSON();
                         delete plain.part_suppliers;
                         return plain;
                     });
                 } else {
-                    // FIX: fallback ke semua supplier jika junction table kosong untuk part ini
-                    // Terjadi ketika s_part_suppliers belum di-seed atau part belum punya mapping
                     rows = await SSuppliers.findAll({
                         where,
                         attributes: ['id', 'supplier_code', 'name', 'email'],
@@ -250,7 +246,6 @@ class MPOModule extends BaseModule {
                     });
                 }
             } else {
-                // Tidak ada filter part — kembalikan semua supplier
                 rows = await SSuppliers.findAll({
                     where,
                     attributes: ['id', 'supplier_code', 'name', 'email'],
@@ -561,7 +556,18 @@ class MPOModule extends BaseModule {
                     },
                     {
                         model: SMaterialPurchaseOrderLog,
-                        as: 'logs'
+                        as: 'logs',
+                        attributes: ['id', 'action', 'status', 'notes', 'user_id', 'created_at'],
+                        include: [
+                            {
+                                model: SUsers,
+                                as: 'user',
+                                attributes: ['id', 'email'],
+                                required: false,
+                                include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }]
+                            }
+                        ],
+                        order: [['created_at', 'ASC']]
                     }
                 ]
             });
@@ -738,9 +744,9 @@ class MPOModule extends BaseModule {
             }));
             await TMaterialPurchaseOrderDetail.bulkCreate(detailData, { transaction: t });
 
-            await this._logAction(mpo.id, 'created', null, t);
+            await this._logAction(mpo.id, 'created', null, t, currentUser.id, 'draft');
             if (status === 'submitted') {
-                await this._logAction(mpo.id, 'submitted', null, t);
+                await this._logAction(mpo.id, 'submitted', null, t, currentUser.id, 'submitted');
             }
 
             await this.logActivity(req, {
@@ -810,7 +816,7 @@ class MPOModule extends BaseModule {
             await mpo.update({ ...updates, status: newStatus }, { transaction: t });
 
             if (newStatus === 'submitted' && prevStatus !== 'submitted') {
-                await this._logAction(mpo.id, 'submitted', null, t);
+                await this._logAction(mpo.id, 'submitted', null, t, req.user.id, 'submitted');
             }
 
             await this.logActivity(req, {
@@ -875,7 +881,7 @@ class MPOModule extends BaseModule {
                 approved_by: action === 'approve' ? currentUser.id : mpo.approved_by
             }, { transaction: t });
 
-            await this._logAction(mpo.id, newStatus, notes || null, t);
+            await this._logAction(mpo.id, newStatus, notes || null, t, currentUser.id, newStatus);
 
             await this.logActivity(req, {
                 moduleCode: 'material',
@@ -1109,9 +1115,9 @@ class MPOModule extends BaseModule {
                     { transaction: t }
                 );
 
-                await this._logAction(mpo.id, 'edited_after_rejection', null, t);
+                await this._logAction(mpo.id, 'edited_after_rejection', null, t, currentUser.id, newStatus);
                 if (newStatus === 'submitted') {
-                    await this._logAction(mpo.id, 'submitted', null, t);
+                    await this._logAction(mpo.id, 'submitted', null, t, currentUser.id, 'submitted');
                 }
             } else {
                 // Tidak ada item yang tersisa untuk supplier original → soft-delete MPO asal
@@ -1121,7 +1127,7 @@ class MPOModule extends BaseModule {
                     force: false
                 });
                 await mpo.destroy({ transaction: t }); // soft-delete
-                await this._logAction(mpo.id, 'auto_deleted_after_split', `Semua part dipindah ke supplier lain`, t);
+                await this._logAction(mpo.id, 'auto_deleted_after_split', `Semua part dipindah ke supplier lain`, t, currentUser.id, 'deleted');
             }
 
             // ── 6. Buat MPO baru untuk setiap supplier berbeda ─────────────────
@@ -1154,9 +1160,9 @@ class MPOModule extends BaseModule {
                     { transaction: t }
                 );
 
-                await this._logAction(newMpo.id, 'created', `Split dari MPO ${mpo.number}`, t);
+                await this._logAction(newMpo.id, 'created', `Split dari MPO ${mpo.number}`, t, currentUser.id, 'draft');
                 if (newStatus === 'submitted') {
-                    await this._logAction(newMpo.id, 'submitted', null, t);
+                    await this._logAction(newMpo.id, 'submitted', null, t, currentUser.id, 'submitted');
                 }
 
                 generatedMpos.push(newMpo.number);
@@ -1225,7 +1231,7 @@ class MPOModule extends BaseModule {
             );
 
             for (const mpo of mpos) {
-                await this._logAction(mpo.id, 'submitted', null, t);
+                await this._logAction(mpo.id, 'submitted', null, t, req.user.id, 'submitted');
             }
 
             await this.logActivity(req, {
@@ -1316,7 +1322,7 @@ class MPOModule extends BaseModule {
             );
 
             for (const mpo of mpos) {
-                await this._logAction(mpo.id, newStatus, notes || null, t);
+                await this._logAction(mpo.id, newStatus, notes || null, t, currentUser.id, newStatus);
             }
 
             await this.logActivity(req, {
@@ -1506,8 +1512,8 @@ class MPOModule extends BaseModule {
                 }));
                 await TMaterialPurchaseOrderDetail.bulkCreate(detailData, { transaction: t });
 
-                await this._logAction(mpo.id, 'created', null, t);
-                if (status === 'submitted') await this._logAction(mpo.id, 'submitted', null, t);
+                await this._logAction(mpo.id, 'created', null, t, currentUser.id, 'draft');
+                if (status === 'submitted') await this._logAction(mpo.id, 'submitted', null, t, currentUser.id, 'submitted');
 
                 generatedMpos.push(mpo.number);
             }

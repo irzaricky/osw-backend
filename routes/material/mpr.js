@@ -52,11 +52,6 @@ router.put('/:id/submit', session.sessionChecker, session.permissionChecker(MAKE
   return helper.sendResponse(res, await module.submit(req));
 });
 
-// Approve / Reject bulk — HARUS sebelum /:id/review
-router.put('/bulk-review',  session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
-  return helper.sendResponse(res, await module.bulkReview(req));
-});
-
 // Approve / Reject single
 router.put('/:id/review',   session.sessionChecker, session.permissionChecker(APPROVER), async (req, res) => {
   return helper.sendResponse(res, await module.review(req));

@@ -33,6 +33,12 @@ export default (sequelize) => {
         foreignKey: 'approved_by',
         as: 'approver',
       });
+
+      // History / audit trail perubahan status MRP
+      SMrp.hasMany(models.SMrpLog, {
+        foreignKey: 'mrp_id',
+        as: 'logs',
+      });
     }
   }
 

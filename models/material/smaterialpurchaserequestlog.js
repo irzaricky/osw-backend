@@ -8,12 +8,19 @@ export default (sequelize) => {
         foreignKey: 'mpr_id',
         as: 'purchaseRequest'
       });
+      SMaterialPurchaseRequestLog.belongsTo(models.SUsers, {
+        foreignKey: 'user_id',
+        as: 'user'
+      });
     }
   }
  
   SMaterialPurchaseRequestLog.init({
-    mpr_id: DataTypes.INTEGER,
-    action: DataTypes.STRING  // 'created' | 'submitted' | 'approved' | 'rejected' | 'updated'
+    mpr_id:  DataTypes.INTEGER,
+    user_id: DataTypes.INTEGER,
+    action:  DataTypes.STRING,   // 'created' | 'submitted' | 'approved' | 'rejected' | 'updated'
+    status:  DataTypes.STRING,   // snapshot status dokumen saat log dibuat
+    remarks: DataTypes.TEXT      // catatan rejection / approval
   }, {
     sequelize,
     modelName: 'SMaterialPurchaseRequestLog',
@@ -26,4 +33,3 @@ export default (sequelize) => {
  
   return SMaterialPurchaseRequestLog;
 };
- 

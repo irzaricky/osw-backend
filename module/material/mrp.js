@@ -6,6 +6,7 @@ import BaseModule from '../../class/base.module.js';
 
 const {
   SMrp,
+  SMrpLog,
   SMrpDetail,
   SSalesPurchaseRequests,
   SSalesPurchaseRequestDetails,
@@ -80,21 +81,30 @@ const includeMrpDetails = {
   ],
 };
 
+const includeLogs = {
+  model: SMrpLog,
+  as: 'logs',
+  attributes: ['id', 'action', 'status', 'notes', 'user_id', 'created_at'],
+  include: [
+    {
+      model: SUsers,
+      as: 'user',
+      attributes: ['id', 'email'],
+      required: false,
+      include: [{ model: SUserDetail, as: 'user_detail', attributes: ['full_name'] }],
+    },
+  ],
+  order: [['created_at', 'ASC']],
+};
+
 // ============================================================
-// HELPER — generate nomor MRP: MRP-YYYY-MM-XXX
-// Format baru: MRP-2026-06-001
-//
-// Strategy anti-duplikat:
-//   - Query semua number dalam bulan berjalan, paranoid:false
-//     agar soft-deleted records ikut terhitung
-//   - Parse urutan terakhir dari kedua format lama & baru:
-//       MRP-YYYY-MM-XXX     → e.g. MRP-2026-06-003
-//       MRP-YYYYMMDD-XXXX   → e.g. MRP-20260601-0003
-//   - Ambil nilai sequence terbesar, increment +1
-//   - Format output selalu MRP-YYYY-MM-XXX (3 digit sequence)
-//   - Dijalankan di dalam transaction yang sudah ada +
-//     row-level lock untuk cegah race condition
+// HELPER — audit trail MRP (mirror pola _logAction di MPO module)
 // ============================================================
+async function logMrpAction(mrp_id, action, notes = null, transaction = null, user_id = null, status = null) {
+  await SMrpLog.create({ mrp_id, action, notes, user_id, status }, { transaction });
+}
+
+//Generate Nomor MRP
 async function generateMrpNumber(transaction) {
   const now = new Date();
 
@@ -285,7 +295,7 @@ class MRPModule extends BaseModule {
       const { id } = req.params;
 
       const mrp = await SMrp.findByPk(id, {
-        include: [includeSalesPlan, includeProductionPlan, includeMrpDetails, includeCreator, includeApprover],
+        include: [includeSalesPlan, includeProductionPlan, includeMrpDetails, includeCreator, includeApprover, includeLogs],
       });
 
       if (!mrp) return { status: false, message: 'MRP not found', code: 404 };
@@ -632,6 +642,12 @@ class MRPModule extends BaseModule {
       }));
 
       await SMrpDetail.bulkCreate(detailData, { transaction });
+
+      await logMrpAction(mrp.id, 'created', null, transaction, user_id, targetStatus);
+      if (targetStatus === MRP_STATUS.SUBMITTED) {
+        await logMrpAction(mrp.id, 'submitted', null, transaction, user_id, targetStatus);
+      }
+
       await transaction.commit();
 
       return {
@@ -673,6 +689,16 @@ class MRPModule extends BaseModule {
       const targetStatus = save_as_draft ? MRP_STATUS.DRAFT : MRP_STATUS.SUBMITTED;
 
       await mrp.update({ description, priority, notes, status: targetStatus }, { transaction });
+
+      await logMrpAction(
+        mrp.id,
+        targetStatus === MRP_STATUS.SUBMITTED ? 'submitted' : 'updated',
+        null,
+        transaction,
+        req.user?.id,
+        targetStatus
+      );
+
       await transaction.commit();
 
       return {
@@ -726,6 +752,9 @@ class MRPModule extends BaseModule {
       }));
 
       await SMrpDetail.bulkCreate(detailData, { transaction });
+
+      await logMrpAction(id, 'updated', 'Material details updated', transaction, req.user?.id, mrp.status);
+
       await transaction.commit();
 
       return { status: true, message: 'MRP details updated successfully', data: { total_items: detailData.length } };
@@ -764,6 +793,9 @@ class MRPModule extends BaseModule {
       }
 
       await mrp.update({ status: MRP_STATUS.SUBMITTED }, { transaction });
+
+      await logMrpAction(mrp.id, 'submitted', null, transaction, req.user?.id, MRP_STATUS.SUBMITTED);
+
       await transaction.commit();
 
       return {
@@ -817,6 +849,11 @@ class MRPModule extends BaseModule {
         { status: MRP_STATUS.SUBMITTED },
         { where: { id: { [Op.in]: foundIds } }, transaction }
       );
+
+      const user_id = req.user?.id;
+      for (const mrpId of foundIds) {
+        await logMrpAction(mrpId, 'submitted', null, transaction, user_id, MRP_STATUS.SUBMITTED);
+      }
 
       await transaction.commit();
 
@@ -891,6 +928,17 @@ class MRPModule extends BaseModule {
         { where: { id: { [Op.in]: foundIds } }, transaction }
       );
 
+      for (const mrpId of foundIds) {
+        await logMrpAction(
+          mrpId,
+          newStatus.toLowerCase(),
+          normalizedAction === 'reject' ? notes : null,
+          transaction,
+          user_id,
+          newStatus
+        );
+      }
+
       await transaction.commit();
 
       // Informasikan jika ada ID yang tidak bisa diproses
@@ -954,6 +1002,15 @@ class MRPModule extends BaseModule {
         { transaction }
       );
 
+      await logMrpAction(
+        mrp.id,
+        newStatus.toLowerCase(),
+        action === 'Reject' ? notes : null,
+        transaction,
+        user_id,
+        newStatus
+      );
+
       await transaction.commit();
 
       return {
@@ -985,6 +1042,8 @@ class MRPModule extends BaseModule {
         await transaction.rollback();
         return { status: false, message: `Only Draft or Rejected MRPs can be deleted. Status: ${mrp.status}`, code: 400 };
       }
+
+      await logMrpAction(mrp.id, 'deleted', null, transaction, req.user?.id, mrp.status);
 
       await SMrpDetail.destroy({ where: { mrp_id: id }, transaction });
       await mrp.destroy({ transaction });

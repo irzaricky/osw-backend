@@ -13,11 +13,11 @@ router.get("/dropdown", auth.sessionChecker, async (req, res) => {
   await stationModule.getDropdown(req, res);
 });
 
-router.get("/download", auth.sessionChecker, async (req, res) => {
+router.get("/download", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationModule.download(req, res);
 });
 
-router.post("/upload", auth.sessionChecker, async (req, res) => {
+router.post("/upload", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationModule.upload(req, res);
 });
 
@@ -25,15 +25,15 @@ router.get("/", auth.sessionChecker, async (req, res) => {
   await stationModule.list(req, res);
 });
 
-router.post("/", auth.sessionChecker, async (req, res) => {
+router.post("/", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationModule.add(req, res);
 });
 
-router.put("/:id", auth.sessionChecker, async (req, res) => {
+router.put("/:id", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationModule.update(req, res);
 });
 
-router.delete("/:id", auth.sessionChecker, async (req, res) => {
+router.delete("/:id", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationModule.delete(req, res);
 });
 

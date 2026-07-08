@@ -9,15 +9,15 @@ router.get("/", auth.sessionChecker, async (req, res) => {
   await stationJobModule.list(req, res);
 });
 
-router.post("/", auth.sessionChecker, async (req, res) => {
+router.post("/", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationJobModule.add(req, res);
 });
 
-router.put("/:id", auth.sessionChecker, async (req, res) => {
+router.put("/:id", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationJobModule.update(req, res);
 });
 
-router.delete("/:id", auth.sessionChecker, async (req, res) => {
+router.delete("/:id", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await stationJobModule.delete(req, res);
 });
 

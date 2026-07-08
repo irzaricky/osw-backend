@@ -144,7 +144,7 @@ export default {
           source:         'Sales Forecast',
           request_date:   formatDate(now),
           required_date:  requiredDate,
-          status:         'Confirmed',
+          status:         'Approved',
           remarks:        `SPR for ${product.part_number}`,
           created_by:     userId,
           approved_by:    userId,
@@ -166,7 +166,7 @@ export default {
 
       const insertedSPRs = await queryInterface.sequelize.query(
         `SELECT id, required_date FROM s_sales_purchase_requests
-         WHERE request_date = $1 AND status = 'Confirmed'
+         WHERE request_date = $1 AND status = 'Approved'
          ORDER BY id DESC LIMIT ${sprData.length};`,
         { bind: [formatDate(now)], type: Sequelize.QueryTypes.SELECT }
       );
@@ -197,7 +197,7 @@ export default {
           spr_id:            spr.id,
           spo_date:          formatDate(now),
           delivery_due_date: spr.required_date,
-          status:            'Confirmed',
+          status:            'Locked',
           shipping_address:  `Address for customer ${customer.id}`,
           remarks:           `SPO for month ${month}`,
           created_by:        userId,
@@ -220,7 +220,7 @@ export default {
 
       const insertedSPOs = await queryInterface.sequelize.query(
         `SELECT id, delivery_due_date FROM s_sales_purchase_orders
-         WHERE spo_date = $1 AND status = 'Confirmed'
+         WHERE spo_date = $1 AND status = 'Locked'
          ORDER BY id DESC LIMIT ${spoData.length};`,
         { bind: [formatDate(now)], type: Sequelize.QueryTypes.SELECT }
       );

@@ -624,22 +624,24 @@ class ForecastModule extends BaseModule {
               // Removed forecast_type filter: search for 'Fix' qty across any forecast type
               status: 'Approved'
             },
-            attributes: ['id', 'updated_at']
+            attributes: ['id', 'updated_at', 'forecast_number']
           }
         ],
         attributes: ['part_id', 'period_date', 'forecast_qty']
       });
 
       // Deduplicate: if multiple approved forecasts cover the same date, take the one with the highest ID (latest revision)
-      const detailMap = {}; // "part_id:period_date" -> { qty, forecastId }
+      const detailMap = {}; // "part_id:period_date" -> { qty, forecastId, forecastNumber }
       historicalDetails.forEach(detail => {
         const pDate = dayjs(detail.period_date).format('YYYY-MM-01');
         const key = `${detail.part_id}:${pDate}`;
         const forecastId = detail.forecast.id;
+        const forecastNumber = detail.forecast.forecast_number;
         if (!detailMap[key] || forecastId > detailMap[key].forecastId) {
           detailMap[key] = {
             qty: detail.forecast_qty,
-            forecastId: forecastId
+            forecastId: forecastId,
+            forecastNumber: forecastNumber
           };
         }
       });
@@ -660,7 +662,11 @@ class ForecastModule extends BaseModule {
             result[partId][targetPeriod] = {
               qty: 0,
               status: 'Fix',
-              isRecommended: false
+              isRecommended: false,
+              calculation_breakdown: {
+                type: 'none',
+                message: 'First period of 4-Month forecast is always 0 Fix'
+              }
             };
             continue;
           }
@@ -672,23 +678,54 @@ class ForecastModule extends BaseModule {
 
           // Retrieve historical details in chronological order: index 3 (oldest) down to 0 (newest)
           const values = [];
+          const historical_data = []; // array of { date, qty, forecast_number }
+
           for (let i = 3; i >= 0; i--) {
             const histDate = periodToHistDatesMap[targetPeriod][i];
             const key = `${partId}:${histDate}`;
             if (detailMap[key]) {
               values.push(detailMap[key].qty);
+              historical_data.push({
+                date: histDate,
+                qty: detailMap[key].qty,
+                forecast_number: detailMap[key].forecastNumber
+              });
+            } else {
+              historical_data.push({
+                date: histDate,
+                qty: null,
+                forecast_number: null
+              });
             }
           }
 
           let calculatedValue = 0;
+          let fallback_used = false;
+          let fallback_details = null;
+          const ses_steps = []; // array of step objects for explanation
 
           if (values.length > 0) {
             let smoothed = values[0];
+            ses_steps.push({
+              step: 0,
+              input_value: values[0],
+              smoothed_value: smoothed,
+              formula: `S0 = ${values[0]}`
+            });
+
             for (let vIdx = 1; vIdx < values.length; vIdx++) {
+              const prevSmoothed = smoothed;
               smoothed = ALPHA * values[vIdx] + (1 - ALPHA) * smoothed;
+              ses_steps.push({
+                step: vIdx,
+                input_value: values[vIdx],
+                smoothed_value: Math.round(smoothed * 100) / 100, // keep decimal precision
+                formula: `S${vIdx} = 0.3 * ${values[vIdx]} + 0.7 * ${Math.round(prevSmoothed * 100) / 100}`
+              });
             }
             calculatedValue = Math.round(smoothed);
           } else {
+            fallback_used = true;
             // Fallback baseline: query any chronological approved Fix forecast details for the customer and part,
             // and use the nearest available historical Fix quantity.
             const fallbackDetail = await SSalesForecastDetails.findOne({
@@ -704,16 +741,26 @@ class ForecastModule extends BaseModule {
                     customer_id: currentForecast.customer_id,
                     status: 'Approved'
                   },
-                  attributes: ['id']
+                  attributes: ['id', 'forecast_number']
                 }
               ],
               order: [
                 ['period_date', 'DESC'],
                 ['id', 'DESC']
               ],
-              attributes: ['forecast_qty']
+              attributes: ['forecast_qty', 'period_date']
             });
-            calculatedValue = fallbackDetail ? fallbackDetail.forecast_qty : 0;
+
+            if (fallbackDetail) {
+              calculatedValue = fallbackDetail.forecast_qty;
+              fallback_details = {
+                period_date: dayjs(fallbackDetail.period_date).format('YYYY-MM-01'),
+                forecast_qty: fallbackDetail.forecast_qty,
+                forecast_number: fallbackDetail.forecast.forecast_number
+              };
+            } else {
+              calculatedValue = 0;
+            }
           }
 
           // Apply graduation multiplier
@@ -722,7 +769,18 @@ class ForecastModule extends BaseModule {
           result[partId][targetPeriod] = {
             qty: finalQty,
             status: 'Temporary',
-            isRecommended: finalQty > 0
+            isRecommended: finalQty > 0,
+            calculation_breakdown: {
+              type: fallback_used ? 'fallback' : 'exponential_smoothing',
+              historical_data,
+              smoothed_value: calculatedValue,
+              multiplier,
+              temp_period_count: tempPeriodCount,
+              final_qty: finalQty,
+              fallback_used,
+              fallback_details,
+              ses_steps
+            }
           };
         }
       }

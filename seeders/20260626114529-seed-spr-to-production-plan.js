@@ -141,7 +141,7 @@ export default {
         sprData.push({
           spr_number:     `SPR-2026-${String(month).padStart(2, '0')}-${String(sprSeq).padStart(4, '0')}`,
           spr_name:       `SPR ${product.part_number} Month ${month}`,
-          source:         'Sales Forecast',
+          source:         'Automatic',
           request_date:   formatDate(now),
           required_date:  requiredDate,
           status:         'Approved',

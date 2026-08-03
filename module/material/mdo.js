@@ -48,6 +48,15 @@ const includeLogs = {
 // HELPERS INTERNAL
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+const isPastDate = (dateStr) => {
+  if (!dateStr) return false;
+  const input = new Date(dateStr);
+  const today = new Date();
+  input.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return input < today;
+};
 /**
  * Generate nomor MDO: MDO-YYYYMMDD-XXXX
  */
@@ -127,24 +136,24 @@ async function getRemainingQtyMap(mpo_id, exclude_mdo_id = null) {
     const ordered = parseFloat(d.qty);
     const part = d.part
       ? {
-          id:          d.part.id,
-          part_number: d.part.part_number,
-          part_name:   d.part.part_name,
-          weight:      d.part.weight,
-          uom_id:      d.part.uom_id,
-        }
+        id: d.part.id,
+        part_number: d.part.part_number,
+        part_name: d.part.part_name,
+        weight: d.part.weight,
+        uom_id: d.part.uom_id,
+      }
       : null;
 
     if (result.has(d.part_id)) {
       // Akumulasi qty jika part_id sama muncul lebih dari 1 baris
       const existing = result.get(d.part_id);
-      existing.ordered_qty  += ordered;
+      existing.ordered_qty += ordered;
       existing.remaining_qty = Math.max(0, existing.ordered_qty - existing.covered_qty);
     } else {
       const covered = coveredMap[d.part_id] || 0;
       result.set(d.part_id, {
-        ordered_qty:   ordered,
-        covered_qty:   covered,
+        ordered_qty: ordered,
+        covered_qty: covered,
         remaining_qty: Math.max(0, ordered - covered),
         part,
       });
@@ -559,8 +568,8 @@ async function getDropdownVehicles(req) {
  *  - warnings[]
  */
 async function previewSplit(req) {
-  const mpo_id         = req.body?.mpo_id         ?? req.query?.mpo_id;
-  const vehicle_id     = req.body?.vehicle_id     ?? req.query?.vehicle_id;
+  const mpo_id = req.body?.mpo_id ?? req.query?.mpo_id;
+  const vehicle_id = req.body?.vehicle_id ?? req.query?.vehicle_id;
   const exclude_mdo_id = req.body?.exclude_mdo_id ?? req.query?.exclude_mdo_id ?? null;
 
   let frontendDetails = null;
@@ -654,10 +663,10 @@ async function previewSplit(req) {
         suggestedDetails.push({
           part_id: partId,
           part,
-          ordered_qty:        rem.ordered_qty  ?? null,
-          covered_qty:        rem.covered_qty  ?? null,
-          remaining_qty:      rem.remaining_qty ?? null,
-          suggested_qty:      calculate_qty,
+          ordered_qty: rem.ordered_qty ?? null,
+          covered_qty: rem.covered_qty ?? null,
+          remaining_qty: rem.remaining_qty ?? null,
+          suggested_qty: calculate_qty,
           weight_per_unit_kg: weight,
           subtotal_weight_kg: parseFloat(subtotal.toFixed(3)),
         });
@@ -961,6 +970,7 @@ async function create(req) {
 
   if (!mpo_id) return { status: false, message: 'mpo_id wajib diisi.' };
   if (!target_date) return { status: false, message: 'target_date wajib diisi.' };
+  if (isPastDate(target_date)) return { status: false, message: 'target_date tidak boleh sebelum hari ini.' };
   if (!details.length) return { status: false, message: 'Detail MDO tidak boleh kosong.' };
 
   const mpo = await SMaterialPurchaseOrder.findOne({ where: { id: mpo_id, status: 'approved' } });
@@ -1097,6 +1107,9 @@ async function update(req) {
   if (mdo.status !== 'draft') return { status: false, message: 'Hanya MDO berstatus draft yang bisa diedit.' };
 
   const finalDate = target_date ?? mdo.target_date;
+  if (target_date && isPastDate(target_date)) {
+    return { status: false, message: 'target_date tidak boleh sebelum hari ini.' };
+  }
   const finalVehicleId = vehicle_id ?? mdo.vehicle_id;
 
   // Validasi double-booking vehicle (kecuali MDO ini sendiri)

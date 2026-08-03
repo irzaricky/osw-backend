@@ -2,6 +2,15 @@ import { Op } from 'sequelize';
 import db from '../../models/index.js';
 import helper from '../../class/helper.class.js';
 
+const isPastDate = (dateStr) => {
+  if (!dateStr) return false;
+  const input = new Date(dateStr);
+  const today = new Date();
+  input.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return input < today;
+};
+
 const {
   SMaterialPurchaseRequest,
   TMaterialPurchaseRequestDetail,
@@ -259,13 +268,17 @@ const createEmergency = async (req) => {
         await transaction.rollback();
         return { status: false, error: `Quantity must be greater than 0 for item ${i + 1}`, code: 400 };
       }
+      if (d.required_date && isPastDate(d.required_date)) {
+        await transaction.rollback();
+        return { status: false, error: `Required date cannot be in the past for item ${i + 1}`, code: 400 };
+      }
     }
 
     const now = new Date();
     // Definisi "periode" adalah bulan berjalan
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    
+
     const inputPartIds = details.map(d => d.part_id);
 
     // Cari MPR aktif (draft / submitted) di periode yang sama
@@ -289,10 +302,10 @@ const createEmergency = async (req) => {
       activeMprs.forEach(mpr => mpr.details.forEach(d => duplicateParts.add(d.part_id)));
 
       await transaction.rollback();
-      return { 
-        status: false, 
-        error: `Duplicate FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] has already been submitted in another active MPR document for this period.`, 
-        code: 400 
+      return {
+        status: false,
+        error: `Duplicate FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] has already been submitted in another active MPR document for this period.`,
+        code: 400
       };
     }
 
@@ -383,12 +396,16 @@ const update = async (req) => {
           await transaction.rollback();
           return { status: false, error: `Quantity must be greater than 0 for item ${i + 1}`, code: 400 };
         }
+        if (d.required_date && isPastDate(d.required_date)) {
+          await transaction.rollback();
+          return { status: false, error: `Required date cannot be in the past for item ${i + 1}`, code: 400 };
+        }
       }
 
       const reqDate = pr.request_date ? new Date(pr.request_date) : new Date();
       const startOfMonth = new Date(reqDate.getFullYear(), reqDate.getMonth(), 1);
       const endOfMonth = new Date(reqDate.getFullYear(), reqDate.getMonth() + 1, 0, 23, 59, 59, 999);
-      
+
       const inputPartIds = details.map(d => d.part_id);
 
       const activeMprs = await SMaterialPurchaseRequest.findAll({
@@ -411,13 +428,13 @@ const update = async (req) => {
         activeMprs.forEach(mpr => mpr.details.forEach(d => duplicateParts.add(d.part_id)));
 
         await transaction.rollback();
-        return { 
-          status: false, 
-          error: `Duplicate FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] already exists in another active MPR document for this period.`, 
-          code: 400 
+        return {
+          status: false,
+          error: `Duplicate FR-03! Part ID [${Array.from(duplicateParts).join(', ')}] already exists in another active MPR document for this period.`,
+          code: 400
         };
       }
-      
+
       await upsertDetails(id, details, transaction);
     }
 

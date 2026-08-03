@@ -615,7 +615,7 @@ class MPOModule extends BaseModule {
                 supplier_id: Joi.number().integer().required(),
                 warehouse_id: Joi.number().integer().optional().allow(null),
                 description: Joi.string().optional().allow('', null),
-                po_date: Joi.date().iso().required(),
+                po_date: Joi.date().iso().min('now').required(),
                 payment_term: Joi.string().optional().allow('', null),
                 remarks: Joi.string().optional().allow('', null),
                 action: Joi.string().valid('draft', 'submit').default('draft')
@@ -806,6 +806,21 @@ class MPOModule extends BaseModule {
             if (!validation.status) {
                 await t.rollback();
                 return validation;
+            }
+
+            // Hanya tolak kalau po_date benar-benar DIUBAH ke tanggal masa lalu.
+            if (
+                validation.value.po_date &&
+                new Date(validation.value.po_date).toISOString().slice(0, 10) !== new Date(mpo.po_date).toISOString().slice(0, 10)
+            ) {
+                const newDate = new Date(validation.value.po_date);
+                const today = new Date();
+                newDate.setHours(0, 0, 0, 0);
+                today.setHours(0, 0, 0, 0);
+                if (newDate < today) {
+                    await t.rollback();
+                    return { status: false, message: 'PO Date cannot be set to a past date', code: 400 };
+                }
             }
 
             const { action, ...updates } = validation.value;
@@ -1010,6 +1025,8 @@ class MPOModule extends BaseModule {
                 await t.rollback();
                 return headerValidation;
             }
+
+            
             const { action, ...headerUpdates } = headerValidation.value;
             const newStatus = action === 'submit' ? 'submitted' : 'draft';
 
@@ -1034,6 +1051,21 @@ class MPOModule extends BaseModule {
             for (const d of originalDetails) {
                 originalQtyMap.set(d.part_id, Number(d.qty));
             }
+            // Hanya tolak kalau po_date benar-benar DIUBAH ke tanggal masa lalu.
+            if (
+                headerValidation.value.po_date &&
+                new Date(headerValidation.value.po_date).toISOString().slice(0, 10) !== new Date(mpo.po_date).toISOString().slice(0, 10)
+            ) {
+                const newDate = new Date(headerValidation.value.po_date);
+                const today = new Date();
+                newDate.setHours(0, 0, 0, 0);
+                today.setHours(0, 0, 0, 0);
+                if (newDate < today) {
+                    await t.rollback();
+                    return { status: false, message: 'PO Date cannot be set to a past date', code: 400 };
+                }
+            }
+
 
             // Hitung total qty per part di payload
             const payloadQtyMap = new Map(); // part_id → total qty di payload
@@ -1368,7 +1400,7 @@ class MPOModule extends BaseModule {
                 source_id: Joi.number().integer().required(),
                 warehouse_id: Joi.number().integer().optional().allow(null),
                 description: Joi.string().optional().allow('', null),
-                po_date: Joi.date().iso().required(),
+                po_date: Joi.date().iso().min('now').required(),
                 payment_term: Joi.string().optional().allow('', null),
                 remarks: Joi.string().optional().allow('', null),
                 action: Joi.string().valid('draft', 'submit').default('draft'),

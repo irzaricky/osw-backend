@@ -514,21 +514,33 @@ async function checkPlanLineConflicts(currentPlanId, lineIds, t) {
 // paling awal — terlepas dari urutan DO ditambahkan/disinkronkan ke plan.
 async function resequenceDetailsByDeliveryDate(planId, t) {
   const details = await SProductionPlanDetail.findAll({
-    where:       { plan_id: planId },
-    attributes:  ['id', 'delivery_date', 'sequence'],
-    order:       [['delivery_date', 'ASC'], ['sequence', 'ASC'], ['id', 'ASC']],
+    where:      { plan_id: planId },
+    attributes: ['id', 'delivery_date', 'sequence'],
+    order:      [['delivery_date', 'ASC'], ['sequence', 'ASC'], ['id', 'ASC']],
     transaction: t,
   });
 
+  if (details.length === 0) return;
+
+  // Fase 1: Geser semua ke offset besar untuk hindari collision
+  const OFFSET = 100000;
   await Promise.all(
-    details.map((d, idx) => {
-      const newSeq = idx + 1;
-      if (d.sequence === newSeq) return null; // sudah sesuai, skip write
-      return SProductionPlanDetail.update(
-        { sequence: newSeq },
+    details.map((d, idx) =>
+      SProductionPlanDetail.update(
+        { sequence: OFFSET + idx + 1 },
         { where: { id: d.id }, transaction: t }
-      );
-    })
+      )
+    )
+  );
+
+  // Fase 2: Assign nilai final yang benar
+  await Promise.all(
+    details.map((d, idx) =>
+      SProductionPlanDetail.update(
+        { sequence: idx + 1 },
+        { where: { id: d.id }, transaction: t }
+      )
+    )
   );
 }
 

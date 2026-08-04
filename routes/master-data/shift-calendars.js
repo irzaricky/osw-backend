@@ -7,7 +7,6 @@ const router = express.Router()
 router.get(
   '/dd-calendar-type',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await shiftCalendarModule.getDdCalendarType(req, res)
   }
@@ -25,7 +24,6 @@ router.get(
 router.get(
   '/',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await shiftCalendarModule.list(req, res)
   }

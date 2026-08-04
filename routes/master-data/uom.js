@@ -12,15 +12,15 @@ router.get("/", auth.sessionChecker, async (req, res) => {
   await uomModule.list(req, res);
 });
 
-router.post("/", auth.sessionChecker, async (req, res) => {
+router.post("/", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await uomModule.add(req, res);
 });
 
-router.put("/:id", auth.sessionChecker, async (req, res) => {
+router.put("/:id", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await uomModule.update(req, res);
 });
 
-router.delete("/:id", auth.sessionChecker, async (req, res) => {
+router.delete("/:id", auth.sessionChecker, auth.permissionChecker(['Superadmin', 'Admin*']), async (req, res) => {
   await uomModule.delete(req, res);
 });
 

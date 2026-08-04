@@ -7,7 +7,6 @@ const router = express.Router()
 router.get(
   '/dd-type',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await shiftModule.getTypes(req, res)
   }
@@ -16,7 +15,6 @@ router.get(
 router.get(
   '/dd-category',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await shiftModule.getCategories(req, res)
   }
@@ -25,7 +23,6 @@ router.get(
 router.get(
   '/dropdown',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await shiftModule.getDropdown(req, res)
   }
@@ -43,7 +40,6 @@ router.get(
 router.get(
   '/',
   auth.sessionChecker,
-  auth.permissionChecker(['Superadmin', 'Admin*']),
   async (req, res) => {
     await shiftModule.list(req, res)
   }

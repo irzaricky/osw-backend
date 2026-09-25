@@ -1044,13 +1044,13 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: "Production Plan not found" });
       }
-      if (plan.status !== "Draft") {
+      if (!['Draft', 'Rejected'].includes(plan.status)) {
         await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft plans can be edited" });
+        return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft or Rejected plans can be edited" });
       }
 
       const oldData = plan.toJSON();
-      await plan.update(validation.value, { transaction: t });
+      await plan.update({ ...validation.value, status: 'Draft'}, { transaction: t });
 
       await this.logActivity(req, {
         moduleCode:   "production-plan",
@@ -2269,9 +2269,9 @@ class PlanModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: "Production Plan not found" });
       }
-      if (plan.status !== "Draft") {
+      if (!['Draft', 'Rejected'].includes(plan.status)) {
         await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft plans can be deleted" });
+        return helper.sendResponse(res, { status: false, code: 400, error: "Only Draft or Rejected plans can be deleted" });
       }
 
       await SProductionPlanDetail.destroy({ where: { plan_id: id }, transaction: t });

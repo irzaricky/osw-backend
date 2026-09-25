@@ -435,7 +435,7 @@ class BomModule extends BaseModule {
       const oldData = bom.data.toJSON();
 
       // Update header
-      await bom.data.update(headerFields, { transaction: t });
+      await bom.data.update({ ...headerFields, doc_status: 'Draft' }, { transaction: t });
 
       // Update details only if the key was explicitly sent
       if (details !== undefined) {
@@ -493,9 +493,9 @@ class BomModule extends BaseModule {
         await t.rollback();
         return helper.sendResponse(res, { status: false, code: 404, error: 'BOM not found' });
       }
-      if (bom.doc_status !== 'Draft') {
+      if (!['Draft', 'Rejected'].includes(bom.doc_status)) {
         await t.rollback();
-        return helper.sendResponse(res, { status: false, code: 400, error: 'Only Draft BOMs can be deleted' });
+        return helper.sendResponse(res, { status: false, code: 400, error: 'Only Draft and Rejected BOMs can be deleted' });
       }
 
       const oldData = bom.toJSON();
@@ -552,6 +552,7 @@ class BomModule extends BaseModule {
       }
 
       const detail = await SBomDetails.create({ bom_id: id, ...validation.value }, { transaction: t });
+      await SBoms.update({ doc_status: 'Draft' }, { where: { id }, transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'UPDATE',
@@ -607,6 +608,7 @@ class BomModule extends BaseModule {
 
       // Hard-delete all existing, then bulk insert
       await SBomDetails.destroy({ where: { bom_id: id }, transaction: t, force: true });
+      await SBoms.update({ doc_status: 'Draft' }, { where: { id }, transaction: t });
 
       let insertedDetails = [];
       if (details.length) {
@@ -683,6 +685,7 @@ class BomModule extends BaseModule {
 
       const oldData = detail.toJSON();
       await detail.update(validation.value, { transaction: t });
+      await SBoms.update({ doc_status: 'Draft' }, { where: { id }, transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'UPDATE',
@@ -720,6 +723,7 @@ class BomModule extends BaseModule {
       }
 
       await detail.destroy({ transaction: t, force: true });
+      await SBoms.update({ doc_status: 'Draft' }, { where: { id }, transaction: t });
 
       await this.logActivity(req, {
         moduleCode: 'bom', activityCode: 'UPDATE',
@@ -1115,7 +1119,7 @@ class BomModule extends BaseModule {
       transaction,
     });
     if (!bom) return { ok: false, code: 404, error: 'BOM not found' };
-    if (bom.doc_status !== 'Draft') return { ok: false, code: 400, error: 'Only Draft BOMs can be modified' };
+    if (!['Draft', 'Rejected'].includes(bom.doc_status)) return { ok: false, code: 400, error: 'Only Draft and Rejected BOMs can be modified' };
     return { ok: true, data: bom };
   }
 }
